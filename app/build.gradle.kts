@@ -136,4 +136,18 @@ dependencies {
     // Google's hand detection is only available via MediaPipe Tasks Vision.
     // ═══════════════════════════════════════════════════════════════
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
+
+    // ═══════════════════════════════════════════════════════════════
+    // ktor SERVER — the Android app IS the LAN Socket.io hub (like the
+    // Electron app). ktor-server-cio is pure Kotlin (no netty native libs),
+    // supports HTTP (for Engine.IO polling) + WebSockets on one port.
+    // ═══════════════════════════════════════════════════════════════
+    implementation("io.ktor:ktor-server-core:2.3.12")
+    implementation("io.ktor:ktor-server-cio:2.3.12")
+    implementation("io.ktor:ktor-server-websockets:2.3.12")
+    implementation("io.ktor:ktor-server-content-negotiation:2.3.12")
+    implementation("io.ktor:ktor-serialization-gson:2.3.12")
+
+    // QR code generation (so MC/operator can scan & join the admin's LAN server)
+    implementation("com.google.zxing:core:3.5.3")
 }

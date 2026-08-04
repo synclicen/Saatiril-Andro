@@ -16,14 +16,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.saatiril.andro.data.ConnectionState
-import com.saatiril.andro.data.OperatorViewModel
-import com.saatiril.andro.data.Roles
-import com.saatiril.andro.ui.admin.AdminScreen
+import com.saatiril.andro.data.AdminViewModel
+import com.saatiril.andro.ui.admin.AdminDashboardScreen
 import com.saatiril.andro.ui.mc.McScreen
-import com.saatiril.andro.ui.operator.OperatorScreen
 
-// ─── Saatiril Theme Colors ──────────────────────────────────
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
 private val CARD = Color(0xFF3b2263)
@@ -32,208 +28,101 @@ private val GOLD = Color(0xFFd4af37)
 private val MUTED = Color(0xFFc4b5fd)
 private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
+private val CYAN = Color(0xFF06b6d4)
 
-private enum class SaatirilTab(val label: String) {
-    OPERATOR("Operator"),
-    MC("MC"),
-    ADMIN("Admin")
-}
-
-private fun defaultTabForRole(role: String): SaatirilTab = when (role) {
-    Roles.ADMIN -> SaatirilTab.ADMIN
-    Roles.MC -> SaatirilTab.MC
-    else -> SaatirilTab.OPERATOR
-}
+private enum class Tab(val label: String) { ADMIN("Admin"), MC("MC") }
 
 /**
- * Main scaffold shown after a successful socket connection.
+ * Main scaffold shown while the server is running. Two tabs:
+ *  - Admin: dashboard (project summary, server info + QR, clients, gallery, DB)
+ *  - MC: call students to the stage
  *
- * Provides a top app bar (project name + live connection badge + disconnect)
- * and a bottom navigation bar to switch between the three Saatiril panels:
- * Operator, MC, and Admin. This mirrors the Electron app's unified view
- * where Admin/MC/Operator are all visible side-by-side — on a phone we use
- * tabs instead of a split layout.
- *
- * The default tab is chosen based on the role the user selected at connect
- * time, but the user can freely switch to view the other panels (read-only
- * for roles they did not log in as).
+ * The top bar shows the live server status (LAN IP, clients, latency proxy)
+ * and a "Stop" button that tears down the server and returns to the Hub.
  */
 @Composable
-fun MainScaffold(
-    viewModel: OperatorViewModel,
-    hasCameraPermission: Boolean,
-    onDisconnect: () -> Unit
-) {
-    val myRole by viewModel.myRole.collectAsState()
-    val connectionState by viewModel.connectionState.collectAsState()
-    val latencyMs by viewModel.latencyMs.collectAsState()
+fun MainScaffold(viewModel: AdminViewModel) {
     val project by viewModel.project.collectAsState()
+    val clients by viewModel.serverClients.collectAsState()
+    val lanIp by viewModel.lanIp.collectAsState()
+    val port by viewModel.serverPort.collectAsState()
+    val running by viewModel.serverRunning.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(defaultTabForRole(myRole)) }
-
-    // If the role changes (e.g. reconnect as different role), snap to default tab
-    LaunchedEffect(myRole) {
-        selectedTab = defaultTabForRole(myRole)
-    }
+    var selectedTab by remember { mutableStateOf(Tab.ADMIN) }
 
     Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BG),
+        modifier = Modifier.fillMaxSize().background(BG),
         containerColor = BG,
         topBar = {
-            SaatirilTopBar(
-                projectName = project?.name ?: "Saatiril Andro",
-                role = myRole,
-                connectionState = connectionState,
-                latencyMs = latencyMs,
-                onDisconnect = onDisconnect
+            TopBar(
+                projectName = project?.name ?: "Saatiril",
+                lanIp = lanIp,
+                port = port,
+                clientCount = clients.count { it.authenticated },
+                running = running,
+                onStop = { viewModel.stopServer() }
             )
         },
-        bottomBar = {
-            SaatirilBottomBar(
-                selected = selectedTab,
-                onSelect = { selectedTab = it }
-            )
-        }
+        bottomBar = { BottomBar(selected = selectedTab, onSelect = { selectedTab = it }) }
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(BG)
-        ) {
+        Box(Modifier.fillMaxSize().padding(padding).background(BG)) {
             when (selectedTab) {
-                SaatirilTab.OPERATOR -> OperatorScreen(
-                    viewModel = viewModel,
-                    hasCameraPermission = hasCameraPermission
-                )
-                SaatirilTab.MC -> McScreen(viewModel = viewModel)
-                SaatirilTab.ADMIN -> AdminScreen(viewModel = viewModel)
+                Tab.ADMIN -> AdminDashboardScreen(viewModel)
+                Tab.MC -> McScreen(viewModel)
             }
         }
     }
 }
 
-// ─── Top App Bar ─────────────────────────────────────────────
 @Composable
-private fun SaatirilTopBar(
-    projectName: String,
-    role: String,
-    connectionState: ConnectionState,
-    latencyMs: Long,
-    onDisconnect: () -> Unit
-) {
-    Surface(
-        color = PANEL,
-        tonalElevation = 4.dp
-    ) {
+private fun TopBar(projectName: String, lanIp: String?, port: Int, clientCount: Int, running: Boolean, onStop: () -> Unit) {
+    Surface(color = PANEL, tonalElevation = 4.dp) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = GOLD, modifier = Modifier.size(22.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    projectName,
-                    style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp),
-                    maxLines = 1
-                )
+            Icon(Icons.Default.Hub, contentDescription = null, tint = GOLD, modifier = Modifier.size(22.dp))
+            Column(Modifier.weight(1f)) {
+                Text(projectName, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp), maxLines = 1)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val (dotColor, statusText) = when (connectionState) {
-                        ConnectionState.AUTHENTICATED, ConnectionState.WAITING_FOR_DATA -> GREEN to "Terhubung"
-                        ConnectionState.CONNECTING -> MUTED to "Menghubungkan…"
-                        ConnectionState.RECONNECTING -> MUTED to "Reconnect…"
-                        ConnectionState.AUTHENTICATING -> MUTED to "Auth…"
-                        ConnectionState.AUTH_FAILED -> RED to "Auth gagal"
-                        ConnectionState.CONNECTED -> MUTED to "Terhubung"
-                        ConnectionState.DISCONNECTED -> RED to "Terputus"
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(dotColor)
-                    )
-                    Text(
-                        "$statusText • ${role.uppercase()}" +
-                                (if (latencyMs >= 0) " • ${latencyMs}ms" else ""),
-                        style = TextStyle(color = MUTED, fontSize = 10.sp)
-                    )
+                    Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(if (running) GREEN else RED))
+                    Text(if (running) "Server aktif • ${lanIp ?: "-"}:$port • $clientCount klien" else "Server berhenti",
+                        style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1)
                 }
             }
-            IconButton(onClick = onDisconnect) {
-                Icon(Icons.Default.Logout, contentDescription = "Putuskan", tint = RED, modifier = Modifier.size(20.dp))
+            OutlinedButton(onClick = onStop, shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = RED),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RED),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = "Stop", modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Stop", fontSize = 12.sp)
             }
         }
     }
 }
 
-// ─── Bottom Navigation Bar ───────────────────────────────────
 @Composable
-private fun SaatirilBottomBar(
-    selected: SaatirilTab,
-    onSelect: (SaatirilTab) -> Unit
-) {
-    Surface(
-        color = PANEL,
-        tonalElevation = 8.dp
-    ) {
+private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    Surface(color = PANEL, tonalElevation = 8.dp) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically
         ) {
-            BottomTabItem(SaatirilTab.OPERATOR, Icons.Default.CameraAlt, selected == SaatirilTab.OPERATOR, onSelect, Modifier.weight(1f))
-            BottomTabItem(SaatirilTab.MC, Icons.Default.Mic, selected == SaatirilTab.MC, onSelect, Modifier.weight(1f))
-            BottomTabItem(SaatirilTab.ADMIN, Icons.Default.AdminPanelSettings, selected == SaatirilTab.ADMIN, onSelect, Modifier.weight(1f))
+            TabItem(Tab.ADMIN, Icons.Default.Dashboard, selected == Tab.ADMIN, onSelect, Modifier.weight(1f))
+            TabItem(Tab.MC, Icons.Default.Mic, selected == Tab.MC, onSelect, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun BottomTabItem(
-    tab: SaatirilTab,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    isSelected: Boolean,
-    onClick: (SaatirilTab) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onClick(tab) },
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) CARD else Color.Transparent
-        ),
-        shape = RoundedCornerShape(10.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Icon(
-                icon,
-                contentDescription = tab.label,
-                tint = if (isSelected) GOLD else MUTED,
-                modifier = Modifier.size(22.dp)
-            )
-            Text(
-                tab.label,
-                style = TextStyle(
-                    color = if (isSelected) GOLD else MUTED,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    fontSize = 11.sp
-                )
-            )
+private fun TabItem(tab: Tab, icon: androidx.compose.ui.graphics.vector.ImageVector, isSelected: Boolean, onClick: (Tab) -> Unit, modifier: Modifier = Modifier) {
+    Card(modifier = modifier.clip(RoundedCornerShape(10.dp)).clickable { onClick(tab) },
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else Color.Transparent),
+        shape = RoundedCornerShape(10.dp)) {
+        Column(Modifier.padding(vertical = 8.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(icon, contentDescription = tab.label, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(22.dp))
+            Text(tab.label, style = TextStyle(color = if (isSelected) GOLD else MUTED, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 11.sp))
         }
     }
 }

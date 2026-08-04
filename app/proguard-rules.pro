@@ -27,6 +27,18 @@
 -keep class com.serenegiant.usb.** { *; }
 -keep class com.serenegiant.common.** { *; }
 
+# ── ktor server (runs ON the Android device as the LAN Socket.io hub) ──
+# ktor uses reflection for config loading and application plugins. Keep all
+# ktor classes to prevent R8 from stripping plugin entry points.
+-keep class io.ktor.** { *; }
+-keep class kotlinx.coroutines.** { *; }
+-dontwarn io.ktor.**
+-dontwarn org.slf4j.**
+
+# ── ZXing (QR code generation for joining the LAN server) ──
+-keep class com.google.zxing.** { *; }
+-dontwarn com.google.zxing.**
+
 # ── R8 missing-class workarounds ──────────────────────────────
 # Newer R8 (AGP 8.2+) is strict about missing classes referenced from
 # compile-time-only shaded libs that leak into the runtime classpath.
