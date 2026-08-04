@@ -1,0 +1,109 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug + Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+
+      - name: Install SDK platforms & build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            .gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Create local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APKs
+        run: |
+          mkdir -p artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/saatiril-andro-debug.apk
+          RELEASE_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -n "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" artifacts/saatiril-andro.apk
+          else
+            echo "No release APK found"
+          fi
+          ls -lh artifacts/
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: saatiril-andro-android-debug
+          path: artifacts/saatiril-andro-debug.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: saatiril-andro-android-release
+          path: artifacts/saatiril-andro.apk
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f artifacts/saatiril-andro.apk ]; then
+            gh release create latest \
+              --title "Saatiril Andro - Latest Build" \
+              --notes "Auto-built APK from commit ${{ github.sha }}" \
+              --prerelease \
+              artifacts/saatiril-andro.apk \
+              artifacts/saatiril-andro-debug.apk \
+              || gh release upload latest \
+                artifacts/saatiril-andro.apk \
+                artifacts/saatiril-andro-debug.apk \
+                --clobber
+          else
+            gh release create latest \
+              --title "Saatiril Andro - Latest Build" \
+              --notes "Auto-built debug APK from commit ${{ github.sha }}" \
+              --prerelease \
+              artifacts/saatiril-andro-debug.apk \
+              || gh release upload latest \
+                artifacts/saatiril-andro-debug.apk \
+                --clobber
+          fi

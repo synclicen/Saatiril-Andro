@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+
+# Local config
+local.properties
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Keystores (never commit)
+*.jks
+*.keystore
+
+# Android Studio / IntelliJ
+*.iml
+.idea/
+captures/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+#preview { width: 100%; height: 100%; object-fit: contain; }
+#debug { position: fixed; top: 4px; left: 4px; background: rgba(0,0,0,0.7); color: #0f0; font: 10px monospace; padding: 4px; z-index: 999; pointer-events: none; display: none; }
+#frame-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+#frame-overlay img { width: 100%; height: 100%; object-fit: contain; }
+</style>
+</head>
+<body>
+<video id="preview" autoplay playsinline muted></video>
+<div id="frame-overlay"></div>
+<div id="debug"></div>
+<canvas id="capture-canvas" style="display:none"></canvas>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// SAATIRIL Camera Engine — WebView Permanent Camera
+// ═══════════════════════════════════════════════════════════════
+// This runs in a WebView that is NEVER removed from the window.
+// The WebView is created at Activity level and persists across
+// screen transitions. This guarantees the camera stream never
+// breaks when switching between login/operator screens.
+
+const video = document.getElementById('preview');
+const canvas = document.getElementById('capture-canvas');
+const debugEl = document.getElementById('debug');
+const frameOverlay = document.getElementById('frame-overlay');
+
+let currentStream = null;
+let currentDeviceId = null;
+let allDevices = [];
+let rememberedUSBCameraId = null;
+let filterPreset = 'original';
+let frameBase64 = null;
+
+// ─── Debug logging ─────────────────────────────────────────
+function log(msg) {
+    console.log('[CAM] ' + msg);
+    debugEl.textContent = msg;
+    debugEl.style.display = 'block';
+    if (window.AndroidBridge && AndroidBridge.onLog) {
+        AndroidBridge.onLog(msg);
+    }
+}
+
+// ─── Enumerate all cameras ────────────────────────────────
+async function enumerateCameras() {
+    try {
+        allDevices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = allDevices.filter(d => d.kind === 'videoinput');
+        log('Found ' + cameras.length + ' cameras');
+
+        // Detect USB cameras by label
+        const usbCameras = cameras.filter(d =>
+            d.label && (
+                d.label.toLowerCase().includes('usb') ||
+                d.label.toLowerCase().includes('capture') ||
+                d.label.toLowerCase().includes('uvc') ||
+                d.label.toLowerCase().includes('external')
+            )
+        );
+
+        // Report to Android
+        const cameraList = cameras.map(d => ({
+            deviceId: d.deviceId,
+            label: d.label || 'Unknown Camera',
+            isUSB: usbCameras.includes(d)
+        }));
+
+        if (window.AndroidBridge && AndroidBridge.onCameraList) {
+            AndroidBridge.onCameraList(JSON.stringify(cameraList));
+        }
+
+        return { cameras, usbCameras };
+    } catch (e) {
+        log('enumerateCameras error: ' + e.message);
+        return { cameras: [], usbCameras: [] };
+    }
+}
+
+// ─── Start camera with specific device ────────────────────
+async function startCamera(deviceId) {
+    log('startCamera: ' + (deviceId || 'auto'));
+
+    // Stop existing stream
+    if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
+    }
+
+    try {
+        const constraints = {
+            video: deviceId ? {
+                deviceId: { exact: deviceId },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+            } : {
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+            },
+            audio: false
+        };
+
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentStream;
+
+        const track = currentStream.getVideoTracks()[0];
+        currentDeviceId = track.getSettings().deviceId || deviceId;
+        const label = track.label || 'Unknown';
+        log('Camera started: ' + label);
+
+        // Remember USB camera
+        if (label.toLowerCase().includes('usb') ||
+            label.toLowerCase().includes('capture') ||
+            label.toLowerCase().includes('external')) {
+            rememberedUSBCameraId = currentDeviceId;
+            if (window.AndroidBridge && AndroidBridge.onUSBCameraActive) {
+                AndroidBridge.onUSBCameraActive(label);
+            }
+        }
+
+        // Apply current filter
+        applyFilter(filterPreset);
+
+        // Notify Android
+        if (window.AndroidBridge && AndroidBridge.onCameraStarted) {
+            AndroidBridge.onCameraStarted(currentDeviceId, label);
+        }
+
+        return true;
+    } catch (e) {
+        log('startCamera error: ' + e.message);
+        if (window.AndroidBridge && AndroidBridge.onCameraError) {
+            AndroidBridge.onCameraError(e.message);
+        }
+        return false;
+    }
+}
+
+// ─── Auto-start with USB priority ─────────────────────────
+async function autoStart() {
+    log('autoStart: searching for USB camera...');
+
+    const { cameras, usbCameras } = await enumerateCameras();
+
+    // Priority 1: Remembered USB camera
+    if (rememberedUSBCameraId) {
+        const match = cameras.find(d => d.deviceId === rememberedUSBCameraId);
+        if (match) {
+            log('Using remembered USB camera');
+            const ok = await startCamera(match.deviceId);
+            if (ok) return true;
+        }
+    }
+
+    // Priority 2: Any USB camera detected
+    if (usbCameras.length > 0) {
+        log('USB camera found, starting: ' + usbCameras[0].label);
+        const ok = await startCamera(usbCameras[0].deviceId);
+        if (ok) return true;
+    }
+
+    // Priority 3: Any available camera
+    if (cameras.length > 0) {
+        log('No USB camera, using first available: ' + cameras[0].label);
+        const ok = await startCamera(cameras[0].deviceId);
+        if (ok) return true;
+    }
+
+    // Priority 4: Default camera (no constraint)
+    log('No specific camera, trying default...');
+    return await startCamera(null);
+}
+
+// ─── Capture photo ────────────────────────────────────────
+function capturePhoto() {
+    if (!video.videoWidth || !video.videoHeight) {
+        log('capturePhoto: video not ready');
+        if (window.AndroidBridge && AndroidBridge.onCaptureResult) {
+            AndroidBridge.onCaptureResult('');
+        }
+        return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+
+    // Apply CSS filter to canvas
+    if (filterPreset && filterPreset !== 'original') {
+        ctx.filter = getCSSFilter(filterPreset);
+    }
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Draw frame overlay if set
+    if (frameBase64 && frameOverlay.querySelector('img')) {
+        ctx.filter = 'none';
+        const img = frameOverlay.querySelector('img');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    }
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    log('Photo captured: ' + canvas.width + 'x' + canvas.height);
+
+    if (window.AndroidBridge && AndroidBridge.onCaptureResult) {
+        AndroidBridge.onCaptureResult(dataUrl);
+    }
+}
+
+// ─── Filter presets ───────────────────────────────────────
+function getCSSFilter(preset) {
+    switch (preset) {
+        case 'grayscale': return 'grayscale(100%)';
+        case 'sepia': return 'sepia(100%)';
+        case 'warm': return 'sepia(30%) saturate(140%) brightness(110%)';
+        case 'cool': return 'saturate(80%) hue-rotate(20deg) brightness(105%)';
+        case 'vivid': return 'saturate(150%) contrast(110%)';
+        case 'soft': return 'brightness(105%) contrast(90%) saturate(85%)';
+        default: return 'none';
+    }
+}
+
+function applyFilter(preset) {
+    filterPreset = preset;
+    if (preset && preset !== 'original') {
+        video.style.filter = getCSSFilter(preset);
+    } else {
+        video.style.filter = 'none';
+    }
+}
+
+function setFilter(preset) {
+    applyFilter(preset);
+}
+
+// ─── Frame overlay ────────────────────────────────────────
+function setFrameOverlay(base64) {
+    frameBase64 = base64;
+    if (base64 && base64.length > 0) {
+        const src = base64.startsWith('data:') ? base64 : 'data:image/png;base64,' + base64;
+        frameOverlay.innerHTML = '<img src="' + src + '">';
+    } else {
+        frameOverlay.innerHTML = '';
+    }
+}
+
+// ─── Force rescan ─────────────────────────────────────────
+async function forceRescan() {
+    log('forceRescan: re-enumerating devices...');
+    const { cameras, usbCameras } = await enumerateCameras();
+
+    if (usbCameras.length > 0 && !currentStream?.getVideoTracks()[0]?.label?.toLowerCase().includes('usb')) {
+        log('USB camera found during rescan, switching...');
+        await startCamera(usbCameras[0].deviceId);
+    }
+}
+
+// ─── Switch camera by deviceId ────────────────────────────
+async function switchCamera(deviceId) {
+    log('switchCamera: ' + deviceId);
+    await startCamera(deviceId);
+}
+
+// ─── Get current camera info ──────────────────────────────
+function getCameraInfo() {
+    const track = currentStream?.getVideoTracks()[0];
+    if (!track) return JSON.stringify({ active: false });
+    const settings = track.getSettings();
+    return JSON.stringify({
+        active: true,
+        deviceId: currentDeviceId,
+        label: track.label,
+        width: settings.width,
+        height: settings.height,
+        isUSB: track.label?.toLowerCase().includes('usb') || track.label?.toLowerCase().includes('capture') || false
+    });
+}
+
+// ─── Listen for device changes ────────────────────────────
+navigator.mediaDevices.addEventListener('devicechange', async () => {
+    log('Device change detected!');
+    const { cameras, usbCameras } = await enumerateCameras();
+
+    // If USB camera appeared and we're not using one, switch!
+    if (usbCameras.length > 0) {
+        const currentLabel = currentStream?.getVideoTracks()[0]?.label?.toLowerCase() || '';
+        if (!currentLabel.includes('usb') && !currentLabel.includes('capture')) {
+            log('New USB device detected, auto-switching...');
+            await startCamera(usbCameras[0].deviceId);
+        }
+    }
+});
+
+// ─── Auto-start on page load ──────────────────────────────
+log('Camera engine loaded. Waiting for init...');
+// Don't auto-start here — Android will call initCamera() when ready
+</script>
+</body>
+</html>
