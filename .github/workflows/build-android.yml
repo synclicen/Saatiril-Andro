@@ -5,6 +5,12 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# Default GITHUB_TOKEN needs explicit write permission to create releases
+# and upload assets. Without this, `gh release create` returns HTTP 403
+# "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Debug + Release APK
@@ -86,24 +92,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Create the 'latest' release if it doesn't exist yet (ignore error if it does).
+          # Then upload/replace the APK assets with --clobber.
+          ASSETS=""
           if [ -f artifacts/saatiril-andro.apk ]; then
-            gh release create latest \
-              --title "Saatiril Andro - Latest Build" \
-              --notes "Auto-built APK from commit ${{ github.sha }}" \
-              --prerelease \
-              artifacts/saatiril-andro.apk \
-              artifacts/saatiril-andro-debug.apk \
-              || gh release upload latest \
-                artifacts/saatiril-andro.apk \
-                artifacts/saatiril-andro-debug.apk \
-                --clobber
+            ASSETS="artifacts/saatiril-andro.apk artifacts/saatiril-andro-debug.apk"
           else
-            gh release create latest \
-              --title "Saatiril Andro - Latest Build" \
-              --notes "Auto-built debug APK from commit ${{ github.sha }}" \
-              --prerelease \
-              artifacts/saatiril-andro-debug.apk \
-              || gh release upload latest \
-                artifacts/saatiril-andro-debug.apk \
-                --clobber
+            ASSETS="artifacts/saatiril-andro-debug.apk"
           fi
+          echo "Assets to publish: $ASSETS"
+
+          gh release create latest \
+            --title "Saatiril Andro - Latest Build" \
+            --notes "Auto-built APK from commit ${GITHUB_SHA::7}" \
+            --prerelease --target main $ASSETS 2>/tmp/create.err || true
+
+          if grep -q "already exists" /tmp/create.err 2>/dev/null; then
+            echo "Release 'latest' already exists — uploading assets with --clobber"
+            gh release upload latest $ASSETS --clobber
+          else
+            cat /tmp/create.err 2>/dev/null || true
+            # Verify assets are actually attached (create may succeed but upload nothing
+            # if assets were rejected). Re-upload to be safe.
+            gh release upload latest $ASSETS --clobber 2>/dev/null || true
+          fi
+
+          echo "=== Release assets ==="
+          gh release view latest --json assets -q '.assets[].name' || true
