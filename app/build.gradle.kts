@@ -49,7 +49,10 @@ android {
             if (keystoreProperties.isNotEmpty()) {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                // `storeFile` in keystore.properties is a relative path — resolve
+                // it against the PROJECT ROOT (where the file is decoded by CI),
+                // not against the `app/` module dir (where this build.gradle.kts lives).
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }
