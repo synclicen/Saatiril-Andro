@@ -486,6 +486,37 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Export the student database to a CSV file in the output folder.
+     * Columns: No, NIM, Nama, Status, Channel — matches Electron exportToExcel.
+     * Returns the filename on success, null on failure.
+     */
+    fun exportToCsv(): String? {
+        val proj = _project.value ?: return null
+        val timeStamp = android.text.format.DateFormat.format("yyyyMMdd_HHmmss", System.currentTimeMillis()).toString()
+        val filename = "Daftar_Peserta_${proj.name.replace(" ", "_")}_$timeStamp.csv"
+        val sb = StringBuilder()
+        sb.append("No,NIM,Nama,Status,Channel\n")
+        proj.database.forEachIndexed { i, s ->
+            val statusLabel = when {
+                s.status == "pending" -> "Menunggu"
+                s.status == "sent" -> "Dikirim"
+                s.status == "done" -> "Selesai"
+                isActiveStatus(s.status) -> "Aktif Ch.${getActiveChannel(s.status) ?: "?"}"
+                else -> s.status
+            }
+            sb.append("${i + 1},\"${s.nim}\",\"${s.nama}\",\"$statusLabel\",${s.assignedChannel}\n")
+        }
+        return try {
+            val uri = photoSaver.saveTextFile(sb.toString(), filename, "text/csv")
+            Log.i(TAG, "CSV exported: $filename (${proj.database.size} rows)")
+            filename
+        } catch (e: Exception) {
+            Log.e(TAG, "CSV export failed: ${e.message}", e)
+            null
+        }
+    }
+
     /** Stop the server and return to the Hub. */
     fun stopServer() {
         SaatirilServer.stop()
@@ -503,35 +534,111 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * the same flow as [handlePhotosSaved] but initiated locally instead of
      * arriving via socket from a remote operator.
      */
+    // ─── Capture phase (for admin operator's own camera) ───────
+    // In standard mode, the admin captures 2 photos per student: Toga then Ijazah.
+    // In photoshoot mode, only 1 photo. This state machine tracks partial captures.
+    private val _opCapturedPhotos = MutableStateFlow<List<String>>(emptyList())
+    val opCapturedPhotos: StateFlow<List<String>> = _opCapturedPhotos.asStateFlow()
+
+    private val _capturePhase = MutableStateFlow(CapturePhase.STANDBY)
+    val capturePhase: StateFlow<CapturePhase> = _capturePhase.asStateFlow()
+
+    /** Reset the capture state when a new student is called or after finalize. */
+    fun resetCaptureState() {
+        _opCapturedPhotos.value = emptyList()
+        _capturePhase.value = CapturePhase.STANDBY
+    }
+
+    /**
+     * Handle a photo captured locally by the admin's own phone camera.
+     *
+     * In **standard mode**: the first capture is "Toga" (phase READY_1 → READY_2),
+     * the second is "Ijazah" (phase READY_2 → SENDING). Both are saved with
+     * versioned filenames, then PHOTOS_SAVED is broadcast.
+     *
+     * In **photoshoot mode**: only 1 photo is captured, saved with the
+     * photoshoot filename convention, then PHOTOS_SAVED is broadcast.
+     *
+     * Filenames use the project's captureVersions map so retakes produce
+     * `NIM_Nama_1_Toga_v2.jpg` instead of overwriting the original.
+     */
     fun handleLocalCapture(student: Student, base64Photo: String, channel: Int) {
         val proj = _project.value ?: return
+        val mode = proj.config.mode
+        val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
+        val photosPerSession = CameraModes.photosPerSession(mode)  // 1 or 2
 
-        // Build the filename: NIM_Nama_1_Toga.jpg (standard mode, version 1)
-        val filename = com.saatiril.andro.util.FilenameUtils.buildStandardFilename(
-            student.nim, student.nama, 1, "Toga", 1
-        )
+        // Accumulate the captured photo
+        val currentPhotos = _opCapturedPhotos.value.toMutableList()
+        currentPhotos.add(base64Photo)
+        _opCapturedPhotos.value = currentPhotos
 
-        // Save to the SAF output folder (on IO dispatcher)
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                photoSaver.savePhoto(base64Photo, filename)
-                Log.i(TAG, "Local capture saved: $filename")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to save local capture: ${e.message}", e)
+        if (currentPhotos.size < photosPerSession) {
+            // Not enough photos yet — advance the phase, wait for the next shutter
+            _capturePhase.value = if (currentPhotos.size == 1) CapturePhase.READY_2 else CapturePhase.READY_1
+            return
+        }
+
+        // ── All photos captured — finalize ──
+        _capturePhase.value = CapturePhase.SENDING
+        val photos = currentPhotos.toList()
+
+        // Compute version from captureVersions (increment on retake)
+        val versionKey = "${student.id}_$channel"
+        val currentVersion = proj.captureVersions[versionKey] ?: 0
+        val newVersion = currentVersion + 1
+
+        // Build filenames per mode
+        val filenames: List<String> = if (isPhotoshoot) {
+            listOf(com.saatiril.andro.util.FilenameUtils.buildPhotoshootFilename(
+                student.nim, student.nama, channel, newVersion))
+        } else {
+            // Standard: photo[0]=Toga (suffix 1), photo[1]=Ijazah (suffix 2)
+            photos.mapIndexed { i, _ ->
+                com.saatiril.andro.util.FilenameUtils.buildStandardFilename(
+                    student.nim, student.nama, i + 1,
+                    if (i == 0) "Toga" else "Ijazah", newVersion)
             }
         }
 
-        // Update project: add to photoHistory, mark student done
-        val updatedDb = proj.database.map { s ->
-            if (s.id == student.id) s.copy(status = "done") else s
+        // Save each photo to the SAF output folder (on IO dispatcher)
+        viewModelScope.launch(Dispatchers.IO) {
+            for ((i, photo) in photos.withIndex()) {
+                try {
+                    photoSaver.savePhoto(photo, filenames[i])
+                    Log.i(TAG, "Local capture saved: ${filenames[i]}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save ${filenames[i]}: ${e.message}", e)
+                }
+            }
         }
-        val historyItem = PhotoHistoryItem(student = student, photos = listOf(base64Photo), channel = channel)
+
+        // Update project DB
+        val updatedDb = proj.database.map { s ->
+            if (s.id == student.id) {
+                // Dual-photoshoot: done if EITHER channel has photographed.
+                // Other modes: done after this capture session.
+                s.copy(status = "done")
+            } else s
+        }
+        val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
         val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
-        _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
+        val updatedVersions = proj.captureVersions.toMutableMap().apply { put(versionKey, newVersion) }
+        _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
         _project.value?.let { projectStore.save(it) }
 
-        // Broadcast SYNC_DB so all connected MC/operator clients update their state
+        // Broadcast PHOTOS_SAVED (so remote operators/MCs update) + SYNC_DB
+        SaatirilServer.broadcastLanMessage(SocketEvents.PHOTOS_SAVED, PhotosSavedData(
+            student = student.copy(status = "done"),
+            photos = photos,
+            channel = channel,
+            version = newVersion,
+            filename = filenames.firstOrNull() ?: ""
+        ))
         pushSyncDb()
+
+        // Reset capture state for the next student
+        resetCaptureState()
     }
 
     // ─── Server state (delegated to SaatirilServer singleton) ───
@@ -620,10 +727,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
         if (photos.isEmpty() || student.id.isBlank()) return
 
+        val proj = _project.value ?: return
+        val mode = proj.config.mode
+        val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
+        val isDualPhotoshoot = mode == CameraModes.DUAL_PHOTOSHOOT
+        val photosPerSession = CameraModes.photosPerSession(mode)
+
+        // hasEnoughPhotos check (matches Electron admin-dashboard.tsx line 173)
+        if (photos.size < photosPerSession) {
+            Log.w(TAG, "PHOTOS_SAVED: not enough photos (${photos.size} < $photosPerSession) — ignoring")
+            return
+        }
+
         // Save each photo to the SAF output folder.
         viewModelScope.launch(Dispatchers.IO) {
             for ((i, photo) in photos.withIndex()) {
-                val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size)
+                val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size, isPhotoshoot)
                 try {
                     photoSaver.savePhoto(photo, filename)
                 } catch (e: Exception) {
@@ -632,23 +751,33 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Update project: add to photoHistory, mark student done.
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "done") else s
-            }
-            val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
-            val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
-            val updatedVersions = proj.captureVersions.toMutableMap().apply {
-                put("${student.id}_$channel", version)
-            }
-            _project.value = proj.copy(
-                database = updatedDb,
-                photoHistory = updatedHistory,
-                captureVersions = updatedVersions
-            )
+        // Determine if the student is "done":
+        // - Standard / single-photoshoot: done after this PHOTOS_SAVED.
+        // - Dual-photoshoot: done if EITHER channel 1 OR channel 2 has photographed.
+        //   (matches Electron admin-dashboard.tsx lines 237-248)
+        val shouldMarkDone = if (isDualPhotoshoot) {
+            // Check if the OTHER channel already has a photoHistory entry
+            val otherChannel = if (channel == 1) 2 else 1
+            val otherHasPhotos = proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
+            true  // this channel just got photos → either channel sufficient → done
+        } else {
+            true
         }
-        // Persist updated project
+
+        // Update project: add to photoHistory, mark student done (if applicable).
+        val updatedDb = proj.database.map { s ->
+            if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
+        }
+        val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
+        val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
+        val updatedVersions = proj.captureVersions.toMutableMap().apply {
+            put("${student.id}_$channel", version)
+        }
+        _project.value = proj.copy(
+            database = updatedDb,
+            photoHistory = updatedHistory,
+            captureVersions = updatedVersions
+        )
         _project.value?.let { projectStore.save(it) }
     }
 
@@ -685,7 +814,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == studentId) s.copy(status = "pending") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            // Clear ALL photoHistory entries for this student so the operator
+            // queue re-shows them (matches Electron mc-panel.tsx lines 423-425).
+            val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
+            _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
+            _project.value?.let { projectStore.save(it) }
         }
     }
 
@@ -739,16 +872,17 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun deriveFilename(
         primary: String, student: Student, channel: Int, version: Int,
-        index: Int, total: Int
+        index: Int, total: Int, isPhotoshoot: Boolean = false
     ): String {
-        if (primary.isBlank()) {
-            return com.saatiril.andro.util.FilenameUtils.buildStandardFilename(
-                student.nim, student.nama, index + 1, if (index == 0) "Toga" else "Ijazah", version)
+        // Photoshoot mode: 1 photo, use buildPhotoshootFilename
+        if (isPhotoshoot) {
+            return com.saatiril.andro.util.FilenameUtils.buildPhotoshootFilename(
+                student.nim, student.nama, channel, version)
         }
-        if (index == 0) return primary
-        // Second photo in dual mode → Toga → Ijazah
-        return if (primary.contains("Toga")) primary.replace("Toga", "Ijazah")
-        else primary.replace(".jpg", "_${index + 1}.jpg")
+        // Standard mode: photo[0]=Toga (suffix 1), photo[1]=Ijazah (suffix 2)
+        return com.saatiril.andro.util.FilenameUtils.buildStandardFilename(
+            student.nim, student.nama, index + 1,
+            if (index == 0) "Toga" else "Ijazah", version)
     }
 
     override fun onCleared() {

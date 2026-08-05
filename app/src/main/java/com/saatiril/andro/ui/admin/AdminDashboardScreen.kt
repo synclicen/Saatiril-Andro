@@ -63,6 +63,7 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
 
     var searchQuery by remember { mutableStateOf("") }
     var filterStatus by remember { mutableStateOf("all") }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
 
     val proj = project
     val db = proj?.database ?: emptyList()
@@ -122,21 +123,69 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
             }
         }
 
-        // ─── Server info + QR ───
+        // ─── Server info + per-role QR codes ───
         Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(12.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, BORDER)) {
-            Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                QrCodeBox(text = "http://${lanIp ?: "0.0.0.0"}:$port", modifier = Modifier.size(96.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Default.Wifi, contentDescription = null, tint = GREEN, modifier = Modifier.size(16.dp))
+                    Text("Server aktif", style = TextStyle(color = GREEN, fontWeight = FontWeight.Bold, fontSize = 13.sp))
+                    Spacer(Modifier.weight(1f))
+                    Text("IP: ${lanIp ?: "-"}:${port}", style = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp))
+                }
+                Text("${stats.connectedClients} klien • ${stats.totalMessagesRelayed} pesan • uptime ${stats.uptimeMs / 1000}s",
+                    style = TextStyle(color = MUTED, fontSize = 10.sp))
+
+                // Per-role QR codes (MC Ch.1, Operator Ch.1, Operator Ch.2) — matches Electron
+                Text("Scan QR untuk gabung:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val baseUrl = "http://${lanIp ?: "0.0.0.0"}:$port"
+                    QrCodeWithLabel(
+                        url = "$baseUrl/?role=mc&channel=1",
+                        label = "MC Ch.1",
+                        modifier = Modifier.weight(1f)
+                    )
+                    QrCodeWithLabel(
+                        url = "$baseUrl/?role=operator&channel=1",
+                        label = "Operator Ch.1",
+                        modifier = Modifier.weight(1f)
+                    )
+                    QrCodeWithLabel(
+                        url = "$baseUrl/?role=operator&channel=2",
+                        label = "Operator Ch.2",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Session password display (if set)
+                val pwd = proj?.config?.sessionPassword
+                if (pwd != null && pwd != "__PASSWORD_SET__" && pwd.isNotBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.Default.Wifi, contentDescription = null, tint = GREEN, modifier = Modifier.size(16.dp))
-                        Text("Server aktif", style = TextStyle(color = GREEN, fontWeight = FontWeight.Bold, fontSize = 13.sp))
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = AMBER, modifier = Modifier.size(14.dp))
+                        Text("Password sesi: ", style = TextStyle(color = MUTED, fontSize = 11.sp))
+                        Text(pwd, style = TextStyle(color = AMBER, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
                     }
-                    Text("IP: ${lanIp ?: "-"}:${port}", style = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 13.sp))
-                    Text("${stats.connectedClients} klien • ${stats.totalMessagesRelayed} pesan", style = TextStyle(color = MUTED, fontSize = 11.sp))
-                    Text("Scan QR untuk gabung (MC/operator)", style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp))
                 }
             }
+        }
+
+        // ─── Export button ───
+        Button(
+            onClick = {
+                val fname = viewModel.exportToCsv()
+                exportStatus = if (fname != null) "Tersimpan: $fname" else "Gagal export"
+            },
+            modifier = Modifier.fillMaxWidth().height(44.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CARD),
+            shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, GOLD)
+        ) {
+            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
+            Spacer(Modifier.width(6.dp))
+            Text("Export Database ke CSV", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        exportStatus?.let {
+            Text(it, style = TextStyle(color = if (it.startsWith("Tersimpan")) GREEN else RED, fontSize = 10.sp))
         }
 
         // ─── Stats grid ───
@@ -147,7 +196,7 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile("Menunggu", pending, MUTED, Icons.Default.Schedule, Modifier.weight(1f))
-            StatTile("Latensi", "${stats.uptimeMs / 1000}s", CYAN, Icons.Default.Bolt, Modifier.weight(1f))
+            StatTile("Uptime", "${stats.uptimeMs / 1000}s", CYAN, Icons.Default.Bolt, Modifier.weight(1f))
             StatTile("Sisa", total - done, RED, Icons.Default.HourglassEmpty, Modifier.weight(1f))
         }
 
@@ -232,6 +281,16 @@ private fun QrCodeBox(text: String, modifier: Modifier = Modifier) {
                 Icon(Icons.Default.QrCode, contentDescription = null, tint = Color.Black, modifier = Modifier.size(32.dp))
             }
         }
+    }
+}
+
+// ─── QR Code with Label (per-role) ────────────────────────────
+@Composable
+private fun QrCodeWithLabel(url: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        QrCodeBox(text = url, modifier = Modifier.size(80.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
     }
 }
 

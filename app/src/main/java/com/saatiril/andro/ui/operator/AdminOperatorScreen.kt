@@ -35,9 +35,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.saatiril.andro.camera.CameraCapture
 import com.saatiril.andro.data.AdminViewModel
+import com.saatiril.andro.data.CameraModes
+import com.saatiril.andro.data.CapturePhase
 import com.saatiril.andro.data.Student
 import com.saatiril.andro.data.getActiveChannel
 import com.saatiril.andro.data.isActiveStatus
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
@@ -108,10 +112,24 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var captureError by remember { mutableStateOf<String?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
 
+    // ── Shutter modes (matches Electron: manual / timer-3 / timer-5 / timer-10) ──
+    var shutterMode by remember { mutableStateOf("manual") }  // manual | timer-3 | timer-5 | timer-10
+    var timerCountdown by remember { mutableStateOf<Int?>(null) }  // null = no active timer
+
+    // ── Capture phase (from ViewModel) ──
+    val capturePhase by viewModel.capturePhase.collectAsState()
+    val opCapturedPhotos by viewModel.opCapturedPhotos.collectAsState()
+
     // Find the current target student (the one MC called to the stage)
     val db = project?.database ?: emptyList()
     val activeStudent = db.firstOrNull { isActiveStatus(it.status) }
     val activeChannel = activeStudent?.let { getActiveChannel(it.status) } ?: 1
+
+    // Reset capture state when the active student changes (new student called)
+    val activeStudentId = activeStudent?.id
+    LaunchedEffect(activeStudentId) {
+        viewModel.resetCaptureState()
+    }
 
     // Init camera on first show (only if permission granted), release on dispose
     DisposableEffect(hasCameraPermission) {
@@ -322,6 +340,61 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
 
+        // ─── Shutter mode selector (manual / 3s / 5s / 10s) ───
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s").forEach { (mode, label) ->
+                Card(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { shutterMode = mode }
+                        .border(1.dp, if (shutterMode == mode) GOLD else BORDER, RoundedCornerShape(6.dp)),
+                    colors = CardDefaults.cardColors(containerColor = if (shutterMode == mode) CARD else PANEL),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(label, modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp).fillMaxWidth(),
+                        style = TextStyle(color = if (shutterMode == mode) GOLD else MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center))
+                }
+            }
+        }
+
+        // ─── Capture phase indicator (Toga / Ijazah / Sending) ───
+        val phaseLabel = when (capturePhase) {
+            CapturePhase.STANDBY -> "Standby"
+            CapturePhase.READY_1 -> "Pose 1 — Toga"
+            CapturePhase.READY_2 -> "Pose 2 — Ijazah"
+            CapturePhase.SENDING -> "Mengirim..."
+        }
+        val photosCaptured = opCapturedPhotos.size
+        Text(
+            "Fase: $phaseLabel  •  $photosCaptured foto tersimpan",
+            style = TextStyle(color = if (capturePhase == CapturePhase.SENDING) GREEN else GOLD, fontSize = 10.sp, fontWeight = FontWeight.Medium),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // Timer countdown overlay (big number in center of preview)
+        if (timerCountdown != null) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Text(
+                        "${timerCountdown}",
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                        style = TextStyle(color = GOLD, fontSize = 36.sp, fontWeight = FontWeight.Black)
+                    )
+                }
+            }
+        }
+
         // ─── Captured preview thumbnail + shutter ───
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -343,62 +416,93 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 }
             }
 
-            // Shutter button (big, center)
+            // Shutter button — label changes based on capture phase
+            val shutterLabel = when {
+                isCapturing -> "Menyimpan..."
+                capturePhase == CapturePhase.READY_2 -> "Tangkap Ijazah"
+                capturePhase == CapturePhase.SENDING -> "Mengirim..."
+                else -> "Tangkap ${if (CameraModes.isPhotoshootMode(project?.config?.mode ?: CameraModes.SINGLE)) "Foto" else "Toga"}"
+            }
+
             Button(
                 onClick = {
-                    if (isCapturing || activeStudent == null) return@Button
-                    isCapturing = true
+                    if (isCapturing || activeStudent == null || timerCountdown != null) return@Button
                     captureError = null
-                    try {
-                        // Get the preview frame bitmap from the TextureView
-                        val bitmap = textureView.bitmap ?: run {
-                            captureError = "Preview belum siap, coba lagi."
-                            isCapturing = false
-                            return@Button
-                        }
-                        // Apply crop + filter preset
-                        val proj = project ?: run {
-                            captureError = "Proyek tidak ditemukan."
-                            isCapturing = false
-                            return@Button
-                        }
-                        val processed = try {
-                            CameraCapture.processFrame(
-                                sourceBitmap = bitmap,
-                                config = proj.config,
-                                frameBitmap = frameBitmap  // apply PNG frame overlay if set
-                            )
+
+                    // Timer mode: start countdown, then capture
+                    val timerDuration = when (shutterMode) {
+                        "timer-3" -> 3
+                        "timer-5" -> 5
+                        "timer-10" -> 10
+                        else -> 0
+                    }
+
+                    val doCapture: () -> Unit = {
+                        isCapturing = true
+                        try {
+                            val bitmap = textureView.bitmap ?: run {
+                                captureError = "Preview belum siap, coba lagi."
+                                isCapturing = false
+                                return@Button
+                            }
+                            val proj = project ?: run {
+                                captureError = "Proyek tidak ditemukan."
+                                isCapturing = false
+                                return@Button
+                            }
+                            val processed = try {
+                                CameraCapture.processFrame(
+                                    sourceBitmap = bitmap,
+                                    config = proj.config,
+                                    frameBitmap = frameBitmap
+                                )
+                            } catch (e: Exception) {
+                                bitmap
+                            }
+                            capturedBitmap = processed
+                            val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                            viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
                         } catch (e: Exception) {
-                            bitmap // fallback: use raw bitmap if processing fails
+                            captureError = "Gagal capture: ${e.message}"
+                        } finally {
+                            isCapturing = false
                         }
-                        capturedBitmap = processed
-                        // Convert to base64 data URL
-                        val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                        // Save to output folder + update project DB + broadcast SYNC_DB
-                        viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
-                    } catch (e: Exception) {
-                        captureError = "Gagal capture: ${e.message}"
-                    } finally {
-                        isCapturing = false
+                    }
+
+                    if (timerDuration > 0) {
+                        // Countdown timer
+                        timerCountdown = timerDuration
+                        kotlinx.coroutines.MainScope().launch {
+                            for (i in timerDuration downTo 1) {
+                                timerCountdown = i
+                                kotlinx.coroutines.delay(1000)
+                            }
+                            timerCountdown = null
+                            doCapture()
+                        }
+                    } else {
+                        doCapture()
                     }
                 },
                 modifier = Modifier
                     .weight(1f)
                     .height(56.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (activeStudent != null && !isCapturing) GOLD else BORDER
+                    containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER
                 ),
                 shape = RoundedCornerShape(14.dp),
-                enabled = activeStudent != null && !isCapturing
+                enabled = activeStudent != null && !isCapturing && timerCountdown == null
             ) {
                 if (isCapturing) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp)
                     Spacer(Modifier.width(6.dp))
                     Text("Menyimpan...", color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                } else if (timerCountdown != null) {
+                    Text("$timerCountdown...", color = BG, fontSize = 16.sp, fontWeight = FontWeight.Black)
                 } else {
                     Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(24.dp), tint = BG)
                     Spacer(Modifier.width(6.dp))
-                    Text("Tangkap Foto", color = BG, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(shutterLabel, color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

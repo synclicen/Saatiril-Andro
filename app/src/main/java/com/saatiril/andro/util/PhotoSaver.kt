@@ -151,6 +151,27 @@ class PhotoSaver(private val context: Context) {
     /** Count of `.jpg` photos in the folder. Equivalent to `listPhotos().size`. */
     fun countPhotos(): Int = listPhotos().size
 
+    /**
+     * Save a text file (e.g. CSV export) to the output folder.
+     * @param content the file contents
+     * @param filename e.g. "Daftar_Peserta_20260805.csv"
+     * @param mimeType e.g. "text/csv"
+     * @return the Uri of the created file, or null on failure
+     */
+    fun saveTextFile(content: String, filename: String, mimeType: String = "text/csv"): Uri? {
+        val treeUri = getOutputFolder() ?: return null
+        return try {
+            val docUri = DocumentsContract.createDocument(context.contentResolver, treeUri, mimeType, filename) ?: return null
+            context.contentResolver.openOutputStream(docUri)?.use { os ->
+                os.write(content.toByteArray(Charsets.UTF_8))
+            }
+            docUri
+        } catch (e: Exception) {
+            Log.e("PhotoSaver", "saveTextFile failed: ${e.message}", e)
+            null
+        }
+    }
+
     companion object {
         private const val TAG = "PhotoSaver"
         private const val PREFS_NAME = "photo_saver_prefs"

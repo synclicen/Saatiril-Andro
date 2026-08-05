@@ -140,7 +140,7 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
             // Ratio + Preset
             SectionCard(title = "Rasio & Preset", icon = Icons.Default.AspectRatio) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("4:3", "3:4", "16:9", "1:1").forEach { r ->
+                    listOf("4:3", "16:9", "9:16", "3:4", "2:3", "4:6", "1:1").forEach { r ->
                         ModeChip(r, r, ratio) { viewModel.setSetupRatio(r) }
                     }
                 }

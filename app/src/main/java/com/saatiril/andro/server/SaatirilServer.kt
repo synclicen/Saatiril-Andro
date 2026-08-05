@@ -186,10 +186,14 @@ object SaatirilServer {
         updateStats()
     }
 
-    /** Set / clear the session password (admin action). */
+    /** Set / clear the session password (admin action). Broadcasts auth-requirement to all clients. */
     fun setSessionPasswordHash(hash: String?) {
         sessionPasswordHash = hash
         updateStats()
+        // Notify ALL connected clients that the password requirement changed
+        // (matches Electron index.ts lines 154, 165 — io.emit('auth-requirement', ...))
+        val payload = JsonObject().apply { addProperty("passwordRequired", hash != null) }
+        broadcastRaw(EngineIO.encodeSioEvent("auth-requirement", payload), excludeSid = null)
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -435,9 +439,13 @@ object SaatirilServer {
     private fun handleSocketIoPacket(session: ClientSession, sio: EngineIO.SioPacket) {
         when (sio) {
             is EngineIO.SioPacket.Connect -> {
-                // Client connected to namespace "/". Acknowledge.
+                // Client connected to namespace "/". Acknowledge + send auth-requirement
+                // so the client knows immediately whether a password is needed.
+                // (matches Electron index.ts lines 129-131)
                 sendToSession(session, EngineIO.encodeSioConnect())
-                Log.i(TAG, "SIO connect from ${session.sid}")
+                val authReq = JsonObject().apply { addProperty("passwordRequired", sessionPasswordHash != null) }
+                sendToSession(session, EngineIO.encodeSioEvent("auth-requirement", authReq))
+                Log.i(TAG, "SIO connect from ${session.sid} (passwordRequired=${sessionPasswordHash != null})")
             }
             is EngineIO.SioPacket.Disconnect -> {
                 Log.i(TAG, "SIO disconnect from ${session.sid}")
