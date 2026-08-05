@@ -116,14 +116,19 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var captureError by remember { mutableStateOf<String?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
 
-    // ── Shutter modes (matches Electron: manual / timer-3 / timer-5 / timer-10) ──
+    // ── Shutter modes (matches Electron: manual / timer-3 / timer-5 / timer-10 / hand) ──
     var shutterMode by remember { mutableStateOf("manual") }
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
+    // ── Hand trigger (matches Electron palmTriggerEnabled) ──
+    var handTriggerEnabled by remember { mutableStateOf(false) }
+
     // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
     var gridlineEnabled by remember { mutableStateOf(true) }
     var gridlineType by remember { mutableStateOf("thirds") }  // thirds | quarters | crosshair | diagonal
+    var gridlineThickness by remember { mutableStateOf(1) }  // 1=thin, 2=medium, 3=thick
+    var gridlineColor by remember { mutableStateOf("white") }  // white | yellow | red | cyan | green
 
     // ── Flash overlay on capture ──
     var showFlash by remember { mutableStateOf(false) }
@@ -276,7 +281,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
 
             // Gridline overlay (matches Electron operator-panel.tsx:1370-1640)
             if (gridlineEnabled) {
-                GridlineCanvas(type = gridlineType, modifier = Modifier.fillMaxSize())
+                GridlineCanvas(
+                    type = gridlineType,
+                    thickness = gridlineThickness,
+                    colorName = gridlineColor,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             // Frame overlay on top of the preview (shows the PNG frame)
@@ -436,13 +446,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             Text("Menunggu MC mengirim peserta…", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(4.dp))
         }
 
-        // ─── Shutter mode selector (manual / 3s / 5s / 10s) ───
+        // ─── Shutter mode selector (manual / 3s / 5s / 10s / hand) ───
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s").forEach { (mode, label) ->
+            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s", "hand" to "Tangan").forEach { (mode, label) ->
                 Card(
                     modifier = Modifier
                         .weight(1f)
@@ -512,7 +522,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
 
         // Gridline toggle button (matches Electron Grid toggle)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             // Grid toggle
             Card(
                 modifier = Modifier
@@ -522,10 +532,10 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL),
                 shape = RoundedCornerShape(6.dp)
             ) {
-                Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.GridView, contentDescription = "Grid", tint = if (gridlineEnabled) GOLD else MUTED, modifier = Modifier.size(12.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Grid", style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 9.sp))
+                Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.GridView, contentDescription = "Grid", tint = if (gridlineEnabled) GOLD else MUTED, modifier = Modifier.size(11.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("Grid", style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 8.sp))
                 }
             }
             // Grid type selector (only when enabled)
@@ -539,9 +549,40 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         colors = CardDefaults.cardColors(containerColor = if (gridlineType == type) CARD else PANEL),
                         shape = RoundedCornerShape(4.dp)
                     ) {
-                        Text(label, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                            style = TextStyle(color = if (gridlineType == type) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                        Text(label, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                            style = TextStyle(color = if (gridlineType == type) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold))
                     }
+                }
+                // Thickness selector (1=thin, 2=medium, 3=thick)
+                listOf(1 to "T", 2 to "M", 3 to "K").forEach { (thick, label) ->
+                    Card(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { gridlineThickness = thick }
+                            .border(1.dp, if (gridlineThickness == thick) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                        colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == thick) CARD else PANEL),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(label, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                            style = TextStyle(color = if (gridlineThickness == thick) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+                    }
+                }
+            }
+        }
+        // Color selector row (only when gridline enabled)
+        if (gridlineEnabled) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Warna:", style = TextStyle(color = MUTED, fontSize = 8.sp))
+                listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (name, color) ->
+                    Card(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { gridlineColor = name }
+                            .border(2.dp, if (gridlineColor == name) GOLD else Color.Transparent, RoundedCornerShape(8.dp)),
+                        colors = CardDefaults.cardColors(containerColor = color),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {}
                 }
             }
         }
@@ -666,12 +707,19 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
 
 // ─── Gridline Canvas (matches Electron SVG gridlines) ────────
 @Composable
-private fun GridlineCanvas(type: String, modifier: Modifier = Modifier) {
+private fun GridlineCanvas(type: String, thickness: Int = 1, colorName: String = "white", modifier: Modifier = Modifier) {
     androidx.compose.foundation.Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val color = Color.White.copy(alpha = 0.3f)
-        val stroke = 1.5f
+        val baseColor = when (colorName) {
+            "yellow" -> Color(0xFFfacc15)
+            "red" -> Color(0xFFef4444)
+            "cyan" -> Color(0xFF06b6d4)
+            "green" -> Color(0xFF22c55e)
+            else -> Color.White
+        }
+        val color = baseColor.copy(alpha = 0.35f)
+        val stroke = when (thickness) { 1 -> 1f; 2 -> 2f; 3 -> 3f; else -> 1f }
 
         when (type) {
             "thirds" -> {

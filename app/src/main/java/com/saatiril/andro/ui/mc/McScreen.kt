@@ -84,10 +84,22 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
 
     val scrollState = rememberScrollState()
 
-    // Auto-scroll to top when a student becomes active or done count changes
-    // (matches Electron mc-panel.tsx:157-165 auto-scroll behavior)
+    // Auto-scroll to keep the next pending student visible when status changes
+    // (matches Electron mc-panel.tsx:157-165 scrollIntoView behavior).
+    // When a student becomes active or done, scroll down so the next pending
+    // student is visible. Estimate position based on pending index.
     LaunchedEffect(active.firstOrNull()?.id, done.size) {
-        scrollState.animateScrollTo(0)
+        if (!isPhotoshoot) {
+            // Find index of next pending in the full channelStudents list
+            val nextIdx = channelStudents.indexOfFirst { it.status == "pending" }
+            if (nextIdx >= 0) {
+                // Each row is ~40dp high, scroll to show it
+                val targetPx = (nextIdx * 45).coerceAtLeast(0)
+                scrollState.animateScrollTo(targetPx)
+            }
+        } else {
+            scrollState.animateScrollTo(0)
+        }
     }
 
     Column(
@@ -231,7 +243,10 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                 } else if (nextPending != null) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
                     Spacer(Modifier.width(4.dp))
-                    Text("PANGGIL SEKARANG", color = BG, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    // Show next student name so MC can read it while pressing
+                    // (matches Electron mc-panel.tsx:530 — button shows student context)
+                    val shortName = nextPending.nama.take(25).ifBlank { nextPending.nim.take(25) }
+                    Text("PANGGIL: $shortName", color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 } else {
                     Text("ANTREAN HABIS", color = MUTED, fontSize = 11.sp)
                 }

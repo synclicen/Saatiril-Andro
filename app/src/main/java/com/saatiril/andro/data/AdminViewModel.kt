@@ -487,45 +487,30 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Export the student database to an Excel .xlsx file in the output folder.
-     * Columns: No, NIM, Nama, Status, Channel — matches Electron exportToExcel
-     * (admin-dashboard.tsx:668-727). Uses Apache POI for real .xlsx format
-     * with column widths, styled headers, and colored status cells.
-     * Returns the filename on success, null on failure.
+     * Export the student database to an Excel .xls file in the output folder.
+     * Uses HTML-table format with .xls extension — Excel and Google Sheets
+     * open this natively with styled headers and colored status cells.
+     * No Apache POI needed (POI uses invoke-polymorphic-method-handle which
+     * Android D8/R8 cannot dex).
+     * Columns: No, NIM, Nama, Status, Channel — matches Electron exportToExcel.
      */
     fun exportToExcel(): String? {
         val proj = _project.value ?: return null
         val timeStamp = android.text.format.DateFormat.format("yyyyMMdd_HHmmss", System.currentTimeMillis()).toString()
-        val filename = "Daftar_Peserta_${proj.name.replace(" ", "_")}_$timeStamp.xlsx"
+        val filename = "Daftar_Peserta_${proj.name.replace(" ", "_")}_$timeStamp.xls"
         return try {
-            // Build .xlsx in memory using Apache POI
-            val workbook = org.apache.poi.xssf.usermodel.XSSFWorkbook()
-            val sheet = workbook.createSheet("Peserta")
-
-            // Header style
-            val headerStyle = workbook.createCellStyle()
-            val headerFont = workbook.createFont()
-            headerFont.bold = true
-            headerStyle.setFont(headerFont)
-            headerStyle.fillForegroundColor = org.apache.poi.ss.usermodel.IndexedColors.DARK_BLUE.index
-            headerStyle.fillPattern = org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND
-            headerFont.color = org.apache.poi.ss.usermodel.IndexedColors.WHITE.index
-
-            // Header row
-            val headerRow = sheet.createRow(0)
-            val headers = arrayOf("No", "NIM", "Nama", "Status", "Channel")
-            headers.forEachIndexed { i, h ->
-                val cell = headerRow.createCell(i)
-                cell.setCellValue(h)
-                cell.cellStyle = headerStyle
+            val sb = StringBuilder()
+            sb.append("<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" xmlns=\"http://www.w3.org/TR/REC-html40\">")
+            sb.append("<head><meta charset=\"UTF-8\"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Peserta</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>")
+            sb.append("<body><table border=\"1\">")
+            // Header row with styling
+            sb.append("<tr style=\"background-color:#1a0b2e;color:#d4af37;font-weight:bold;\">")
+            for (h in arrayOf("No", "NIM", "Nama", "Status", "Channel")) {
+                sb.append("<td>").append(h).append("</td>")
             }
-
+            sb.append("</tr>")
             // Data rows
             proj.database.forEachIndexed { i, s ->
-                val row = sheet.createRow(i + 1)
-                row.createCell(0).setCellValue((i + 1).toDouble())
-                row.createCell(1).setCellValue(s.nim)
-                row.createCell(2).setCellValue(s.nama)
                 val statusLabel = when {
                     s.status == "pending" -> "Menunggu"
                     s.status == "sent" -> "Dikirim"
@@ -533,21 +518,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     isActiveStatus(s.status) -> "Aktif Ch.${getActiveChannel(s.status) ?: "?"}"
                     else -> s.status
                 }
-                row.createCell(3).setCellValue(statusLabel)
-                row.createCell(4).setCellValue(s.assignedChannel.toDouble())
+                val rowColor = when {
+                    s.status == "done" -> "#22c55e"
+                    s.status == "sent" -> "#06b6d4"
+                    isActiveStatus(s.status) -> "#d4af37"
+                    else -> "#ffffff"
+                }
+                sb.append("<tr>")
+                sb.append("<td>").append(i + 1).append("</td>")
+                sb.append("<td style=\"mso-number-format:'\\@';\">").append(escapeXml(s.nim)).append("</td>")
+                sb.append("<td>").append(escapeXml(s.nama)).append("</td>")
+                sb.append("<td style=\"color:$rowColor;font-weight:bold;\">").append(statusLabel).append("</td>")
+                sb.append("<td>").append(s.assignedChannel).append("</td>")
+                sb.append("</tr>")
             }
-
-            // Auto-size columns
-            for (i in headers.indices) sheet.autoSizeColumn(i)
-
-            // Write to byte array
-            val baos = java.io.ByteArrayOutputStream()
-            workbook.write(baos)
-            workbook.close()
-            val bytes = baos.toByteArray()
-
-            // Save to SAF output folder
-            val uri = photoSaver.saveBinaryFile(bytes, filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            sb.append("</table></body></html>")
+            val uri = photoSaver.saveTextFile(sb.toString(), filename, "application/vnd.ms-excel")
             Log.i(TAG, "Excel exported: $filename (${proj.database.size} rows)")
             filename
         } catch (e: Exception) {
@@ -555,6 +541,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             null
         }
     }
+
+    private fun escapeXml(s: String): String =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     /** Legacy CSV export — kept for fallback. */
     fun exportToCsv(): String? {

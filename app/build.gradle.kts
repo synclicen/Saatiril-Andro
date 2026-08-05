@@ -26,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "1.1.2-saatiril-andro"
+        versionCode = 14
+        versionName = "1.1.3-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -184,8 +184,4 @@ dependencies {
 
     // QR code generation (so MC/operator can scan & join the admin's LAN server)
     implementation("com.google.zxing:core:3.5.3")
-
-    // Apache POI — Excel .xlsx export (matches Electron XLSX.utils)
-    implementation("org.apache.poi:poi:5.2.5")
-    implementation("org.apache.poi:poi-ooxml:5.2.5")
 }
