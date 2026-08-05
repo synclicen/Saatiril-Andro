@@ -441,29 +441,23 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         isCapturing = true
                         try {
                             val bitmap = textureView.bitmap
-                            if (bitmap == null) {
-                                captureError = "Preview belum siap, coba lagi."
-                                isCapturing = false
-                                return@doCapture
-                            }
                             val proj = project
-                            if (proj == null) {
-                                captureError = "Proyek tidak ditemukan."
-                                isCapturing = false
-                                return@doCapture
+                            if (bitmap != null && proj != null) {
+                                val processed = try {
+                                    CameraCapture.processFrame(
+                                        sourceBitmap = bitmap,
+                                        config = proj.config,
+                                        frameBitmap = frameBitmap
+                                    )
+                                } catch (e: Exception) {
+                                    bitmap
+                                }
+                                capturedBitmap = processed
+                                val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
+                            } else {
+                                captureError = if (bitmap == null) "Preview belum siap, coba lagi." else "Proyek tidak ditemukan."
                             }
-                            val processed = try {
-                                CameraCapture.processFrame(
-                                    sourceBitmap = bitmap,
-                                    config = proj.config,
-                                    frameBitmap = frameBitmap
-                                )
-                            } catch (e: Exception) {
-                                bitmap
-                            }
-                            capturedBitmap = processed
-                            val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                            viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
                         } catch (e: Exception) {
                             captureError = "Gagal capture: ${e.message}"
                         } finally {
