@@ -26,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.0.8-saatiril-andro"
+        versionCode = 10
+        versionName = "1.0.9-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -64,19 +64,19 @@ android {
             isMinifyEnabled = false
         }
         release {
-            // Enable R8 code shrinking + resource shrinking for release builds.
-            // Removes unused classes and resources from dependencies,
-            // saving ~2-4MB. MediaPipe keep rules added to proguard-rules.pro.
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // R8 minification DISABLED — ktor CIO engine throws "Array is empty"
+            // when R8 strips internal classes needed at runtime. The CIO factory
+            // object bypass wasn't enough because R8 also strips plugin pipeline
+            // classes, coroutine dispatchers, and ServiceLoader metadata that
+            // ktor accesses via reflection. Disabling minification is the only
+            // reliable fix (APK is ~50MB instead of ~33MB, but the server works).
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
             // Sign the release APK so Android 7+ will install it.
-            // (Without this, the release APK is `app-release-unsigned.apk`
-            // and Android refuses to install it — debug APK works because
-            // AGP auto-signs it with the debug keystore.)
             signingConfig = signingConfigs.getByName("release")
         }
     }
