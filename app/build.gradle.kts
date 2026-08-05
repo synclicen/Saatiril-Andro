@@ -1,6 +1,21 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// ── Release signing config ─────────────────────────────────────
+// Reads keystore location + passwords from keystore.properties (project root).
+// The keystore itself is supplied by CI from a base64-encoded GitHub Actions
+// secret (SAATIRIL_KEYSTORE_BASE64).
+// Locally, drop `saatiril-release.keystore` + `keystore.properties` in the
+// project root to build a signed release APK.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -11,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0-saatiril-andro"
+        versionCode = 2
+        versionName = "1.0.1-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -26,6 +41,17 @@ android {
         // (MediaPipe tasks-vision has ~10MB per ABI).
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystoreProperties.isNotEmpty()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
@@ -44,6 +70,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Sign the release APK so Android 7+ will install it.
+            // (Without this, the release APK is `app-release-unsigned.apk`
+            // and Android refuses to install it — debug APK works because
+            // AGP auto-signs it with the debug keystore.)
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

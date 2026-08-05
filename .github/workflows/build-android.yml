@@ -53,10 +53,36 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
+      # ── Decode release signing keystore ──────────────────────────
+      # The keystore + passwords are stored as GitHub Actions secrets
+      # (uploaded once via the GitHub API). We base64-decode the keystore
+      # to a file and write keystore.properties so build.gradle.kts can
+      # pick it up via the `signingConfigs.release` block.
+      - name: Decode release keystore
+        env:
+          SAATIRIL_KEYSTORE_BASE64: ${{ secrets.SAATIRIL_KEYSTORE_BASE64 }}
+          SAATIRIL_KEYSTORE_PASSWORD: ${{ secrets.SAATIRIL_KEYSTORE_PASSWORD }}
+          SAATIRIL_KEY_ALIAS: ${{ secrets.SAATIRIL_KEY_ALIAS }}
+          SAATIRIL_KEY_PASSWORD: ${{ secrets.SAATIRIL_KEY_PASSWORD }}
+        run: |
+          if [ -z "$SAATIRIL_KEYSTORE_BASE64" ]; then
+            echo "::warning::SAATIRIL_KEYSTORE_BASE64 secret is not set — release APK will be UNSIGNED and Android will refuse to install it."
+            exit 0
+          fi
+          echo "$SAATIRIL_KEYSTORE_BASE64" | base64 -d > saatiril-release.keystore
+          cat > keystore.properties <<EOF
+          storeFile=saatiril-release.keystore
+          storePassword=$SAATIRIL_KEYSTORE_PASSWORD
+          keyAlias=$SAATIRIL_KEY_ALIAS
+          keyPassword=$SAATIRIL_KEY_PASSWORD
+          EOF
+          echo "Keystore decoded:"
+          ls -l saatiril-release.keystore
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Build Release APK
+      - name: Build Release APK (signed)
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Rename APKs
@@ -68,8 +94,26 @@ jobs:
             cp "$RELEASE_APK" artifacts/saatiril-andro.apk
           else
             echo "No release APK found"
+            exit 1
           fi
           ls -lh artifacts/
+
+      # ── Verify the release APK is actually signed ────────────────
+      # An unsigned APK is rejected by Android's installer (the bug we fixed
+      # in this build). Fail the build loudly if there's no v2 signing block.
+      - name: Verify release APK signature
+        run: |
+          if ! command -v apksigner >/dev/null 2>&1; then
+            APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          else
+            APKSIGNER="apksigner"
+          fi
+          echo "Using apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs artifacts/saatiril-andro.apk || {
+            echo "::error::Release APK signature verification FAILED — the APK is unsigned and Android will refuse to install it."
+            exit 1
+          }
+          echo "✅ Release APK is signed and installable."
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4

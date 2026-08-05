@@ -11,9 +11,10 @@ local.properties
 *.ap_
 *.dex
 
-# Keystores (never commit)
+# Keystores (never commit — these contain the release signing key)
 *.jks
 *.keystore
+keystore.properties
 
 # Android Studio / IntelliJ
 *.iml
