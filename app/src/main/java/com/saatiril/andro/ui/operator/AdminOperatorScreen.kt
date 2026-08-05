@@ -40,6 +40,7 @@ import com.saatiril.andro.data.CapturePhase
 import com.saatiril.andro.data.Student
 import com.saatiril.andro.data.getActiveChannel
 import com.saatiril.andro.data.isActiveStatus
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -113,8 +114,16 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var isCapturing by remember { mutableStateOf(false) }
 
     // ── Shutter modes (matches Electron: manual / timer-3 / timer-5 / timer-10) ──
-    var shutterMode by remember { mutableStateOf("manual") }  // manual | timer-3 | timer-5 | timer-10
-    var timerCountdown by remember { mutableStateOf<Int?>(null) }  // null = no active timer
+    var shutterMode by remember { mutableStateOf("manual") }
+    var timerCountdown by remember { mutableStateOf<Int?>(null) }
+    var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
+    var gridlineEnabled by remember { mutableStateOf(true) }
+    var gridlineType by remember { mutableStateOf("thirds") }  // thirds | quarters | crosshair | diagonal
+
+    // ── Flash overlay on capture ──
+    var showFlash by remember { mutableStateOf(false) }
 
     // ── Capture phase (from ViewModel) ──
     val capturePhase by viewModel.capturePhase.collectAsState()
@@ -241,6 +250,11 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 factory = { textureView },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Gridline overlay (matches Electron operator-panel.tsx:1370-1640)
+            if (gridlineEnabled) {
+                GridlineCanvas(type = gridlineType, modifier = Modifier.fillMaxSize())
+            }
 
             // Frame overlay on top of the preview (shows the PNG frame)
             frameBitmap?.let { fb ->
@@ -390,7 +404,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             modifier = Modifier.fillMaxWidth()
         )
 
-        // Timer countdown overlay (big number in center of preview)
+        // Timer countdown overlay (big number in center of preview) + cancel button
         if (timerCountdown != null) {
             Box(
                 modifier = Modifier.fillMaxWidth().padding(4.dp),
@@ -405,6 +419,61 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                         style = TextStyle(color = GOLD, fontSize = 36.sp, fontWeight = FontWeight.Black)
                     )
+                }
+            }
+            // Cancel timer button (matches Electron Esc key / BATAL button)
+            Button(
+                onClick = {
+                    timerJob?.cancel()
+                    timerJob = null
+                    timerCountdown = null
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = RED),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                Spacer(Modifier.width(4.dp))
+                Text("BATAL", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // Flash overlay (white flash on capture — matches Electron operator-panel.tsx:1738-1747)
+        if (showFlash) {
+            Box(Modifier.fillMaxWidth().height(100.dp).background(Color.White.copy(alpha = 0.6f)))
+        }
+
+        // Gridline toggle button (matches Electron Grid toggle)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Grid toggle
+            Card(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { gridlineEnabled = !gridlineEnabled }
+                    .border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(6.dp)),
+                colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL),
+                shape = RoundedCornerShape(6.dp)
+            ) {
+                Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.GridView, contentDescription = "Grid", tint = if (gridlineEnabled) GOLD else MUTED, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Grid", style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 9.sp))
+                }
+            }
+            // Grid type selector (only when enabled)
+            if (gridlineEnabled) {
+                listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (type, label) ->
+                    Card(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { gridlineType = type }
+                            .border(1.dp, if (gridlineType == type) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                        colors = CardDefaults.cardColors(containerColor = if (gridlineType == type) CARD else PANEL),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(label, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                            style = TextStyle(color = if (gridlineType == type) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                    }
                 }
             }
         }
@@ -468,6 +537,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 }
                                 capturedBitmap = processed
                                 val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                // Flash overlay effect (matches Electron operator-panel.tsx:1738-1747)
+                                showFlash = true
+                                kotlinx.coroutines.MainScope().launch {
+                                    kotlinx.coroutines.delay(200)
+                                    showFlash = false
+                                }
                                 viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
                             } else {
                                 captureError = if (bitmap == null) "Preview belum siap, coba lagi." else "Proyek tidak ditemukan."
@@ -480,14 +555,15 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     }
 
                     if (timerDuration > 0) {
-                        // Countdown timer
+                        // Countdown timer — store job so it can be cancelled
                         timerCountdown = timerDuration
-                        kotlinx.coroutines.MainScope().launch {
+                        timerJob = kotlinx.coroutines.MainScope().launch {
                             for (i in timerDuration downTo 1) {
                                 timerCountdown = i
                                 kotlinx.coroutines.delay(1000)
                             }
                             timerCountdown = null
+                            timerJob = null
                             doCapture()
                         }
                     } else {
@@ -517,5 +593,50 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+// ─── Gridline Canvas (matches Electron SVG gridlines) ────────
+@Composable
+private fun GridlineCanvas(type: String, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val color = Color.White.copy(alpha = 0.3f)
+        val stroke = 1.5f
+
+        when (type) {
+            "thirds" -> {
+                // 2 vertical + 2 horizontal at 33.3% / 66.6%
+                drawLine(color, w / 3f, 0f, w / 3f, h, stroke)
+                drawLine(color, 2 * w / 3f, 0f, 2 * w / 3f, h, stroke)
+                drawLine(color, 0f, h / 3f, w, h / 3f, stroke)
+                drawLine(color, 0f, 2 * h / 3f, w, 2 * h / 3f, stroke)
+            }
+            "quarters" -> {
+                // 3 vertical + 3 horizontal at 25% / 50% / 75%
+                drawLine(color, w / 4f, 0f, w / 4f, h, stroke)
+                drawLine(color, w / 2f, 0f, w / 2f, h, stroke)
+                drawLine(color, 3 * w / 4f, 0f, 3 * w / 4f, h, stroke)
+                drawLine(color, 0f, h / 4f, w, h / 4f, stroke)
+                drawLine(color, 0f, h / 2f, w, h / 2f, stroke)
+                drawLine(color, 0f, 3 * h / 4f, w, 3 * h / 4f, stroke)
+            }
+            "crosshair" -> {
+                // Center cross + circle
+                drawLine(color, w / 2f, 0f, w / 2f, h, stroke)
+                drawLine(color, 0f, h / 2f, w, h / 2f, stroke)
+                drawCircle(color, minOf(w, h) / 6f, center = androidx.compose.ui.geometry.Offset(w / 2f, h / 2f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            }
+            "diagonal" -> {
+                // 2 diagonal lines + thirds grid at 50% opacity
+                drawLine(color, 0f, 0f, w, h, stroke)
+                drawLine(color, w, 0f, 0f, h, stroke)
+                drawLine(color.copy(alpha = 0.15f), w / 3f, 0f, w / 3f, h, stroke)
+                drawLine(color.copy(alpha = 0.15f), 2 * w / 3f, 0f, 2 * w / 3f, h, stroke)
+                drawLine(color.copy(alpha = 0.15f), 0f, h / 3f, w, h / 3f, stroke)
+                drawLine(color.copy(alpha = 0.15f), 0f, 2 * h / 3f, w, 2 * h / 3f, stroke)
+            }
+        }
     }
 }

@@ -738,6 +738,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         SaatirilServer.broadcastLanMessage(SocketEvents.SYNC_DB, SyncDbData(stripped))
     }
 
+    // ─── OP_PROGRESS (live operator status text per channel) ───
+    // Electron mc-panel.tsx:84-85 subscribes to OP_PROGRESS and displays
+    // "Ch.{n}: {status}" so MC knows when to call the next student.
+    private val _opProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val opProgress: StateFlow<Map<Int, String>> = _opProgress.asStateFlow()
+
+    private fun handleOpProgress(data: JsonElement?) {
+        val obj = data as? JsonObject ?: return
+        val channel = obj.get("channel")?.takeIf { !it.isJsonNull }?.asInt ?: return
+        val status = obj.get("status")?.takeIf { !it.isJsonNull }?.asString ?: return
+        _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, status) }
+        Log.d(TAG, "OP_PROGRESS ch$channel: $status")
+    }
+
     // ─── Lan-message handler (called by SaatirilServer) ─────────
     private fun onLanMessage(event: String, data: JsonElement?, senderSid: String?) {
         try {
@@ -748,7 +762,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 SocketEvents.STUDENT_RESET -> handleStudentReset(data)
                 SocketEvents.REQUEST_STATE -> handleRequestState(senderSid)
                 SocketEvents.REQUEST_FRAME -> handleRequestFrame(data, senderSid)
-                SocketEvents.OP_PROGRESS -> { /* informational only */ }
+                SocketEvents.OP_PROGRESS -> handleOpProgress(data)
                 SocketEvents.SYNC_DB -> { /* we are the source of truth; ignore */ }
                 else -> Log.d(TAG, "lan-message '$event' (unhandled)")
             }

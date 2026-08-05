@@ -38,22 +38,18 @@ private val AMBER = Color(0xFFfbbf24)
 private val RED = Color(0xFFef4444)
 
 /**
- * MC panel — matches the Electron mc-panel.tsx behavior for all 4 modes.
+ * MC panel — matches Electron mc-panel.tsx for all 4 modes.
  *
- * NO "Selesai" button — completion is always event-driven:
- *  - single/dual: operator captures 2 photos (Toga+Ijazah) → emits STUDENT_DONE → auto-done
- *  - photoshoot: operator captures 1 photo → emits PHOTOS_SAVED → auto-done
- *
- * Mode behaviors:
- *  - single: sequential queue, "PANGGIL SEKARANG" sets status active_1
- *  - dual: sequential queue per channel, ch1 students → ch1 operator, ch2 → ch2 (INDEPENDENT)
- *  - single-photoshoot: search-first (urutan bebas), "KIRIM KE OPERATOR" sets status sent
- *  - dual-photoshoot: search-first, "KIRIM KE 2 KAMERA" sends to BOTH channels (cooperative)
+ * NO "Selesai" button — completion is event-driven.
+ * Shows OP_PROGRESS live so MC knows operator status.
+ * Queue list shows ALL channel students with status badges (not just pending).
+ * Photoshoot: full participant list + sent students panel with per-channel completion.
  */
 @Composable
 fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
     val project by viewModel.project.collectAsState()
     val myChannel by viewModel.myChannel.collectAsState()
+    val opProgress by viewModel.opProgress.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var selectedStudent by remember { mutableStateOf<Student?>(null) }
 
@@ -62,10 +58,9 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
     val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
     val isDual = CameraModes.isDualMode(mode)
     val isDualPhotoshoot = mode == CameraModes.DUAL_PHOTOSHOOT
+    val photoHistory = project?.photoHistory ?: emptyList()
 
-    // Channel filtering (matches Electron mc-panel.tsx:100-107):
-    // - single/dual: filter by assignedChannel === myChannel
-    // - photoshoot: all students (no channel filter)
+    // Channel filtering
     val channelStudents = if (isPhotoshoot) db else db.filter { it.assignedChannel == myChannel }
 
     val q = searchQuery.trim().lowercase()
@@ -75,17 +70,17 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
         }
     } else emptyList()
 
-    val pending = channelStudents.filter { it.status == "pending" }.filter {
-        q.isEmpty() || it.nama.contains(q, ignoreCase = true) || it.nim.contains(q, ignoreCase = true)
-    }
+    val pending = channelStudents.filter { it.status == "pending" }
     val active = if (isPhotoshoot) emptyList() else channelStudents.filter { isActiveStatus(it.status) }
     val sent = channelStudents.filter { it.status == "sent" }
     val done = channelStudents.filter { it.status == "done" }
     val total = channelStudents.size
 
-    // Find the next pending student for "PANGGIL SEKARANG" button (non-photoshoot)
     val nextPending = if (!isPhotoshoot) channelStudents.firstOrNull { it.status == "pending" } else null
     val hasActive = active.isNotEmpty()
+
+    // OP_PROGRESS text for current channel
+    val opProgressText = opProgress[myChannel] ?: opProgress.values.firstOrNull() ?: ""
 
     Column(
         modifier = modifier
@@ -95,7 +90,7 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // ─── Channel selector (dual modes only) ───
+        // ─── Channel selector (dual modes) ───
         if (isDual) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -108,25 +103,28 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        // ─── Active target card (non-photoshoot: shows who's being photographed) ───
+        // ─── Active target card with OP_PROGRESS ───
         if (!isPhotoshoot && hasActive) {
             active.forEach { student ->
                 val ch = getActiveChannel(student.status) ?: myChannel
-                ActiveTargetCard(student, ch, onReset = { viewModel.resetStudent(student.id, ch) })
+                ActiveTargetCard(
+                    student, ch,
+                    opProgressText = opProgressText,
+                    onReset = { viewModel.resetStudent(student.id, ch) }
+                )
             }
         }
 
         // ─── Stats ───
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             StatCard("Menunggu", pending.size, MUTED, Icons.Default.Schedule, Modifier.weight(1f))
-            if (isPhotoshoot) {
-                StatCard("Dikirim", sent.size, CYAN, Icons.Default.Send, Modifier.weight(1f))
-            }
+            if (isPhotoshoot) StatCard("Dikirim", sent.size, CYAN, Icons.Default.Send, Modifier.weight(1f))
             StatCard("Selesai", done.size, GREEN, Icons.Default.CheckCircle, Modifier.weight(1f))
         }
 
-        // ─── Photoshoot mode: search-first UI ───
+        // ─── Photoshoot mode ───
         if (isPhotoshoot) {
+            // Search box
             OutlinedTextField(
                 value = searchQuery, onValueChange = { searchQuery = it },
                 label = { Text("Cari Peserta — Urutan Bebas", color = MUTED, fontSize = 11.sp) },
@@ -141,206 +139,311 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                 textStyle = TextStyle(fontSize = 13.sp)
             )
 
-            // Search results (photoshoot: select student to send)
+            // Search results
             if (searchResults.isNotEmpty()) {
-                Text("Hasil Pencarian (${searchResults.size})", style = TextStyle(color = GREEN, fontWeight = FontWeight.Bold, fontSize = 12.sp))
-                searchResults.take(10).forEach { s ->
-                    val isDone = s.status == "done"
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable { selectedStudent = s },
-                        colors = CardDefaults.cardColors(containerColor = if (selectedStudent?.id == s.id) CARD else PANEL),
-                        shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (selectedStudent?.id == s.id) GREEN else BORDER.copy(alpha = 0.5f))
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(
-                                if (isDone) Icons.Default.CheckCircle else Icons.Default.Person,
-                                contentDescription = null,
-                                tint = if (isDone) GREEN else MUTED, modifier = Modifier.size(16.dp)
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(s.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium), maxLines = 1)
-                                Text(s.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 10.sp, fontFamily = FontFamily.Monospace))
-                            }
-                            Text(
-                                if (isDone) "Selesai" else if (s.status == "sent") "Dikirim" else "Menunggu",
-                                style = TextStyle(color = if (isDone) GREEN else if (s.status == "sent") CYAN else MUTED, fontSize = 9.sp)
-                            )
-                        }
-                    }
+                Text("Hasil Pencarian (${searchResults.size})", style = TextStyle(color = GREEN, fontWeight = FontWeight.Bold, fontSize = 11.sp))
+                searchResults.take(8).forEach { s ->
+                    StudentSearchRow(s, isSelected = selectedStudent?.id == s.id, onSelect = { selectedStudent = s })
                 }
             }
 
-            // Send button (photoshoot)
-            val sendLabel = if (isDualPhotoshoot) "KIRIM KE 2 KAMERA" else "KIRIM KE OPERATOR"
+            // Send button
             val selStudent = selectedStudent
             if (selStudent != null) {
                 if (selStudent.status == "done") {
-                    // Retake button
                     Button(
                         onClick = {
                             viewModel.resetStudent(selStudent.id, selStudent.assignedChannel)
-                            selectedStudent = null
-                            searchQuery = ""
+                            selectedStudent = null; searchQuery = ""
                         },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AMBER),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
-                        Spacer(Modifier.width(6.dp))
-                        Text("RESET & KIRIM ULANG", color = BG, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = BG)
+                        Spacer(Modifier.width(4.dp))
+                        Text("RESET & KIRIM ULANG", color = BG, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 } else {
                     Button(
                         onClick = {
-                            if (isDualPhotoshoot) {
-                                viewModel.sendToOperator(selStudent, listOf(1, 2))
-                            } else {
-                                viewModel.sendToOperator(selStudent, listOf(myChannel))
-                            }
-                            selectedStudent = null
-                            searchQuery = ""
+                            if (isDualPhotoshoot) viewModel.sendToOperator(selStudent, listOf(1, 2))
+                            else viewModel.sendToOperator(selStudent, listOf(myChannel))
+                            selectedStudent = null; searchQuery = ""
                         },
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = GREEN),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
-                        Spacer(Modifier.width(6.dp))
-                        Text(sendLabel, color = BG, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp), tint = BG)
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (isDualPhotoshoot) "KIRIM KE 2 KAMERA" else "KIRIM KE OPERATOR", color = BG, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
             }
+
+            // Sent students panel with per-channel completion (photoshoot only)
+            if (sent.isNotEmpty()) {
+                Text("Dikirim ke Operator (${sent.size})", style = TextStyle(color = CYAN, fontWeight = FontWeight.Bold, fontSize = 11.sp))
+                sent.take(10).forEach { s ->
+                    SentStudentRow(s, photoHistory, isDualPhotoshoot) { viewModel.resetStudent(s.id, s.assignedChannel) }
+                }
+            }
+
+            // Full participant list (photoshoot — clickable to select)
+            if (q.isEmpty()) {
+                Text("Semua Peserta ($total)", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp))
+                channelStudents.take(30).forEach { s ->
+                    StudentListRow(s, isSelected = selectedStudent?.id == s.id) {
+                        selectedStudent = s
+                    }
+                }
+                if (channelStudents.size > 30) Text("… dan ${channelStudents.size - 30} lainnya (cari untuk seleksi)", style = TextStyle(color = MUTED, fontSize = 9.sp), modifier = Modifier.padding(4.dp))
+            }
         } else {
-            // ─── Non-photoshoot: sequential queue + "PANGGIL SEKARANG" ───
-            // Big call button at top (matches Electron renderCallButton)
+            // ─── Non-photoshoot: sequential queue ───
+            // Big call button
             Button(
-                onClick = {
-                    nextPending?.let { viewModel.callStudent(it, myChannel) }
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
+                onClick = { nextPending?.let { viewModel.callStudent(it, myChannel) } },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = when {
-                        hasActive -> BORDER  // disabled-looking while active
+                        hasActive -> BORDER
                         nextPending == null -> BORDER
                         else -> GOLD
                     }
                 ),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(8.dp),
                 enabled = !hasActive && nextPending != null
             ) {
                 if (hasActive) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = GOLD, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Text("TUNGGU KAMERA…", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), color = GOLD, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(4.dp))
+                    Text("TUNGGU KAMERA…", color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 } else if (nextPending != null) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp), tint = BG)
-                    Spacer(Modifier.width(6.dp))
-                    Text("PANGGIL SEKARANG", color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
+                    Spacer(Modifier.width(4.dp))
+                    Text("PANGGIL SEKARANG", color = BG, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 } else {
-                    Text("ANTREAN HABIS", color = MUTED, fontSize = 12.sp)
+                    Text("ANTREAN HABIS", color = MUTED, fontSize = 11.sp)
                 }
             }
 
-            // Search box for the queue
+            // Search
             OutlinedTextField(
                 value = searchQuery, onValueChange = { searchQuery = it },
-                label = { Text("Cari Nama / NIM", color = MUTED, fontSize = 11.sp) },
+                label = { Text("Cari Nama / NIM", color = MUTED, fontSize = 10.sp) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White, unfocusedTextColor = Color.White,
                     focusedBorderColor = GOLD, unfocusedBorderColor = BORDER, cursorColor = GOLD,
                     focusedContainerColor = PANEL, unfocusedContainerColor = PANEL
                 ),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MUTED, modifier = Modifier.size(16.dp)) },
-                trailingIcon = { if (searchQuery.isNotEmpty()) Icon(Icons.Default.Close, contentDescription = "Hapus", tint = MUTED, modifier = Modifier.size(16.dp).clickable { searchQuery = "" }) },
-                textStyle = TextStyle(fontSize = 13.sp)
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MUTED, modifier = Modifier.size(14.dp)) },
+                trailingIcon = { if (searchQuery.isNotEmpty()) Icon(Icons.Default.Close, contentDescription = "Hapus", tint = MUTED, modifier = Modifier.size(14.dp).clickable { searchQuery = "" }) },
+                textStyle = TextStyle(fontSize = 12.sp)
             )
 
-            // Queue list
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Antrian (${pending.size})", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp))
-                Text("Ch.$myChannel", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+            // Queue list — ALL channel students with status badges (not just pending)
+            val queueFilter = if (q.isEmpty()) channelStudents else channelStudents.filter {
+                it.nama.contains(q, ignoreCase = true) || it.nim.contains(q, ignoreCase = true)
             }
-
-            if (pending.isEmpty()) {
+            Text("Antrean Ch.$myChannel (${pending.size} menunggu)", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp))
+            if (queueFilter.isEmpty()) {
                 Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(8.dp)) {
-                    Text(if (searchQuery.isNotEmpty()) "Tidak ada mahasiswa cocok" else "Antrean habis",
-                        Modifier.padding(12.dp), style = TextStyle(color = MUTED, fontSize = 12.sp))
+                    Text(if (q.isNotEmpty()) "Tidak ada mahasiswa cocok" else "Antrean habis",
+                        Modifier.padding(10.dp), style = TextStyle(color = MUTED, fontSize = 11.sp))
                 }
             } else {
-                pending.take(50).forEach { s ->
-                    QueueRow(s) { viewModel.callStudent(s, myChannel) }
+                queueFilter.take(40).forEachIndexed { idx, s ->
+                    QueueRowWithStatus(idx + 1, s, myChannel) { viewModel.callStudent(s, myChannel) }
                 }
-                if (pending.size > 50) Text("… dan ${pending.size - 50} lainnya", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(4.dp))
             }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
     }
 }
 
+// ─── Active Target Card with OP_PROGRESS ─────────────────────
 @Composable
-private fun ActiveTargetCard(student: Student, channel: Int, onReset: () -> Unit) {
+private fun ActiveTargetCard(student: Student, channel: Int, opProgressText: String, onReset: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = CARD.copy(alpha = 0.6f)), shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.6f))) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.Person, contentDescription = null, tint = GOLD, modifier = Modifier.size(18.dp))
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Default.Person, contentDescription = null, tint = GOLD, modifier = Modifier.size(16.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp), maxLines = 1)
+                    Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp), maxLines = 1)
                     Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 10.sp, fontFamily = FontFamily.Monospace))
                 }
                 Card(colors = CardDefaults.cardColors(containerColor = GOLD), shape = RoundedCornerShape(4.dp)) {
-                    Text("Ch.$channel", Modifier.padding(horizontal = 6.dp, vertical = 1.dp), style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 10.sp))
+                    Text("Ch.$channel", Modifier.padding(horizontal = 6.dp, vertical = 1.dp), style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 9.sp))
                 }
             }
-            // NO "Selesai" button — completion is automatic when operator finishes.
-            // Only a Reset button for retakes.
+            // OP_PROGRESS text (live operator status)
+            if (opProgressText.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = CYAN, modifier = Modifier.size(12.dp))
+                    Text("Operator: $opProgressText", style = TextStyle(color = CYAN, fontSize = 10.sp), maxLines = 1)
+                }
+            }
             OutlinedButton(onClick = onReset, modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AMBER),
-                shape = RoundedCornerShape(8.dp), border = androidx.compose.foundation.BorderStroke(1.dp, AMBER)) {
-                Icon(Icons.Default.Undo, contentDescription = null, Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("Reset (Ulang)", fontSize = 11.sp)
+                shape = RoundedCornerShape(6.dp), border = androidx.compose.foundation.BorderStroke(1.dp, AMBER),
+                contentPadding = PaddingValues(vertical = 4.dp)) {
+                Icon(Icons.Default.Undo, contentDescription = null, Modifier.size(12.dp)); Spacer(Modifier.width(4.dp)); Text("Reset (Ulang)", fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+// ─── Queue Row with Status Badge (matches Electron renderStatusBadge) ───
+@Composable
+private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onCall: () -> Unit) {
+    val isActive = isActiveStatus(student.status)
+    val isDone = student.status == "done"
+    val isSent = student.status == "sent"
+    val statusColor = when {
+        isActive -> GOLD
+        isSent -> CYAN
+        isDone -> GREEN.copy(alpha = 0.5f)
+        else -> MUTED
+    }
+    val rowBg = when {
+        isActive -> CARD.copy(alpha = 0.4f)
+        isDone -> PANEL.copy(alpha = 0.3f)
+        else -> PANEL
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = rowBg), shape = RoundedCornerShape(6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.4f) else BORDER.copy(alpha = 0.3f))) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("$number", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(16.dp))
+            // Status dot
+            Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(statusColor))
+            Column(Modifier.weight(1f)) {
+                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.5f) else Color.White, fontSize = 11.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
+                Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 9.sp, fontFamily = FontFamily.Monospace))
+            }
+            // Status badge
+            val statusLabel = when {
+                isActive -> "Ch.${getActiveChannel(student.status) ?: channel}"
+                isSent -> "Dikirim"
+                isDone -> "✓"
+                else -> ""
+            }
+            if (statusLabel.isNotEmpty()) {
+                Text(statusLabel, style = TextStyle(color = statusColor, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+            }
+            // Call button (only for pending)
+            if (student.status == "pending") {
+                Button(onClick = onCall, colors = ButtonDefaults.buttonColors(containerColor = GOLD), shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
+                    Text("Panggil", color = BG, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+// ─── Student Search Row (photoshoot) ──────────────────────────
+@Composable
+private fun StudentSearchRow(student: Student, isSelected: Boolean, onSelect: () -> Unit) {
+    val isDone = student.status == "done"
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL),
+        shape = RoundedCornerShape(6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) GREEN else BORDER.copy(alpha = 0.4f))
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(if (isDone) Icons.Default.CheckCircle else Icons.Default.Person, contentDescription = null,
+                tint = if (isDone) GREEN else MUTED, modifier = Modifier.size(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+                Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace))
+            }
+            Text(
+                if (isDone) "Selesai" else if (student.status == "sent") "Dikirim" else "Menunggu",
+                style = TextStyle(color = if (isDone) GREEN else if (student.status == "sent") CYAN else MUTED, fontSize = 8.sp)
+            )
+        }
+    }
+}
+
+// ─── Sent Student Row with per-channel completion (photoshoot) ──
+@Composable
+private fun SentStudentRow(student: Student, photoHistory: List<com.saatiril.andro.data.PhotoHistoryItem>, isDualPhotoshoot: Boolean, onReset: () -> Unit) {
+    val ch1Done = photoHistory.any { it.student.id == student.id && it.channel == 1 && it.photos.isNotEmpty() }
+    val ch2Done = photoHistory.any { it.student.id == student.id && it.channel == 2 && it.photos.isNotEmpty() }
+    Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, CYAN.copy(alpha = 0.3f))) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+                Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace))
+            }
+            // Per-channel completion indicators
+            if (isDualPhotoshoot) {
+                ChannelCompletionBadge("Ch1", ch1Done)
+                ChannelCompletionBadge("Ch2", ch2Done)
+            }
+            IconButton(onClick = onReset, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Default.Refresh, contentDescription = "Reset", tint = AMBER, modifier = Modifier.size(14.dp))
             }
         }
     }
 }
 
 @Composable
-private fun QueueRow(student: Student, onCall: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, BORDER.copy(alpha = 0.4f))) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium), maxLines = 1)
-                Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 10.sp, fontFamily = FontFamily.Monospace))
-            }
-            Button(onClick = onCall, colors = ButtonDefaults.buttonColors(containerColor = GOLD), shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-                Text("Panggil", color = BG, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
+private fun ChannelCompletionBadge(label: String, done: Boolean) {
+    Card(colors = CardDefaults.cardColors(containerColor = if (done) GREEN.copy(alpha = 0.2f) else BORDER.copy(alpha = 0.3f)),
+        shape = RoundedCornerShape(4.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (done) GREEN else BORDER)) {
+        Row(Modifier.padding(horizontal = 4.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(if (done) Icons.Default.Check else Icons.Default.Close, contentDescription = null, tint = if (done) GREEN else MUTED, modifier = Modifier.size(8.dp))
+            Text(label, style = TextStyle(color = if (done) GREEN else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+        }
+    }
+}
+
+// ─── Student List Row (photoshoot full list) ──────────────────
+@Composable
+private fun StudentListRow(student: Student, isSelected: Boolean, onSelect: () -> Unit) {
+    val isDone = student.status == "done"
+    val isSent = student.status == "sent"
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL),
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(5.dp).clip(RoundedCornerShape(3.dp)).background(
+                when { isDone -> GREEN; isSent -> CYAN; else -> MUTED.copy(alpha = 0.3f) }
+            ))
+            Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.5f) else Color.White, fontSize = 10.sp), modifier = Modifier.weight(1f), maxLines = 1)
+            Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace))
         }
     }
 }
 
 @Composable
 private fun ChannelPill(channel: Int, isSelected: Boolean, onClick: () -> Unit) {
-    Card(modifier = Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
-        .border(1.dp, if (isSelected) GOLD else BORDER, RoundedCornerShape(16.dp)),
-        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL), shape = RoundedCornerShape(16.dp)) {
-        Text("Jalur $channel", modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            style = TextStyle(color = if (isSelected) GOLD else MUTED, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 11.sp))
+    Card(modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
+        .border(1.dp, if (isSelected) GOLD else BORDER, RoundedCornerShape(14.dp)),
+        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL), shape = RoundedCornerShape(14.dp)) {
+        Text("Jalur $channel", modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+            style = TextStyle(color = if (isSelected) GOLD else MUTED, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 10.sp))
     }
 }
 
 @Composable
 private fun StatCard(label: String, count: Int, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, BORDER.copy(alpha = 0.4f))) {
-        Column(Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
-            Text(count.toString(), style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp))
-            Text(label, style = TextStyle(color = MUTED, fontSize = 9.sp))
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(6.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BORDER.copy(alpha = 0.3f))) {
+        Column(Modifier.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(12.dp))
+            Text(count.toString(), style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp))
+            Text(label, style = TextStyle(color = MUTED, fontSize = 8.sp))
         }
     }
 }
