@@ -345,6 +345,84 @@ class LicenseManager(private val context: Context) {
         return generateExpectedCode(machineId, LICENSE_TYPE_MONTHLY, expiryMillis)
     }
 
+    /**
+     * Full result of a license-code generation (developer tool). Mirrors the
+     * JSON shape returned by the Electron `/api/generate-license` route so the
+     * Android generator screen can render the same details (Display ID, type,
+     * expiry, days remaining, verification badge).
+     *
+     * Returns null if the admin key is wrong or the machine ID is invalid.
+     */
+    data class GenerateResult(
+        val machineId: String,
+        val displayMachineId: String,
+        val licenseType: String,
+        val activationCode: String,
+        val expiresAt: Long,
+        val expiresAtFormatted: String,
+        val daysRemaining: Int,
+        val verified: Boolean
+    )
+
+    /**
+     * Generate a 30-day license code for `machineId` authorized by `adminKey`,
+     * returning the full [GenerateResult] (code + expiry + display fields).
+     *
+     * The expiry is pinned to 23:59:59.000 LOCAL time 30 days from today —
+     * identical to the Electron generator. After generation, the code is
+     * re-verified via [verifyActivationCode] to set the `verified` flag.
+     *
+     * Returns null on invalid input or wrong admin key (no partial result).
+     */
+    fun generateLicenseFull(machineId: String, adminKey: String): GenerateResult? {
+        // Validate inputs (same rules as generateCode).
+        if (!machineId.matches(Regex("^[a-fA-F0-9]{64}$"))) return null
+        if (adminKey != deriveAdminKey()) return null
+
+        // Compute expiry: 30 days from today, end-of-day, LOCAL timezone.
+        val cal = Calendar.getInstance()
+        cal.add(Calendar.DATE, MONTHLY_VALIDITY_DAYS)
+        cal.set(Calendar.HOUR_OF_DAY, 23)
+        cal.set(Calendar.MINUTE, 59)
+        cal.set(Calendar.SECOND, 59)
+        cal.set(Calendar.MILLISECOND, 0)
+        val expiryMillis = cal.timeInMillis
+
+        val code = generateExpectedCode(machineId, LICENSE_TYPE_MONTHLY, expiryMillis)
+        if (code.isEmpty()) return null
+
+        // Re-verify (should always succeed since we just generated it).
+        val verifiedExpiry = verifyActivationCode(machineId, code)
+        val verified = verifiedExpiry != null && verifiedExpiry == expiryMillis
+
+        val displayId = getDisplayMachineId(machineId)
+        val now = System.currentTimeMillis()
+        val msRemaining = expiryMillis - now
+        val daysRemaining = if (msRemaining <= 0L) 0
+            else ceil(msRemaining.toDouble() / (24.0 * 60.0 * 60.0 * 1000.0)).toInt().coerceAtLeast(0)
+
+        // Format the expiry for display: "12 Aug 2026 23:59" style.
+        val fmt = java.text.SimpleDateFormat("dd MMM yyyy HH:mm", Locale.getDefault())
+        val expiresAtFormatted = fmt.format(java.util.Date(expiryMillis))
+
+        return GenerateResult(
+            machineId = machineId,
+            displayMachineId = displayId,
+            licenseType = LICENSE_TYPE_MONTHLY,
+            activationCode = code,
+            expiresAt = expiryMillis,
+            expiresAtFormatted = expiresAtFormatted,
+            daysRemaining = daysRemaining,
+            verified = verified
+        )
+    }
+
+    /**
+     * Validate an admin key WITHOUT generating anything. Used by the generator
+     * screen to give immediate feedback if the developer enters the wrong key.
+     */
+    fun isValidAdminKey(adminKey: String): Boolean = adminKey == deriveAdminKey()
+
     // ── Persistence (HMAC-signed JSON in SharedPreferences) ────────────────
 
     private data class StoredLicense(

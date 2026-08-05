@@ -73,12 +73,29 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LICENSE, HUB, SETUP, MAIN }
+    enum class Screen { LICENSE, HUB, SETUP, MAIN, GENERATOR }
 
     private val _screen = MutableStateFlow(
         if (licenseManager.getStatus().active) Screen.HUB else Screen.LICENSE
     )
     val screen: StateFlow<Screen> = _screen.asStateFlow()
+
+    /** Open the developer license-code generator screen. */
+    fun openGenerator() { _screen.value = Screen.GENERATOR }
+
+    /** Close the generator — return to the previous sensible screen. */
+    fun closeGenerator() {
+        _screen.value = if (licenseManager.getStatus().active) Screen.HUB else Screen.LICENSE
+    }
+
+    /**
+     * Generate a 30-day license code for a customer's Machine ID, authorized
+     * by the developer Admin Key. Returns the full [LicenseManager.GenerateResult]
+     * (code + expiry + display fields) or null on invalid input / wrong admin key.
+     */
+    fun generateLicenseCode(machineId: String, adminKey: String): LicenseManager.GenerateResult? {
+        return licenseManager.generateLicenseFull(machineId.trim(), adminKey.trim())
+    }
 
     // ─── Saved projects (Hub) ───────────────────────────────────
     private val _savedProjects = MutableStateFlow<List<Project>>(emptyList())

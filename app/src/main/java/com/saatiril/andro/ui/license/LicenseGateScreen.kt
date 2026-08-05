@@ -162,6 +162,25 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 "Lisensi terikat perangkat ini, berlaku 30 hari, tanpa grace period.",
                 style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp), textAlign = TextAlign.Center
             )
+
+            // ── Developer entry point — discrete link to the code generator ──
+            // Mirrors the Electron app where /admin is a separate URL.
+            // Small, low-emphasis — only developers will look for it.
+            Row(
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { viewModel.openGenerator() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(Icons.Default.Key, contentDescription = null, tint = MUTED.copy(alpha = 0.4f), modifier = Modifier.size(11.dp))
+                Text(
+                    "Panel Pengembang",
+                    style = TextStyle(color = MUTED.copy(alpha = 0.4f), fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                )
+            }
         }
     }
 }

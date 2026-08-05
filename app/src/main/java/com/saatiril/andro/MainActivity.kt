@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.saatiril.andro.data.AdminViewModel
+import com.saatiril.andro.ui.generator.LicenseGeneratorScreen
 import com.saatiril.andro.ui.hub.ProjectHubScreen
 import com.saatiril.andro.ui.license.LicenseGateScreen
 import com.saatiril.andro.ui.main.MainScaffold
@@ -71,5 +72,6 @@ private fun SaatirilAppRoot(viewModel: AdminViewModel) {
         AdminViewModel.Screen.HUB -> ProjectHubScreen(viewModel)
         AdminViewModel.Screen.SETUP -> ProjectSetupScreen(viewModel)
         AdminViewModel.Screen.MAIN -> MainScaffold(viewModel)
+        AdminViewModel.Screen.GENERATOR -> LicenseGeneratorScreen(viewModel)
     }
 }

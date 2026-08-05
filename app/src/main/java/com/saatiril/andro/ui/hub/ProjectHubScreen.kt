@@ -58,6 +58,13 @@ fun ProjectHubScreen(viewModel: AdminViewModel) {
                 Text("SAATIRIL", style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GOLD))
                 Text("Admin • ${license.daysLeft} hari lisensi tersisa", style = TextStyle(color = MUTED, fontSize = 11.sp))
             }
+            // Developer generator icon (discrete — only developers know what it's for)
+            IconButton(
+                onClick = { viewModel.openGenerator() },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(Icons.Default.Key, contentDescription = "Generator Kode (Developer)", tint = MUTED.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
+            }
             OutlinedButton(
                 onClick = { viewModel.deactivateLicense() },
                 shape = RoundedCornerShape(8.dp),
