@@ -122,8 +122,22 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
 
     // Find the current target student (the one MC called to the stage)
     val db = project?.database ?: emptyList()
-    val activeStudent = db.firstOrNull { isActiveStatus(it.status) }
-    val activeChannel = activeStudent?.let { getActiveChannel(it.status) } ?: 1
+    val mode = project?.config?.mode ?: CameraModes.SINGLE
+    val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
+    val isDual = CameraModes.isDualMode(mode)
+    val myChannel by viewModel.myChannel.collectAsState()
+
+    // Channel filtering for the active target:
+    // - single/dual: only show students active on OUR channel (independent channels)
+    // - photoshoot: show any 'sent' student (cooperative — both channels see all)
+    val activeStudent = if (isPhotoshoot) {
+        db.firstOrNull { it.status == "sent" }
+    } else {
+        db.firstOrNull { isActiveStatus(it.status) && getActiveChannel(it.status) == myChannel }
+    }
+    val activeChannel = activeStudent?.let {
+        if (isPhotoshoot) it.assignedChannel else (getActiveChannel(it.status) ?: myChannel)
+    } ?: myChannel
 
     // Reset capture state when the active student changes (new student called)
     val activeStudentId = activeStudent?.id

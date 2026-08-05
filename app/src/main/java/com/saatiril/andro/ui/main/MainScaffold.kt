@@ -17,8 +17,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.saatiril.andro.data.AdminViewModel
+import com.saatiril.andro.data.CameraModes
 import com.saatiril.andro.ui.admin.AdminDashboardScreen
 import com.saatiril.andro.ui.mc.McScreen
+import com.saatiril.andro.ui.operator.AdminOperatorScreen
 
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
@@ -30,14 +32,15 @@ private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
 private val CYAN = Color(0xFF06b6d4)
 
-private enum class Tab(val label: String) { ADMIN("Admin"), MC("MC"), OPERATOR("Operator") }
+private enum class Tab(val label: String) { PROSESI("Prosesi"), ADMIN("Admin") }
 
 /**
- * Main scaffold shown while the server is running. Three tabs (matching the
- * Electron app's unified view):
- *  - Admin: dashboard (project summary, server info + QR, clients, gallery, DB)
- *  - MC: call students to the stage
- *  - Operator: backup camera using the admin phone's built-in Camera2
+ * Main scaffold shown while the server is running. Two tabs:
+ *  - Prosesi: MC + Operator camera combined in a split view (MC on top,
+ *    camera preview + shutter on the bottom). This mirrors the Electron
+ *    app's unified main-app.tsx where MC and Operator are visible together
+ *    so the admin can call a student and immediately photograph them.
+ *  - Admin: dashboard (project summary, QR codes, gallery, DB, export).
  *
  * The top bar shows the live server status (LAN IP, clients) and a "Stop"
  * button that tears down the server and returns to the Hub.
@@ -50,7 +53,7 @@ fun MainScaffold(viewModel: AdminViewModel) {
     val port by viewModel.serverPort.collectAsState()
     val running by viewModel.serverRunning.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(Tab.ADMIN) }
+    var selectedTab by remember { mutableStateOf(Tab.PROSESI) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().background(BG),
@@ -58,6 +61,7 @@ fun MainScaffold(viewModel: AdminViewModel) {
         topBar = {
             TopBar(
                 projectName = project?.name ?: "Saatiril",
+                mode = project?.config?.mode ?: CameraModes.SINGLE,
                 lanIp = lanIp,
                 port = port,
                 clientCount = clients.count { it.authenticated },
@@ -69,16 +73,62 @@ fun MainScaffold(viewModel: AdminViewModel) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(BG)) {
             when (selectedTab) {
+                Tab.PROSESI -> ProsesiScreen(viewModel)
                 Tab.ADMIN -> AdminDashboardScreen(viewModel)
-                Tab.MC -> McScreen(viewModel)
-                Tab.OPERATOR -> com.saatiril.andro.ui.operator.AdminOperatorScreen(viewModel)
             }
         }
     }
 }
 
+/**
+ * Prosesi tab — MC + Operator camera combined in a vertical split.
+ * Top half: MC panel (call students, queue, search for photoshoot).
+ * Bottom half: Camera preview + shutter (capture Toga/Ijazah or photoshoot).
+ *
+ * This matches the Electron app's unified view where MC and Operator are
+ * side-by-side so the admin can do the entire ceremony from one screen.
+ */
 @Composable
-private fun TopBar(projectName: String, lanIp: String?, port: Int, clientCount: Int, running: Boolean, onStop: () -> Unit) {
+private fun ProsesiScreen(viewModel: AdminViewModel) {
+    Column(
+        modifier = Modifier.fillMaxSize().background(BG)
+    ) {
+        // MC panel (top, takes ~45% of screen)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.45f)
+        ) {
+            McScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+        }
+        // Divider
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(BORDER)
+        )
+        // Operator camera (bottom, takes ~55% of screen)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.55f)
+        ) {
+            AdminOperatorScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun TopBar(
+    projectName: String,
+    mode: String,
+    lanIp: String?,
+    port: Int,
+    clientCount: Int,
+    running: Boolean,
+    onStop: () -> Unit
+) {
     Surface(color = PANEL, tonalElevation = 4.dp) {
         Row(
             Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -89,8 +139,17 @@ private fun TopBar(projectName: String, lanIp: String?, port: Int, clientCount: 
                 Text(projectName, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp), maxLines = 1)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(if (running) GREEN else RED))
-                    Text(if (running) "Server aktif • ${lanIp ?: "-"}:$port • $clientCount klien" else "Server berhenti",
-                        style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1)
+                    val modeLabel = when (mode) {
+                        CameraModes.SINGLE -> "Single"
+                        CameraModes.DUAL -> "Dual"
+                        CameraModes.SINGLE_PHOTOSHOOT -> "Photoshoot"
+                        CameraModes.DUAL_PHOTOSHOOT -> "Dual-PS"
+                        else -> mode
+                    }
+                    Text(
+                        "$modeLabel • ${lanIp ?: "-"}:$port • $clientCount klien",
+                        style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1
+                    )
                 }
             }
             OutlinedButton(onClick = onStop, shape = RoundedCornerShape(8.dp),
@@ -112,9 +171,8 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
             Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically
         ) {
+            TabItem(Tab.PROSESI, Icons.Default.PhotoCamera, selected == Tab.PROSESI, onSelect, Modifier.weight(1f))
             TabItem(Tab.ADMIN, Icons.Default.Dashboard, selected == Tab.ADMIN, onSelect, Modifier.weight(1f))
-            TabItem(Tab.MC, Icons.Default.Mic, selected == Tab.MC, onSelect, Modifier.weight(1f))
-            TabItem(Tab.OPERATOR, Icons.Default.PhotoCamera, selected == Tab.OPERATOR, onSelect, Modifier.weight(1f))
         }
     }
 }

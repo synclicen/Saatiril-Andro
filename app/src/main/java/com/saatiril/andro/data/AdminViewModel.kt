@@ -635,6 +635,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             version = newVersion,
             filename = filenames.firstOrNull() ?: ""
         ))
+        // In non-photoshoot modes, also emit STUDENT_DONE (matches Electron operator-panel.tsx:894)
+        // so the MC panel unblocks immediately without waiting for the heavy PHOTOS_SAVED payload.
+        if (!isPhotoshoot) {
+            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(student.id, channel))
+        }
         pushSyncDb()
 
         // Reset capture state for the next student
@@ -648,9 +653,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val lanIp: StateFlow<String?> = SaatirilServer.lanIp
     val serverPort: StateFlow<Int> = SaatirilServer.port
 
+    // ─── MC channel selection (for dual modes) ─────────────────
+    private val _myChannel = MutableStateFlow(1)
+    val myChannel: StateFlow<Int> = _myChannel.asStateFlow()
+
+    fun setMyChannel(ch: Int) { _myChannel.value = ch }
+
     // ─── MC actions (broadcast via server) ─────────────────────
+    /**
+     * Call a student to the stage (non-photoshoot modes: single/dual).
+     * Sets status to active_<channel>, emits MC_CALL to operators on that channel.
+     * Channels are INDEPENDENT in dual mode — ch1 MC → ch1 operator only.
+     */
     fun callStudent(student: Student, channel: Int) {
-        // Update local DB immediately
         _project.value?.let { proj ->
             val updatedDb = proj.database.map { s ->
                 if (s.id == student.id) s.copy(status = "active_$channel")
@@ -663,17 +678,42 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         pushSyncDb()
     }
 
+    /**
+     * Send a student to operator(s) — photoshoot modes only.
+     * - single-photoshoot: send to 1 channel (myChannel)
+     * - dual-photoshoot: send to BOTH channels simultaneously (cooperative)
+     * Sets status to 'sent' (not active_N), operators pick from queue.
+     */
+    fun sendToOperator(student: Student, channels: List<Int>) {
+        _project.value?.let { proj ->
+            val updatedDb = proj.database.map { s ->
+                if (s.id == student.id) s.copy(status = "sent") else s
+            }
+            _project.value = proj.copy(database = updatedDb)
+        }
+        // Emit MC_CALL to each requested channel
+        for (ch in channels) {
+            SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, ch))
+        }
+        pushSyncDb()
+    }
+
     fun resetStudent(studentId: String, channel: Int) {
         _project.value?.let { proj ->
             val updatedDb = proj.database.map { s ->
                 if (s.id == studentId) s.copy(status = "pending") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            // Clear ALL photoHistory entries for this student (matches Electron mc-panel.tsx 423-425)
+            val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
+            _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
+            _project.value?.let { projectStore.save(it) }
         }
         SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
         pushSyncDb()
     }
 
+    /** markStudentDone is now ONLY called automatically by handlePhotosSaved/handleLocalCapture.
+     *  Removed from MC panel — completion is event-driven (operator photo → auto-done). */
     fun markStudentDone(studentId: String, channel: Int) {
         _project.value?.let { proj ->
             val updatedDb = proj.database.map { s ->
