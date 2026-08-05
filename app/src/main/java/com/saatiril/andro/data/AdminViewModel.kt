@@ -1,13 +1,17 @@
 package com.saatiril.andro.data
 
 import android.app.Application
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.saatiril.andro.camera.Camera2Manager
+import com.saatiril.andro.camera.UVCCameraManager
 import com.saatiril.andro.server.ClientInfo
 import com.saatiril.andro.server.SaatirilServer
 import com.saatiril.andro.server.ServerService
@@ -52,6 +56,84 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val licenseManager = LicenseManager(application)
     private val projectStore = ProjectStore(application)
     val photoSaver = PhotoSaver(application)
+
+    // ─── Camera managers (3-camera support: USB UVC + back + front) ───
+    // Exposed so the AdminOperatorScreen can bind a TextureView and call
+    // switchToCameraById(). These are the SAME hardened managers from the
+    // android-operator APK (UVCCameraManager + Camera2Manager) — ported
+    // verbatim so USB HDMI capture cards, front, and back cameras all work.
+    val cameraUVCManager = UVCCameraManager(application)
+    val camera2Manager = Camera2Manager(application)
+
+    /** Combined list of (cameraId, displayName) from both managers. */
+    private val _availableCameras = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    val availableCameras: StateFlow<List<Pair<String, String>>> = _availableCameras.asStateFlow()
+
+    /** "uvc" or "camera2" — which engine is currently active. */
+    private val _activeCameraEngine = MutableStateFlow<String>("camera2")
+    val activeCameraEngine: StateFlow<String> = _activeCameraEngine.asStateFlow()
+
+    /** The current camera ID (from whichever engine is active). */
+    val currentCameraId: StateFlow<String>
+        get() = if (_activeCameraEngine.value == "camera2") camera2Manager.currentCameraIdFlow
+                else cameraUVCManager.currentCameraIdFlow
+
+    /** "uvc" / "builtin" / "none" — human-readable camera source label. */
+    private val _cameraSource = MutableStateFlow<String>("builtin")
+    val cameraSource: StateFlow<String> = _cameraSource.asStateFlow()
+
+    /** Refresh the combined camera list from both managers. */
+    fun refreshAvailableCameras() {
+        val uvcList = cameraUVCManager.availableCameras.value
+        val c2List = camera2Manager.availableCameras.value
+        _availableCameras.value = uvcList + c2List
+    }
+
+    /** Switch to a specific camera by ID (handles both UVC and Camera2). */
+    fun switchToCameraById(cameraId: String) {
+        val c2Cameras = camera2Manager.availableCameras.value
+        val isCamera2 = c2Cameras.any { it.first == cameraId }
+        if (isCamera2) {
+            Log.i(TAG, "switchToCameraById: Camera2 $cameraId")
+            _activeCameraEngine.value = "camera2"
+            try { cameraUVCManager.hidePreview() } catch (_: Exception) {}
+            camera2Manager.openCamera(cameraId)
+            _cameraSource.value = "builtin"
+        } else {
+            Log.i(TAG, "switchToCameraById: UVC $cameraId")
+            _activeCameraEngine.value = "uvc"
+            try { camera2Manager.closeCamera() } catch (_: Exception) {}
+            cameraUVCManager.switchCamera(cameraId)
+            _cameraSource.value = "uvc"
+        }
+    }
+
+    /** Force rescan for USB cameras (user tapped "Pindai Ulang USB"). */
+    fun forceRescanUsbCamera() {
+        Log.i(TAG, "forceRescanUsbCamera")
+        cameraUVCManager.forceRescan()
+        refreshAvailableCameras()
+    }
+
+    /** Decoded frame bitmap (for overlay during capture). */
+    private val _frameBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
+    val frameBitmap: StateFlow<android.graphics.Bitmap?> = _frameBitmap.asStateFlow()
+
+    /** Decode the current frame data URL into a Bitmap (for capture overlay). */
+    fun decodeFrameBitmap() {
+        val dataUrl = _project.value?.config?.frame ?: return
+        if (dataUrl.isBlank() || dataUrl == "__FRAME_SAVED__") return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val pure = if (dataUrl.contains(",")) dataUrl.substringAfter(",") else dataUrl
+                val bytes = Base64.decode(pure, Base64.DEFAULT)
+                _frameBitmap.value = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                Log.i(TAG, "Frame bitmap decoded: ${_frameBitmap.value?.width}x${_frameBitmap.value?.height}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to decode frame bitmap: ${e.message}", e)
+            }
+        }
+    }
 
     // ─── License ────────────────────────────────────────────────
     private val _licenseStatus = MutableStateFlow(licenseManager.getStatus())
@@ -139,6 +221,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val _setupOutputFolderUri = MutableStateFlow<String?>(photoSaver.getOutputFolder()?.toString())
     val setupOutputFolderUri: StateFlow<String?> = _setupOutputFolderUri.asStateFlow()
 
+    // ─── Frame overlay (PNG, base64 data URL) ──────────────────
+    private val _setupFrame = MutableStateFlow<String?>(null)
+    val setupFrame: StateFlow<String?> = _setupFrame.asStateFlow()
+
+    private val _setupFrameFileName = MutableStateFlow<String>("")
+    val setupFrameFileName: StateFlow<String> = _setupFrameFileName.asStateFlow()
+
+    /** Set/clear the frame overlay (base64 data URL of a PNG file). */
+    fun setSetupFrame(dataUrl: String?, fileName: String = "") {
+        _setupFrame.value = dataUrl
+        _setupFrameFileName.value = fileName
+    }
+
     private val _importStatus = MutableStateFlow<String?>(null)
     val importStatus: StateFlow<String?> = _importStatus.asStateFlow()
 
@@ -150,6 +245,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _setupPreset.value = "original"
         _setupPassword.value = null
         _setupStudents.value = emptyList()
+        _setupFrame.value = null
+        _setupFrameFileName.value = ""
         _importStatus.value = null
         _editingProjectId.value = null
         _screen.value = Screen.SETUP
@@ -165,6 +262,15 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _setupPreset.value = p.config.preset
         _setupPassword.value = p.config.sessionPassword?.takeIf { it != "__PASSWORD_SET__" }
         _setupStudents.value = p.database
+        // Restore frame (if it was saved as a real data URL, not the stripped sentinel)
+        val savedFrame = p.config.frame
+        if (savedFrame != null && savedFrame != "__FRAME_SAVED__" && savedFrame.startsWith("data:image/")) {
+            _setupFrame.value = savedFrame
+            _setupFrameFileName.value = "frame.png"
+        } else {
+            _setupFrame.value = null
+            _setupFrameFileName.value = ""
+        }
         _importStatus.value = "${p.database.size} mahasiswa dimuat"
         _screen.value = Screen.SETUP
     }
@@ -233,7 +339,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         ratio = _setupRatio.value,
                         preset = _setupPreset.value,
                         targetFolder = _setupOutputFolderUri.value ?: "",
-                        frame = null,
+                        frame = _setupFrame.value,
                         sessionPassword = password,
                         localFolder = ""
                     ),
@@ -283,6 +389,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
                 Log.i(TAG, "Project created successfully — navigating to MAIN")
                 _screen.value = Screen.MAIN
+                // Pre-decode the frame overlay bitmap for use during capture.
+                decodeFrameBitmap()
             } catch (e: Exception) {
                 Log.e(TAG, "createAndStartProject FAILED", e)
                 _startupError.value = "Gagal memulai server: ${e.message ?: e.javaClass.simpleName}"

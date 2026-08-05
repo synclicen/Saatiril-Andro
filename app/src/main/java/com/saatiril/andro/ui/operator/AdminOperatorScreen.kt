@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.saatiril.andro.camera.Camera2Manager
 import com.saatiril.andro.camera.CameraCapture
 import com.saatiril.andro.data.AdminViewModel
 import com.saatiril.andro.data.Student
@@ -46,6 +45,7 @@ private val CARD = Color(0xFF3b2263)
 private val BORDER = Color(0xFF533485)
 private val GOLD = Color(0xFFd4af37)
 private val MUTED = Color(0xFFc4b5fd)
+private val CYAN = Color(0xFF06b6d4)
 private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
 private val AMBER = Color(0xFFfbbf24)
@@ -88,12 +88,21 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
     }
 
-    // Camera2 manager — remember it across recompositions
-    val cameraManager = remember { Camera2Manager(context) }
+    // ── 3-camera support: use ViewModel's managers (UVC + Camera2) ──
+    // The ViewModel exposes cameraUVCManager (USB capture cards via USB Host)
+    // and camera2Manager (built-in front/back). Both are the SAME hardened
+    // managers from the android-operator APK — ported verbatim.
     val textureView = remember { TextureView(context) }
-    val cameraConnected by cameraManager.isConnected.collectAsState()
-    val availableCameras by cameraManager.availableCameras.collectAsState()
-    val currentCameraId by cameraManager.currentCameraIdFlow.collectAsState()
+    val availableCameras by viewModel.availableCameras.collectAsState()
+    val activeEngine by viewModel.activeCameraEngine.collectAsState()
+    val cameraSource by viewModel.cameraSource.collectAsState()
+    val currentCameraId by viewModel.currentCameraId.collectAsState()
+    val uvcConnected by viewModel.cameraUVCManager.isConnected.collectAsState()
+    val c2Connected by viewModel.camera2Manager.isConnected.collectAsState()
+    val frameBitmap by viewModel.frameBitmap.collectAsState()
+    var showCameraPicker by remember { mutableStateOf(false) }
+
+    val cameraConnected = if (activeEngine == "uvc") uvcConnected else c2Connected
 
     var capturedBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var captureError by remember { mutableStateOf<String?>(null) }
@@ -107,12 +116,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // Init camera on first show (only if permission granted), release on dispose
     DisposableEffect(hasCameraPermission) {
         if (hasCameraPermission) {
-            cameraManager.setTextureView(textureView)
-            cameraManager.enumerateCameras()
-            cameraManager.openCamera()
+            // Bind TextureView to both managers + enumerate + open default (back camera)
+            viewModel.camera2Manager.setTextureView(textureView)
+            viewModel.cameraUVCManager.setTextureView(textureView)
+            viewModel.camera2Manager.enumerateCameras()
+            viewModel.cameraUVCManager.initCamera()
+            viewModel.refreshAvailableCameras()
+            viewModel.camera2Manager.openCamera()
         }
         onDispose {
-            try { cameraManager.closeCamera() } catch (_: Exception) {}
+            try { viewModel.camera2Manager.closeCamera() } catch (_: Exception) {}
+            try { viewModel.cameraUVCManager.hidePreview() } catch (_: Exception) {}
         }
     }
 
@@ -195,7 +209,18 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 factory = { textureView },
                 modifier = Modifier.fillMaxSize()
             )
-            // Camera status overlay (top-left)
+
+            // Frame overlay on top of the preview (shows the PNG frame)
+            frameBitmap?.let { fb ->
+                Image(
+                    bitmap = fb.asImageBitmap(),
+                    contentDescription = "Frame overlay",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            // Camera status + source overlay (top-left)
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -207,27 +232,84 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(if (cameraConnected) GREEN else RED))
+                val srcLabel = when (cameraSource) { "uvc" -> "USB"; "builtin" -> "HP"; else -> "-" }
                 Text(
-                    if (cameraConnected) "Kamera aktif" else "Kamera mati",
+                    "Ch.$activeChannel • $srcLabel ${if (cameraConnected) "●" else "○"}",
                     style = TextStyle(color = Color.White, fontSize = 9.sp)
                 )
             }
-            // Camera switch button (top-right) — only if >1 camera
-            if (availableCameras.size > 1) {
+
+            // Camera picker dropdown button (top-right) — 3 cameras: USB / Belakang / Depan
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                 IconButton(
-                    onClick = {
-                        // Switch to the next camera in the list
-                        val cams = availableCameras
-                        val currentIdx = cams.indexOfFirst { it.first == currentCameraId }
-                        val nextIdx = (currentIdx + 1) % cams.size
-                        val nextId = cams.getOrNull(nextIdx)?.first
-                        if (nextId != null) cameraManager.switchCamera(nextId)
-                    },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(36.dp)
+                    onClick = { showCameraPicker = true },
+                    modifier = Modifier.size(36.dp)
                 ) {
-                    Icon(Icons.Default.Cameraswitch, contentDescription = "Ganti Kamera", tint = Color.White, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Cameraswitch, contentDescription = "Pilih Kamera", tint = GOLD, modifier = Modifier.size(20.dp))
+                }
+                DropdownMenu(
+                    expanded = showCameraPicker,
+                    onDismissRequest = { showCameraPicker = false },
+                    modifier = Modifier.background(PANEL)
+                ) {
+                    // Header
+                    Text("Pilih Kamera", modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = TextStyle(color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                    HorizontalDivider(color = BORDER, thickness = 0.5.dp)
+
+                    if (availableCameras.isNotEmpty()) {
+                        availableCameras.forEach { (cameraId, displayName) ->
+                            val isCurrentlySelected = cameraId == currentCameraId
+                            val isUsb = displayName.contains("USB", ignoreCase = true)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Icon(
+                                            when {
+                                                isUsb -> Icons.Default.Usb
+                                                displayName.contains("Depan", ignoreCase = true) -> Icons.Default.CameraFront
+                                                else -> Icons.Default.CameraAlt
+                                            },
+                                            contentDescription = null,
+                                            tint = if (isCurrentlySelected) GREEN else MUTED,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(displayName, style = TextStyle(
+                                            color = if (isCurrentlySelected) GREEN else Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isCurrentlySelected) FontWeight.Bold else FontWeight.Normal
+                                        ))
+                                        if (isCurrentlySelected) Text("✓", style = TextStyle(color = GREEN, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.switchToCameraById(cameraId)
+                                    showCameraPicker = false
+                                }
+                            )
+                        }
+                    } else {
+                        Text("Memuat kamera...", modifier = Modifier.padding(12.dp),
+                            style = TextStyle(color = MUTED, fontSize = 12.sp))
+                    }
+
+                    HorizontalDivider(color = BORDER, thickness = 0.5.dp)
+                    // Force rescan USB
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, tint = CYAN, modifier = Modifier.size(14.dp))
+                                Text("Pindai Ulang USB", style = TextStyle(color = CYAN, fontSize = 11.sp))
+                            }
+                        },
+                        onClick = {
+                            viewModel.forceRescanUsbCamera()
+                            showCameraPicker = false
+                        }
+                    )
                 }
             }
+
             // Capture error overlay
             captureError?.let { err ->
                 Card(
@@ -284,7 +366,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             CameraCapture.processFrame(
                                 sourceBitmap = bitmap,
                                 config = proj.config,
-                                frameBitmap = null
+                                frameBitmap = frameBitmap  // apply PNG frame overlay if set
                             )
                         } catch (e: Exception) {
                             bitmap // fallback: use raw bitmap if processing fails

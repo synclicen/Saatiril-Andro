@@ -1,6 +1,7 @@
 package com.saatiril.andro.ui.setup
 
 import android.content.Intent
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -55,9 +56,12 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
     val password by viewModel.setupPassword.collectAsState()
     val students by viewModel.setupStudents.collectAsState()
     val folderUri by viewModel.setupOutputFolderUri.collectAsState()
+    val frameData by viewModel.setupFrame.collectAsState()
+    val frameFileName by viewModel.setupFrameFileName.collectAsState()
     val importStatus by viewModel.importStatus.collectAsState()
     val startupError by viewModel.startupError.collectAsState()
     val starting by viewModel.starting.collectAsState()
+    var parsingFrame by remember { mutableStateOf(false) }
 
     // Excel file picker
     val excelLauncher = rememberLauncherForActivityResult(
@@ -183,6 +187,81 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
                     }
                 }
                 Text("Foto dari operator akan otomatis tersimpan ke folder ini.", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            }
+
+            // ─── Frame overlay (PNG transparan) — matches Electron setup ───
+            SectionCard(title = "Frame Overlay (PNG Transparan)", icon = Icons.Default.Crop) {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                // Frame file picker (PNG only)
+                val frameLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri ->
+                    uri?.let { u ->
+                        parsingFrame = true
+                        // Read PNG as base64 data URL (off main thread)
+                        Thread {
+                            try {
+                                val inputStream = ctx.contentResolver.openInputStream(u)
+                                val bytes = inputStream?.readBytes() ?: ByteArray(0)
+                                inputStream?.close()
+                                val fileName = u.lastPathSegment?.substringAfterLast('/') ?: "frame.png"
+                                val dataUrl = "data:image/png;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                viewModel.setSetupFrame(dataUrl, fileName)
+                            } catch (e: Exception) {
+                                Log.e("Setup", "Frame read failed: ${e.message}", e)
+                            } finally {
+                                parsingFrame = false
+                            }
+                        }.start()
+                    }
+                }
+
+                if (parsingFrame) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = GOLD, strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Memuat frame...", style = TextStyle(color = MUTED, fontSize = 12.sp))
+                    }
+                } else if (frameData != null) {
+                    // Frame loaded — show preview + remove button
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Preview thumbnail
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color.White.copy(alpha = 0.05f))
+                                .border(1.dp, BORDER, RoundedCornerShape(6.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = "Frame", tint = GOLD, modifier = Modifier.size(24.dp))
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(frameFileName.ifBlank { "frame.png" }, style = TextStyle(color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                            Text("Frame aktif — akan di-overlay pada setiap foto.", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                        }
+                        IconButton(onClick = { viewModel.setSetupFrame(null, "") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Hapus Frame", tint = RED, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                } else {
+                    // No frame — show upload button
+                    Button(
+                        onClick = { frameLauncher.launch(arrayOf("image/png")) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CARD),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Upload Frame Overlay PNG", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Text("Frame PNG transparan akan di-overlay pada foto hasil tangkapan (opsional).", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                }
             }
 
             // Session password (optional)
