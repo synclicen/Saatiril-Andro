@@ -14,7 +14,6 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
-import io.ktor.server.engine.applicationEngineEnvironment
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
@@ -134,28 +133,20 @@ object SaatirilServer {
                 // can be stripped/empty → "Array is empty" error when ktor calls
                 // `ServiceLoader.iterator().next()` on an empty loader.
                 // Passing `io.ktor.server.cio.CIO` directly bypasses that lookup.
-                engine = io.ktor.server.cio.CIO.create(
-                    environment = applicationEngineEnvironment {
-                        connector {
-                            host = "0.0.0.0"
-                            port = tryPort
-                        }
-                        module {
-                            install(WebSockets)
-                            install(ContentNegotiation) { gson() }
-                            routing {
-                                get("/") { handlePollingGet(call) }
-                                post("/") { handlePollingPost(call) }
-                                webSocket("/") { handleWebSocket(this) }
-                            }
-                        }
-                    },
-                    configure = {
-                        // CIO-specific: increase request queue for 20MB photo payloads
-                        requestQueueLimit = 16
-                        runningLimit = 64
+                engine = io.ktor.server.engine.embeddedServer(
+                    factory = io.ktor.server.cio.CIO,
+                    port = tryPort,
+                    host = "0.0.0.0",
+                    watchPaths = emptyList()
+                ) {
+                    install(WebSockets)
+                    install(ContentNegotiation) { gson() }
+                    routing {
+                        get("/") { handlePollingGet(call) }
+                        post("/") { handlePollingPost(call) }
+                        webSocket("/") { handleWebSocket(this) }
                     }
-                ).also { it.start(wait = false) }
+                }.also { it.start(wait = false) }
                 boundPort = tryPort
                 lastError = null
                 break
