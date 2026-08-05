@@ -55,6 +55,11 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
     val preset by viewModel.setupPreset.collectAsState()
     val password by viewModel.setupPassword.collectAsState()
     val students by viewModel.setupStudents.collectAsState()
+    val ch0Students by viewModel.setupChannel0Students.collectAsState()
+    val ch0FileName by viewModel.setupChannel0FileName.collectAsState()
+    val ch1Students by viewModel.setupChannel1Students.collectAsState()
+    val ch1FileName by viewModel.setupChannel1FileName.collectAsState()
+    val importingChannel by viewModel.importingChannel.collectAsState()
     val folderUri by viewModel.setupOutputFolderUri.collectAsState()
     val frameData by viewModel.setupFrame.collectAsState()
     val frameFileName by viewModel.setupFrameFileName.collectAsState()
@@ -63,16 +68,21 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
     val starting by viewModel.starting.collectAsState()
     var parsingFrame by remember { mutableStateOf(false) }
 
-    // Excel file picker
-    val excelLauncher = rememberLauncherForActivityResult(
+    // Excel file picker — for channel 0 (single/photoshoot) or channel 1 (dual)
+    val excelLauncherCh0 = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { viewModel.importExcel(it) } }
+    ) { uri -> uri?.let { viewModel.importExcelChannel(it, 0) } }
+
+    val excelLauncherCh1 = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importExcelChannel(it, 1) } }
 
     // Folder picker (SAF tree)
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri -> uri?.let { viewModel.pickOutputFolder(it) } }
 
+    val isDual = mode == CameraModes.DUAL
     val canStart = students.isNotEmpty() && folderUri != null
 
     Column(
@@ -135,37 +145,86 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("original", "studio", "cinematic", "vivid", "pro").forEach { p ->
-                        ModeChip(p, p, preset) { viewModel.setSetupPreset(p) }
+                // 9 preset filters with labels + descriptions (matches Electron PRESET_OPTIONS)
+                Text("Filter Preset:", style = TextStyle(color = MUTED, fontSize = 11.sp, fontWeight = FontWeight.Medium))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    PRESET_OPTIONS.forEach { (value, label, desc) ->
+                        PresetRow(value, label, desc, preset == value) { viewModel.setSetupPreset(value) }
                     }
                 }
             }
 
-            // Excel import
-            SectionCard(title = "Database Mahasiswa", icon = Icons.Default.TableChart) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = { excelLauncher.launch(arrayOf(
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            "application/vnd.ms-excel", "text/csv", "text/comma-separated-values"
-                        )) },
-                        colors = ButtonDefaults.buttonColors(containerColor = CARD),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Impor Excel/CSV", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            // Excel import — dual mode shows 2 upload zones (JALUR KIRI + KANAN)
+            SectionCard(title = "Upload Data Peserta", icon = Icons.Default.TableChart) {
+                // Mode badges (JALUR KIRI/KANAN or Photoshoot)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    when (mode) {
+                        CameraModes.SINGLE -> {
+                            Badge(text = "Single Channel — Wisuda", color = GOLD)
+                        }
+                        CameraModes.DUAL -> {
+                            Badge(text = "JALUR KIRI", color = GOLD)
+                            Badge(text = "JALUR KANAN", color = CYAN)
+                        }
+                        CameraModes.SINGLE_PHOTOSHOOT -> {
+                            Badge(text = "Photoshoot — 1 Foto/Peserta", color = GREEN)
+                        }
+                        CameraModes.DUAL_PHOTOSHOOT -> {
+                            Badge(text = "Photoshoot — 1 Foto/Peserta", color = GREEN)
+                            Badge(text = "2 Kamera", color = CYAN)
+                        }
                     }
-                    Text("${students.size} mahasiswa", style = TextStyle(color = if (students.isEmpty()) MUTED else GREEN, fontSize = 12.sp, fontWeight = FontWeight.Bold))
                 }
-                importStatus?.let {
-                    Text(it, style = TextStyle(color = MUTED, fontSize = 11.sp))
+
+                if (isDual) {
+                    // ── DUAL: 2 upload zones (kiri + kanan) ──
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        UploadZone(
+                            label = "Data JALUR KIRI (Channel 1)",
+                            accentColor = GOLD,
+                            students = ch0Students,
+                            fileName = ch0FileName,
+                            isLoading = importingChannel == 0,
+                            onPick = { excelLauncherCh0.launch(excelMimeTypes()) },
+                            onClear = { viewModel.clearChannelExcel(0) }
+                        )
+                        UploadZone(
+                            label = "Data JALUR KANAN (Channel 2)",
+                            accentColor = CYAN,
+                            students = ch1Students,
+                            fileName = ch1FileName,
+                            isLoading = importingChannel == 1,
+                            onPick = { excelLauncherCh1.launch(excelMimeTypes()) },
+                            onClear = { viewModel.clearChannelExcel(1) }
+                        )
+                    }
+                } else {
+                    // ── SINGLE / PHOTOSHOOT: 1 upload zone ──
+                    UploadZone(
+                        label = if (CameraModes.isPhotoshootMode(mode)) "Data Peserta Photoshoot" else "Data Peserta",
+                        accentColor = if (CameraModes.isPhotoshootMode(mode)) GREEN else GOLD,
+                        students = ch0Students,
+                        fileName = ch0FileName,
+                        isLoading = importingChannel == 0,
+                        onPick = { excelLauncherCh0.launch(excelMimeTypes()) },
+                        onClear = { viewModel.clearChannelExcel(0) }
+                    )
                 }
-                if (students.isNotEmpty()) {
-                    Text("Contoh: ${students.take(3).joinToString { it.nama.ifBlank { it.nim } }}", style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp))
+
+                Text(
+                    "Kolom harus mengandung kata \"nim\"/\"nis\"/\"id\" untuk NIM dan \"nama\"/\"name\" untuk Nama.",
+                    style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp)
+                )
+                if (CameraModes.isPhotoshootMode(mode)) {
+                    Text(
+                        "Mode Photoshoot: hanya 1 foto per peserta, urutan bebas.",
+                        style = TextStyle(color = GREEN.copy(alpha = 0.7f), fontSize = 10.sp)
+                    )
                 }
+                Text(
+                    "Total: ${students.size} mahasiswa",
+                    style = TextStyle(color = if (students.isEmpty()) MUTED else GREEN, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                )
             }
 
             // Output folder
@@ -379,4 +438,122 @@ private fun tfColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = Color.White, unfocusedTextColor = Color.White,
     focusedBorderColor = GOLD, unfocusedBorderColor = BORDER, cursorColor = GOLD,
     focusedContainerColor = CARD, unfocusedContainerColor = CARD
+)
+
+// ─── 9 Filter Presets (matches Electron PRESET_OPTIONS) ─────────────────
+private val PRESET_OPTIONS: List<Triple<String, String, String>> = listOf(
+    Triple("original", "Original Sensor", "Tanpa Filter"),
+    Triple("studio", "Studio Bright", "Cahaya Studio Hangat"),
+    Triple("cinematic", "Cinematic Gold", "Tone Sinematik Emas"),
+    Triple("pro", "Preset Pro", "High Contrast + Sharpening"),
+    Triple("vivid", "Vivid", "Warna Cerah & Kontras Tinggi"),
+    Triple("softPortrait", "Soft Portrait", "Kulit Lembut & Hangat"),
+    Triple("classicFilm", "Classic Film", "Nuansa Film Vintage"),
+    Triple("dramaticBW", "Dramatic B&W", "Hitam Putih Dramatis"),
+    Triple("warmSunset", "Warm Sunset", "Tone Emas Sore Hari")
+)
+
+@Composable
+private fun PresetRow(value: String, label: String, desc: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .border(1.dp, if (selected) GOLD else BORDER, RoundedCornerShape(8.dp))
+            .background(if (selected) CARD else PANEL)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
+        else Box(Modifier.size(14.dp))
+        Column {
+            Text(label, style = TextStyle(color = if (selected) GOLD else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+            Text(desc, style = TextStyle(color = MUTED.copy(alpha = 0.7f), fontSize = 9.sp))
+        }
+    }
+}
+
+// ─── Mode Badge ──────────────────────────────────────────────────────────
+@Composable
+private fun Badge(text: String, color: Color) {
+    Card(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(6.dp)),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.1f)),
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = TextStyle(color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        )
+    }
+}
+
+// ─── Excel Upload Zone (matches Electron renderUploadZone) ───────────────
+@Composable
+private fun UploadZone(
+    label: String,
+    accentColor: Color,
+    students: List<com.saatiril.andro.data.Student>,
+    fileName: String,
+    isLoading: Boolean,
+    onPick: () -> Unit,
+    onClear: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, if (students.isNotEmpty()) accentColor.copy(alpha = 0.5f) else BORDER, RoundedCornerShape(10.dp))
+            .background(if (students.isNotEmpty()) accentColor.copy(alpha = 0.05f) else PANEL.copy(alpha = 0.5f))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(label, style = TextStyle(color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+        if (isLoading) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = accentColor, strokeWidth = 2.dp)
+                Text("Membaca file...", style = TextStyle(color = MUTED, fontSize = 11.sp))
+            }
+        } else if (students.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.TableChart, contentDescription = null, tint = accentColor, modifier = Modifier.size(20.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Data siap: ${students.size} Peserta", style = TextStyle(color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                    Text(fileName, style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1)
+                }
+                IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Hapus", tint = RED, modifier = Modifier.size(14.dp))
+                }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.UploadFile, contentDescription = null, tint = MUTED.copy(alpha = 0.4f), modifier = Modifier.size(20.dp))
+                Text("Tap untuk pilih file Excel", style = TextStyle(color = MUTED, fontSize = 11.sp))
+            }
+        }
+        Button(
+            onClick = onPick,
+            colors = ButtonDefaults.buttonColors(containerColor = CARD),
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            enabled = !isLoading
+        ) {
+            Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(14.dp), tint = accentColor)
+            Spacer(Modifier.width(4.dp))
+            Text("Pilih File Excel/CSV", color = accentColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        Text(".xlsx / .xls / .csv", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp))
+    }
+}
+
+private fun excelMimeTypes(): Array<String> = arrayOf(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "text/csv",
+    "text/comma-separated-values"
 )

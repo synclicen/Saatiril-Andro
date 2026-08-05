@@ -201,7 +201,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _setupMode = MutableStateFlow(CameraModes.SINGLE)
     val setupMode: StateFlow<String> = _setupMode.asStateFlow()
-    fun setSetupMode(v: String) { _setupMode.value = v }
+    fun setSetupMode(v: String) {
+        _setupMode.value = v
+        // When switching modes, re-merge the channel data so the combined
+        // list reflects the new mode (dual uses both channels, others use only ch0).
+        refreshCombinedStudents()
+    }
 
     private val _setupRatio = MutableStateFlow("4:3")
     val setupRatio: StateFlow<String> = _setupRatio.asStateFlow()
@@ -217,6 +222,74 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _setupStudents = MutableStateFlow<List<Student>>(emptyList())
     val setupStudents: StateFlow<List<Student>> = _setupStudents.asStateFlow()
+
+    // ─── Dual-channel Excel uploads (matches Electron's excelData[2]) ───
+    // For mode "dual", the admin uploads 2 separate Excel files: one for
+    // JALUR KIRI (channel 1) and one for JALUR KANAN (channel 2). Each
+    // student is tagged with assignedChannel so the operator panel can
+    // filter by channel. For single/photoshoot modes, only channel 0 is used.
+    private val _setupChannel0Students = MutableStateFlow<List<Student>>(emptyList())
+    val setupChannel0Students: StateFlow<List<Student>> = _setupChannel0Students.asStateFlow()
+    private val _setupChannel0FileName = MutableStateFlow<String>("")
+    val setupChannel0FileName: StateFlow<String> = _setupChannel0FileName.asStateFlow()
+
+    private val _setupChannel1Students = MutableStateFlow<List<Student>>(emptyList())
+    val setupChannel1Students: StateFlow<List<Student>> = _setupChannel1Students.asStateFlow()
+    private val _setupChannel1FileName = MutableStateFlow<String>("")
+    val setupChannel1FileName: StateFlow<String> = _setupChannel1FileName.asStateFlow()
+
+    private val _importingChannel = MutableStateFlow<Int?>(null)
+    val importingChannel: StateFlow<Int?> = _importingChannel.asStateFlow()
+
+    /** Import students from an Excel/CSV file into the given channel (0 or 1). */
+    fun importExcelChannel(uri: Uri, channel: Int) {
+        _importingChannel.value = channel
+        viewModelScope.launch {
+            try {
+                val students = withContext(Dispatchers.IO) { ExcelImporter.import(app, uri) }
+                if (channel == 0) {
+                    _setupChannel0Students.value = students
+                    _setupChannel0FileName.value = uri.lastPathSegment?.substringAfterLast('/') ?: "file.xlsx"
+                } else {
+                    _setupChannel1Students.value = students
+                    _setupChannel1FileName.value = uri.lastPathSegment?.substringAfterLast('/') ?: "file.xlsx"
+                }
+                // Refresh the combined list (with assignedChannel tags)
+                refreshCombinedStudents()
+            } catch (e: Exception) {
+                Log.e(TAG, "Excel import channel $channel failed", e)
+            } finally {
+                _importingChannel.value = null
+            }
+        }
+    }
+
+    /** Clear the Excel data for a specific channel. */
+    fun clearChannelExcel(channel: Int) {
+        if (channel == 0) {
+            _setupChannel0Students.value = emptyList()
+            _setupChannel0FileName.value = ""
+        } else {
+            _setupChannel1Students.value = emptyList()
+            _setupChannel1FileName.value = ""
+        }
+        refreshCombinedStudents()
+    }
+
+    /** Merge both channels' students into _setupStudents, tagging each with assignedChannel. */
+    private fun refreshCombinedStudents() {
+        val mode = _setupMode.value
+        val combined = mutableListOf<Student>()
+        if (CameraModes.isDualMode(mode) && mode != CameraModes.DUAL_PHOTOSHOOT) {
+            // dual: channel 0 → assignedChannel=1, channel 1 → assignedChannel=2
+            combined.addAll(_setupChannel0Students.value.map { it.copy(assignedChannel = 1) })
+            combined.addAll(_setupChannel1Students.value.map { it.copy(assignedChannel = 2) })
+        } else {
+            // single / single-photoshoot / dual-photoshoot: only channel 0, all assignedChannel=1
+            combined.addAll(_setupChannel0Students.value.map { it.copy(assignedChannel = 1) })
+        }
+        _setupStudents.value = combined
+    }
 
     private val _setupOutputFolderUri = MutableStateFlow<String?>(photoSaver.getOutputFolder()?.toString())
     val setupOutputFolderUri: StateFlow<String?> = _setupOutputFolderUri.asStateFlow()
@@ -245,6 +318,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _setupPreset.value = "original"
         _setupPassword.value = null
         _setupStudents.value = emptyList()
+        _setupChannel0Students.value = emptyList()
+        _setupChannel0FileName.value = ""
+        _setupChannel1Students.value = emptyList()
+        _setupChannel1FileName.value = ""
         _setupFrame.value = null
         _setupFrameFileName.value = ""
         _importStatus.value = null
@@ -262,6 +339,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _setupPreset.value = p.config.preset
         _setupPassword.value = p.config.sessionPassword?.takeIf { it != "__PASSWORD_SET__" }
         _setupStudents.value = p.database
+        // Restore per-channel data (split the database back into channels)
+        _setupChannel0Students.value = p.database.filter { it.assignedChannel == 1 }
+        _setupChannel0FileName.value = if (_setupChannel0Students.value.isNotEmpty()) "channel1.xlsx" else ""
+        _setupChannel1Students.value = p.database.filter { it.assignedChannel == 2 }
+        _setupChannel1FileName.value = if (_setupChannel1Students.value.isNotEmpty()) "channel2.xlsx" else ""
         // Restore frame (if it was saved as a real data URL, not the stripped sentinel)
         val savedFrame = p.config.frame
         if (savedFrame != null && savedFrame != "__FRAME_SAVED__" && savedFrame.startsWith("data:image/")) {
