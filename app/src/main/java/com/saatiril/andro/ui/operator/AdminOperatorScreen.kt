@@ -440,15 +440,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     val doCapture: () -> Unit = {
                         isCapturing = true
                         try {
-                            val bitmap = textureView.bitmap ?: run {
+                            val bitmap = textureView.bitmap
+                            if (bitmap == null) {
                                 captureError = "Preview belum siap, coba lagi."
                                 isCapturing = false
-                                return@Button
+                                return@doCapture
                             }
-                            val proj = project ?: run {
+                            val proj = project
+                            if (proj == null) {
                                 captureError = "Proyek tidak ditemukan."
                                 isCapturing = false
-                                return@Button
+                                return@doCapture
                             }
                             val processed = try {
                                 CameraCapture.processFrame(
