@@ -172,6 +172,27 @@ class PhotoSaver(private val context: Context) {
         }
     }
 
+    /**
+     * Save a binary file (e.g. .xlsx Excel export) to the output folder.
+     * @param bytes the file contents as a byte array
+     * @param filename e.g. "Daftar_Peserta_20260805.xlsx"
+     * @param mimeType e.g. "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+     * @return the Uri of the created file, or null on failure
+     */
+    fun saveBinaryFile(bytes: ByteArray, filename: String, mimeType: String): Uri? {
+        val treeUri = getOutputFolder() ?: return null
+        return try {
+            val docUri = DocumentsContract.createDocument(context.contentResolver, treeUri, mimeType, filename) ?: return null
+            context.contentResolver.openOutputStream(docUri)?.use { os ->
+                os.write(bytes)
+            }
+            docUri
+        } catch (e: Exception) {
+            Log.e("PhotoSaver", "saveBinaryFile failed: ${e.message}", e)
+            null
+        }
+    }
+
     companion object {
         private const val TAG = "PhotoSaver"
         private const val PREFS_NAME = "photo_saver_prefs"

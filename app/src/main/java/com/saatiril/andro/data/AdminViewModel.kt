@@ -487,10 +487,76 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Export the student database to a CSV file in the output folder.
-     * Columns: No, NIM, Nama, Status, Channel — matches Electron exportToExcel.
+     * Export the student database to an Excel .xlsx file in the output folder.
+     * Columns: No, NIM, Nama, Status, Channel — matches Electron exportToExcel
+     * (admin-dashboard.tsx:668-727). Uses Apache POI for real .xlsx format
+     * with column widths, styled headers, and colored status cells.
      * Returns the filename on success, null on failure.
      */
+    fun exportToExcel(): String? {
+        val proj = _project.value ?: return null
+        val timeStamp = android.text.format.DateFormat.format("yyyyMMdd_HHmmss", System.currentTimeMillis()).toString()
+        val filename = "Daftar_Peserta_${proj.name.replace(" ", "_")}_$timeStamp.xlsx"
+        return try {
+            // Build .xlsx in memory using Apache POI
+            val workbook = org.apache.poi.xssf.usermodel.XSSFWorkbook()
+            val sheet = workbook.createSheet("Peserta")
+
+            // Header style
+            val headerStyle = workbook.createCellStyle()
+            val headerFont = workbook.createFont()
+            headerFont.bold = true
+            headerStyle.setFont(headerFont)
+            headerStyle.fillForegroundColor = org.apache.poi.ss.usermodel.IndexedColors.DARK_BLUE.index
+            headerStyle.fillPattern = org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND
+            headerFont.color = org.apache.poi.ss.usermodel.IndexedColors.WHITE.index
+
+            // Header row
+            val headerRow = sheet.createRow(0)
+            val headers = arrayOf("No", "NIM", "Nama", "Status", "Channel")
+            headers.forEachIndexed { i, h ->
+                val cell = headerRow.createCell(i)
+                cell.setCellValue(h)
+                cell.cellStyle = headerStyle
+            }
+
+            // Data rows
+            proj.database.forEachIndexed { i, s ->
+                val row = sheet.createRow(i + 1)
+                row.createCell(0).setCellValue((i + 1).toDouble())
+                row.createCell(1).setCellValue(s.nim)
+                row.createCell(2).setCellValue(s.nama)
+                val statusLabel = when {
+                    s.status == "pending" -> "Menunggu"
+                    s.status == "sent" -> "Dikirim"
+                    s.status == "done" -> "Selesai"
+                    isActiveStatus(s.status) -> "Aktif Ch.${getActiveChannel(s.status) ?: "?"}"
+                    else -> s.status
+                }
+                row.createCell(3).setCellValue(statusLabel)
+                row.createCell(4).setCellValue(s.assignedChannel.toDouble())
+            }
+
+            // Auto-size columns
+            for (i in headers.indices) sheet.autoSizeColumn(i)
+
+            // Write to byte array
+            val baos = java.io.ByteArrayOutputStream()
+            workbook.write(baos)
+            workbook.close()
+            val bytes = baos.toByteArray()
+
+            // Save to SAF output folder
+            val uri = photoSaver.saveBinaryFile(bytes, filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            Log.i(TAG, "Excel exported: $filename (${proj.database.size} rows)")
+            filename
+        } catch (e: Exception) {
+            Log.e(TAG, "Excel export failed: ${e.message}", e)
+            null
+        }
+    }
+
+    /** Legacy CSV export — kept for fallback. */
     fun exportToCsv(): String? {
         val proj = _project.value ?: return null
         val timeStamp = android.text.format.DateFormat.format("yyyyMMdd_HHmmss", System.currentTimeMillis()).toString()
@@ -508,13 +574,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             sb.append("${i + 1},\"${s.nim}\",\"${s.nama}\",\"$statusLabel\",${s.assignedChannel}\n")
         }
         return try {
-            val uri = photoSaver.saveTextFile(sb.toString(), filename, "text/csv")
-            Log.i(TAG, "CSV exported: $filename (${proj.database.size} rows)")
+            photoSaver.saveTextFile(sb.toString(), filename, "text/csv")
             filename
-        } catch (e: Exception) {
-            Log.e(TAG, "CSV export failed: ${e.message}", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     /** Stop the server and return to the Hub. */

@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -137,11 +139,24 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     val isDual = CameraModes.isDualMode(mode)
     val myChannel by viewModel.myChannel.collectAsState()
 
-    // Channel filtering for the active target:
-    // - single/dual: only show students active on OUR channel (independent channels)
-    // - photoshoot: show any 'sent' student (cooperative — both channels see all)
+    // Operator queue: in photoshoot mode, operator can pick from 'sent' students
+    // (matches Electron operator-panel.tsx renderOpSearch + renderQueueList).
+    // In non-photoshoot, the active student is auto-assigned by MC.
+    var opSearchQuery by remember { mutableStateOf("") }
+    var opSelectedStudent by remember { mutableStateOf<Student?>(null) }
+
+    // Photoshoot: list of 'sent' students (operator's queue)
+    val opSentQueue = if (isPhotoshoot) db.filter { it.status == "sent" } else emptyList()
+    val opSearchResults = if (isPhotoshoot && opSearchQuery.trim().isNotEmpty()) {
+        val q = opSearchQuery.trim().lowercase()
+        opSentQueue.filter { it.nama.lowercase().contains(q) || it.nim.lowercase().contains(q) }
+    } else opSentQueue
+
+    // Active target:
+    // - Non-photoshoot: auto from MC_CALL (active_N on our channel)
+    // - Photoshoot: operator-selected, OR first 'sent' student if none selected
     val activeStudent = if (isPhotoshoot) {
-        db.firstOrNull { it.status == "sent" }
+        opSelectedStudent ?: opSentQueue.firstOrNull()
     } else {
         db.firstOrNull { isActiveStatus(it.status) && getActiveChannel(it.status) == myChannel }
     }
@@ -153,6 +168,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     val activeStudentId = activeStudent?.id
     LaunchedEffect(activeStudentId) {
         viewModel.resetCaptureState()
+    }
+
+    // Clear operator selection when the selected student becomes 'done'
+    LaunchedEffect(opSelectedStudent?.status) {
+        if (opSelectedStudent?.status == "done") {
+            opSelectedStudent = null
+        }
     }
 
     // Init camera on first show (only if permission granted), release on dispose
@@ -367,6 +389,51 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     Text(err, Modifier.padding(8.dp), style = TextStyle(color = Color.White, fontSize = 10.sp))
                 }
             }
+        }
+
+        // ─── Photoshoot: operator queue + search (matches Electron renderOpSearch) ───
+        if (isPhotoshoot && opSentQueue.isNotEmpty()) {
+            // Search box
+            OutlinedTextField(
+                value = opSearchQuery, onValueChange = { opSearchQuery = it },
+                label = { Text("Cari peserta dikirim…", color = MUTED, fontSize = 10.sp) },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                    focusedBorderColor = GREEN, unfocusedBorderColor = BORDER, cursorColor = GREEN,
+                    focusedContainerColor = PANEL, unfocusedContainerColor = PANEL
+                ),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MUTED, modifier = Modifier.size(14.dp)) },
+                trailingIcon = { if (opSearchQuery.isNotEmpty()) Icon(Icons.Default.Close, contentDescription = "Hapus", tint = MUTED, modifier = Modifier.size(14.dp).clickable { opSearchQuery = "" }) },
+                textStyle = TextStyle(fontSize = 11.sp)
+            )
+            // Queue count
+            Text("Antrean: ${opSentQueue.size} dikirim", style = TextStyle(color = CYAN, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+            // Queue list (scrollable, max 4 items visible)
+            Column(modifier = Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState())) {
+                opSearchResults.take(20).forEach { s ->
+                    val isSelected = activeStudent?.id == s.id
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clickable {
+                            opSelectedStudent = s
+                        },
+                        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL),
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) GOLD else BORDER.copy(alpha = 0.3f))
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(s.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 10.sp), maxLines = 1)
+                                Text(s.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 8.sp, fontFamily = FontFamily.Monospace))
+                            }
+                            if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                        }
+                    }
+                }
+            }
+        } else if (isPhotoshoot && opSentQueue.isEmpty()) {
+            Text("Menunggu MC mengirim peserta…", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(4.dp))
         }
 
         // ─── Shutter mode selector (manual / 3s / 5s / 10s) ───

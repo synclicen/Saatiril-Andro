@@ -82,11 +82,19 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
     // OP_PROGRESS text for current channel
     val opProgressText = opProgress[myChannel] ?: opProgress.values.firstOrNull() ?: ""
 
+    val scrollState = rememberScrollState()
+
+    // Auto-scroll to top when a student becomes active or done count changes
+    // (matches Electron mc-panel.tsx:157-165 auto-scroll behavior)
+    LaunchedEffect(active.firstOrNull()?.id, done.size) {
+        scrollState.animateScrollTo(0)
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(BG)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {

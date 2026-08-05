@@ -172,7 +172,7 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
         // ─── Export button ───
         Button(
             onClick = {
-                val fname = viewModel.exportToCsv()
+                val fname = viewModel.exportToExcel()
                 exportStatus = if (fname != null) "Tersimpan: $fname" else "Gagal export"
             },
             modifier = Modifier.fillMaxWidth().height(44.dp),
@@ -182,7 +182,7 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
         ) {
             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
             Spacer(Modifier.width(6.dp))
-            Text("Export Database ke CSV", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Export Database ke Excel (.xlsx)", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
         exportStatus?.let {
             Text(it, style = TextStyle(color = if (it.startsWith("Tersimpan")) GREEN else RED, fontSize = 10.sp))
