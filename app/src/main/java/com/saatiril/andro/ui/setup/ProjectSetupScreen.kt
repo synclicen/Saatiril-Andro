@@ -37,6 +37,7 @@ private val MUTED = Color(0xFFc4b5fd)
 private val CYAN = Color(0xFF06b6d4)
 private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
+private val AMBER = Color(0xFFfbbf24)
 
 /**
  * Project Setup — configure a new or existing project.
@@ -75,12 +76,15 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
             .fillMaxSize()
             .background(BG)
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // ─── Header (fixed at top, not scrolling) ───
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             IconButton(onClick = { viewModel.openHub() }) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Kembali", tint = GOLD)
             }
@@ -90,151 +94,172 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
             }
         }
 
-        // Project name
-        SectionCard(title = "Nama Proyek", icon = Icons.Default.Edit) {
-            OutlinedTextField(
-                value = name, onValueChange = { viewModel.setSetupName(it) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                colors = tfColors(), textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
-                placeholder = { Text("Wisuda 2026", color = MUTED.copy(alpha = 0.5f), fontSize = 14.sp) }
-            )
-        }
-
-        // Camera mode
-        SectionCard(title = "Mode Kamera", icon = Icons.Default.CameraAlt) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ModeChip("Single", CameraModes.SINGLE, mode) { viewModel.setSetupMode(CameraModes.SINGLE) }
-                ModeChip("Dual", CameraModes.DUAL, mode) { viewModel.setSetupMode(CameraModes.DUAL) }
-                ModeChip("Single PS", CameraModes.SINGLE_PHOTOSHOOT, mode) { viewModel.setSetupMode(CameraModes.SINGLE_PHOTOSHOOT) }
-                ModeChip("Dual PS", CameraModes.DUAL_PHOTOSHOOT, mode) { viewModel.setSetupMode(CameraModes.DUAL_PHOTOSHOOT) }
-            }
-            Text("Photoshoot = 1 foto/mahasiswa. Standar = Toga + Ijazah.", style = TextStyle(color = MUTED, fontSize = 10.sp))
-        }
-
-        // Ratio + Preset
-        SectionCard(title = "Rasio & Preset", icon = Icons.Default.AspectRatio) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("4:3", "3:4", "16:9", "1:1").forEach { r ->
-                    ModeChip(r, r, ratio) { viewModel.setSetupRatio(r) }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("original", "studio", "cinematic", "vivid", "pro").forEach { p ->
-                    ModeChip(p, p, preset) { viewModel.setSetupPreset(p) }
-                }
-            }
-        }
-
-        // Excel import
-        SectionCard(title = "Database Mahasiswa", icon = Icons.Default.TableChart) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = { excelLauncher.launch(arrayOf(
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/vnd.ms-excel", "text/csv", "text/comma-separated-values"
-                    )) },
-                    colors = ButtonDefaults.buttonColors(containerColor = CARD),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Impor Excel/CSV", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                Text("${students.size} mahasiswa", style = TextStyle(color = if (students.isEmpty()) MUTED else GREEN, fontSize = 12.sp, fontWeight = FontWeight.Bold))
-            }
-            importStatus?.let {
-                Text(it, style = TextStyle(color = MUTED, fontSize = 11.sp))
-            }
-            if (students.isNotEmpty()) {
-                Text("Contoh: ${students.take(3).joinToString { it.nama.ifBlank { it.nim } }}", style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp))
-            }
-        }
-
-        // Output folder
-        SectionCard(title = "Folder Output Foto", icon = Icons.Default.FolderOpen) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = { folderLauncher.launch(null) },
-                    colors = ButtonDefaults.buttonColors(containerColor = CARD),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Pilih Folder", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                if (folderUri != null) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GREEN, modifier = Modifier.size(18.dp))
-                    Text("Folder dipilih", style = TextStyle(color = GREEN, fontSize = 11.sp))
-                }
-            }
-            Text("Foto dari operator akan otomatis tersimpan ke folder ini.", style = TextStyle(color = MUTED, fontSize = 10.sp))
-        }
-
-        // Session password (optional)
-        SectionCard(title = "Password Sesi (opsional)", icon = Icons.Default.Lock) {
-            OutlinedTextField(
-                value = password ?: "", onValueChange = { viewModel.setSetupPassword(it) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                colors = tfColors(), textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
-                placeholder = { Text("Kosongkan jika tidak ada", color = MUTED.copy(alpha = 0.5f), fontSize = 13.sp) },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                leadingIcon = { Icon(Icons.Default.Password, contentDescription = null, tint = MUTED, modifier = Modifier.size(18.dp)) }
-            )
-            Text("MC/operator harus memasukkan password ini untuk bergabung.", style = TextStyle(color = MUTED, fontSize = 10.sp))
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // Start button
-        Button(
-            onClick = { viewModel.createAndStartProject() },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = if (canStart && !starting) GOLD else BORDER),
-            shape = RoundedCornerShape(14.dp),
-            enabled = canStart && !starting
+        // ─── Scrollable form content (takes remaining space) ───
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (starting) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text("Memulai server...", color = BG, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            } else {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp), tint = BG)
-                Spacer(Modifier.width(8.dp))
-                Text("Mulai Server", color = BG, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            // Project name
+            SectionCard(title = "Nama Proyek", icon = Icons.Default.Edit) {
+                OutlinedTextField(
+                    value = name, onValueChange = { viewModel.setSetupName(it) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    colors = tfColors(), textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                    placeholder = { Text("Wisuda 2026", color = MUTED.copy(alpha = 0.5f), fontSize = 14.sp) }
+                )
             }
-        }
-        // Startup error (shown if the server fails to start — no more silent crash)
-        startupError?.let { err ->
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.08f)),
-                shape = RoundedCornerShape(10.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, RED.copy(alpha = 0.4f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = RED, modifier = Modifier.size(18.dp))
-                    Column {
-                        Text("Server gagal dimulai", style = TextStyle(color = RED, fontSize = 12.sp, fontWeight = FontWeight.Bold))
-                        Text(err, style = TextStyle(color = RED.copy(alpha = 0.8f), fontSize = 10.sp))
+
+            // Camera mode
+            SectionCard(title = "Mode Kamera", icon = Icons.Default.CameraAlt) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ModeChip("Single", CameraModes.SINGLE, mode) { viewModel.setSetupMode(CameraModes.SINGLE) }
+                    ModeChip("Dual", CameraModes.DUAL, mode) { viewModel.setSetupMode(CameraModes.DUAL) }
+                    ModeChip("Single PS", CameraModes.SINGLE_PHOTOSHOOT, mode) { viewModel.setSetupMode(CameraModes.SINGLE_PHOTOSHOOT) }
+                    ModeChip("Dual PS", CameraModes.DUAL_PHOTOSHOOT, mode) { viewModel.setSetupMode(CameraModes.DUAL_PHOTOSHOOT) }
+                }
+                Text("Photoshoot = 1 foto/mahasiswa. Standar = Toga + Ijazah.", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            }
+
+            // Ratio + Preset
+            SectionCard(title = "Rasio & Preset", icon = Icons.Default.AspectRatio) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("4:3", "3:4", "16:9", "1:1").forEach { r ->
+                        ModeChip(r, r, ratio) { viewModel.setSetupRatio(r) }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("original", "studio", "cinematic", "vivid", "pro").forEach { p ->
+                        ModeChip(p, p, preset) { viewModel.setSetupPreset(p) }
                     }
                 }
             }
+
+            // Excel import
+            SectionCard(title = "Database Mahasiswa", icon = Icons.Default.TableChart) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = { excelLauncher.launch(arrayOf(
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "application/vnd.ms-excel", "text/csv", "text/comma-separated-values"
+                        )) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CARD),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Impor Excel/CSV", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Text("${students.size} mahasiswa", style = TextStyle(color = if (students.isEmpty()) MUTED else GREEN, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                }
+                importStatus?.let {
+                    Text(it, style = TextStyle(color = MUTED, fontSize = 11.sp))
+                }
+                if (students.isNotEmpty()) {
+                    Text("Contoh: ${students.take(3).joinToString { it.nama.ifBlank { it.nim } }}", style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp))
+                }
+            }
+
+            // Output folder
+            SectionCard(title = "Folder Output Foto", icon = Icons.Default.FolderOpen) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = { folderLauncher.launch(null) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CARD),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp), tint = GOLD)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Pilih Folder", color = GOLD, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (folderUri != null) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GREEN, modifier = Modifier.size(18.dp))
+                        Text("Folder dipilih", style = TextStyle(color = GREEN, fontSize = 11.sp))
+                    }
+                }
+                Text("Foto dari operator akan otomatis tersimpan ke folder ini.", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            }
+
+            // Session password (optional)
+            SectionCard(title = "Password Sesi (opsional)", icon = Icons.Default.Lock) {
+                OutlinedTextField(
+                    value = password ?: "", onValueChange = { viewModel.setSetupPassword(it) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    colors = tfColors(), textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                    placeholder = { Text("Kosongkan jika tidak ada", color = MUTED.copy(alpha = 0.5f), fontSize = 13.sp) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    leadingIcon = { Icon(Icons.Default.Password, contentDescription = null, tint = MUTED, modifier = Modifier.size(18.dp)) }
+                )
+                Text("MC/operator harus memasukkan password ini untuk bergabung.", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            }
+
+            Spacer(Modifier.height(8.dp))
         }
-        if (!canStart && !starting) {
-            Text(
-                if (students.isEmpty()) "Impor database mahasiswa dulu." else "Pilih folder output dulu.",
-                style = TextStyle(color = MUTED, fontSize = 11.sp), modifier = Modifier.fillMaxWidth()
-            )
+
+        // ─── Sticky bottom bar (always visible — Start button + error) ───
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(PANEL.copy(alpha = 0.3f))
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .navigationBarsPadding()
+        ) {
+            // Startup error (shown if the server fails to start)
+            startupError?.let { err ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.12f)),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RED.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = RED, modifier = Modifier.size(18.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Server gagal dimulai", style = TextStyle(color = RED, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                            Text(err, style = TextStyle(color = RED.copy(alpha = 0.85f), fontSize = 10.sp))
+                        }
+                    }
+                }
+            }
+
+            // Help text if not ready
+            if (!canStart && !starting) {
+                Text(
+                    if (students.isEmpty()) "⚠ Impor database mahasiswa dulu." else "⚠ Pilih folder output dulu.",
+                    style = TextStyle(color = AMBER, fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+            }
+
+            // Start button — ALWAYS VISIBLE at the bottom
+            Button(
+                onClick = { viewModel.createAndStartProject() },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (canStart && !starting) GOLD else BORDER),
+                shape = RoundedCornerShape(14.dp),
+                enabled = canStart && !starting
+            ) {
+                if (starting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Memulai server...", color = BG, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                } else {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp), tint = BG)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Mulai Server", color = BG, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            }
         }
-        Spacer(Modifier.height(24.dp))
     }
 }
 

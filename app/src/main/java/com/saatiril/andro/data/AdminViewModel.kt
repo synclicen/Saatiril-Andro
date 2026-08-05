@@ -213,12 +213,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun createAndStartProject() {
         if (_starting.value) return  // prevent double-tap
+        Log.i(TAG, "createAndStartProject called — starting server initialization")
         _starting.value = true
         _startupError.value = null
 
         viewModelScope.launch {
             try {
                 val name = _setupName.value.trim().ifEmpty { "Proyek Wisuda" }
+                Log.i(TAG, "Project: name='$name', students=${_setupStudents.value.size}, mode=${_setupMode.value}")
                 val students = _setupStudents.value
                 val password = _setupPassword.value
 
@@ -253,7 +255,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 // onStartCommand runs on the main thread shortly after.
                 withContext(Dispatchers.IO) {
                     try {
+                        Log.i(TAG, "Starting foreground service...")
                         ServerService.start(app)
+                        Log.i(TAG, "Foreground service start requested")
                     } catch (e: Exception) {
                         Log.e(TAG, "Foreground service start failed (non-fatal): ${e.message}", e)
                         // Non-fatal — the ktor server can still run while app is in foreground.
@@ -262,13 +266,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     // Start the ktor server (singleton). This is the call most likely
                     // to throw if there's a port conflict or a ktor init error.
                     try {
+                        Log.i(TAG, "Starting ktor SaatirilServer...")
                         SaatirilServer.start(app)
+                        Log.i(TAG, "SaatirilServer started successfully on port ${SaatirilServer.port.value}")
                     } catch (e: Exception) {
                         Log.e(TAG, "SaatirilServer.start FAILED", e)
                         throw e
                     }
                 }
 
+                // Verify server is actually running before navigating
+                if (!SaatirilServer.running.value) {
+                    Log.e(TAG, "Server reported not running after start() returned")
+                    throw RuntimeException("Server tidak berhasil dimulai (running=false)")
+                }
+
+                Log.i(TAG, "Project created successfully — navigating to MAIN")
                 _screen.value = Screen.MAIN
             } catch (e: Exception) {
                 Log.e(TAG, "createAndStartProject FAILED", e)
