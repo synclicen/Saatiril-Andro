@@ -19,6 +19,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -604,36 +605,35 @@ private fun GridlineCanvas(type: String, modifier: Modifier = Modifier) {
         val h = size.height
         val color = Color.White.copy(alpha = 0.3f)
         val stroke = 1.5f
-        val o = androidx.compose.ui.geometry.Offset
 
         when (type) {
             "thirds" -> {
-                drawLine(color, o(w / 3f, 0f), o(w / 3f, h), stroke)
-                drawLine(color, o(2 * w / 3f, 0f), o(2 * w / 3f, h), stroke)
-                drawLine(color, o(0f, h / 3f), o(w, h / 3f), stroke)
-                drawLine(color, o(0f, 2 * h / 3f), o(w, 2 * h / 3f), stroke)
+                drawLine(color, Offset(w / 3f, 0f), Offset(w / 3f, h), stroke)
+                drawLine(color, Offset(2 * w / 3f, 0f), Offset(2 * w / 3f, h), stroke)
+                drawLine(color, Offset(0f, h / 3f), Offset(w, h / 3f), stroke)
+                drawLine(color, Offset(0f, 2 * h / 3f), Offset(w, 2 * h / 3f), stroke)
             }
             "quarters" -> {
-                drawLine(color, o(w / 4f, 0f), o(w / 4f, h), stroke)
-                drawLine(color, o(w / 2f, 0f), o(w / 2f, h), stroke)
-                drawLine(color, o(3 * w / 4f, 0f), o(3 * w / 4f, h), stroke)
-                drawLine(color, o(0f, h / 4f), o(w, h / 4f), stroke)
-                drawLine(color, o(0f, h / 2f), o(w, h / 2f), stroke)
-                drawLine(color, o(0f, 3 * h / 4f), o(w, 3 * h / 4f), stroke)
+                drawLine(color, Offset(w / 4f, 0f), Offset(w / 4f, h), stroke)
+                drawLine(color, Offset(w / 2f, 0f), Offset(w / 2f, h), stroke)
+                drawLine(color, Offset(3 * w / 4f, 0f), Offset(3 * w / 4f, h), stroke)
+                drawLine(color, Offset(0f, h / 4f), Offset(w, h / 4f), stroke)
+                drawLine(color, Offset(0f, h / 2f), Offset(w, h / 2f), stroke)
+                drawLine(color, Offset(0f, 3 * h / 4f), Offset(w, 3 * h / 4f), stroke)
             }
             "crosshair" -> {
-                drawLine(color, o(w / 2f, 0f), o(w / 2f, h), stroke)
-                drawLine(color, o(0f, h / 2f), o(w, h / 2f), stroke)
-                drawCircle(color, minOf(w, h) / 6f, center = o(w / 2f, h / 2f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                drawLine(color, Offset(w / 2f, 0f), Offset(w / 2f, h), stroke)
+                drawLine(color, Offset(0f, h / 2f), Offset(w, h / 2f), stroke)
+                drawCircle(color, minOf(w, h) / 6f, center = Offset(w / 2f, h / 2f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
             }
             "diagonal" -> {
-                drawLine(color, o(0f, 0f), o(w, h), stroke)
-                drawLine(color, o(w, 0f), o(0f, h), stroke)
+                drawLine(color, Offset(0f, 0f), Offset(w, h), stroke)
+                drawLine(color, Offset(w, 0f), Offset(0f, h), stroke)
                 val faint = color.copy(alpha = 0.15f)
-                drawLine(faint, o(w / 3f, 0f), o(w / 3f, h), stroke)
-                drawLine(faint, o(2 * w / 3f, 0f), o(2 * w / 3f, h), stroke)
-                drawLine(faint, o(0f, h / 3f), o(w, h / 3f), stroke)
-                drawLine(faint, o(0f, 2 * h / 3f), o(w, 2 * h / 3f), stroke)
+                drawLine(faint, Offset(w / 3f, 0f), Offset(w / 3f, h), stroke)
+                drawLine(faint, Offset(2 * w / 3f, 0f), Offset(2 * w / 3f, h), stroke)
+                drawLine(faint, Offset(0f, h / 3f), Offset(w, h / 3f), stroke)
+                drawLine(faint, Offset(0f, 2 * h / 3f), Offset(w, 2 * h / 3f), stroke)
             }
         }
     }
