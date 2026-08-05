@@ -55,6 +55,8 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
     val students by viewModel.setupStudents.collectAsState()
     val folderUri by viewModel.setupOutputFolderUri.collectAsState()
     val importStatus by viewModel.importStatus.collectAsState()
+    val startupError by viewModel.startupError.collectAsState()
+    val starting by viewModel.starting.collectAsState()
 
     // Excel file picker
     val excelLauncher = rememberLauncherForActivityResult(
@@ -191,15 +193,42 @@ fun ProjectSetupScreen(viewModel: AdminViewModel) {
         Button(
             onClick = { viewModel.createAndStartProject() },
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = if (canStart) GOLD else BORDER),
+            colors = ButtonDefaults.buttonColors(containerColor = if (canStart && !starting) GOLD else BORDER),
             shape = RoundedCornerShape(14.dp),
-            enabled = canStart
+            enabled = canStart && !starting
         ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp), tint = BG)
-            Spacer(Modifier.width(8.dp))
-            Text("Mulai Server", color = BG, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            if (starting) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Memulai server...", color = BG, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            } else {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp), tint = BG)
+                Spacer(Modifier.width(8.dp))
+                Text("Mulai Server", color = BG, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
         }
-        if (!canStart) {
+        // Startup error (shown if the server fails to start — no more silent crash)
+        startupError?.let { err ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.08f)),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RED.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = RED, modifier = Modifier.size(18.dp))
+                    Column {
+                        Text("Server gagal dimulai", style = TextStyle(color = RED, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                        Text(err, style = TextStyle(color = RED.copy(alpha = 0.8f), fontSize = 10.sp))
+                    }
+                }
+            }
+        }
+        if (!canStart && !starting) {
             Text(
                 if (students.isEmpty()) "Impor database mahasiswa dulu." else "Pilih folder output dulu.",
                 style = TextStyle(color = MUTED, fontSize = 11.sp), modifier = Modifier.fillMaxWidth()

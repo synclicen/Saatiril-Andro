@@ -195,48 +195,92 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val _project = MutableStateFlow<Project?>(null)
     val project: StateFlow<Project?> = _project.asStateFlow()
 
+    /** Startup error message (shown on the Setup screen if the server fails to start). */
+    private val _startupError = MutableStateFlow<String?>(null)
+    val startupError: StateFlow<String?> = _startupError.asStateFlow()
+
+    /** True while the server is starting (disables the Start button). */
+    private val _starting = MutableStateFlow(false)
+    val starting: StateFlow<Boolean> = _starting.asStateFlow()
+
     /**
      * Create the project from setup state, persist it, start the server, and
      * move to MAIN. This is the "Start" button on the Setup screen.
+     *
+     * Wrapped in comprehensive error handling: if the foreground service or the
+     * ktor server fails to start, the error is surfaced to the user via
+     * [startupError] instead of crashing the app.
      */
     fun createAndStartProject() {
-        val name = _setupName.value.trim().ifEmpty { "Proyek Wisuda" }
-        val students = _setupStudents.value
-        val password = _setupPassword.value
+        if (_starting.value) return  // prevent double-tap
+        _starting.value = true
+        _startupError.value = null
 
-        val projectId = _editingProjectId.value ?: java.util.UUID.randomUUID().toString()
-        val project = Project(
-            id = projectId,
-            name = name,
-            config = ProjectConfig(
-                mode = _setupMode.value,
-                ratio = _setupRatio.value,
-                preset = _setupPreset.value,
-                targetFolder = _setupOutputFolderUri.value ?: "",
-                frame = null,
-                sessionPassword = password,
-                localFolder = ""
-            ),
-            database = students,
-            photoHistory = emptyList(),
-            captureVersions = emptyMap()
-        )
+        viewModelScope.launch {
+            try {
+                val name = _setupName.value.trim().ifEmpty { "Proyek Wisuda" }
+                val students = _setupStudents.value
+                val password = _setupPassword.value
 
-        projectStore.save(project)
-        _project.value = project
-        refreshProjects()
+                val projectId = _editingProjectId.value ?: java.util.UUID.randomUUID().toString()
+                val project = Project(
+                    id = projectId,
+                    name = name,
+                    config = ProjectConfig(
+                        mode = _setupMode.value,
+                        ratio = _setupRatio.value,
+                        preset = _setupPreset.value,
+                        targetFolder = _setupOutputFolderUri.value ?: "",
+                        frame = null,
+                        sessionPassword = password,
+                        localFolder = ""
+                    ),
+                    database = students,
+                    photoHistory = emptyList(),
+                    captureVersions = emptyMap()
+                )
 
-        // Wire the lan-message handler BEFORE starting the server.
-        SaatirilServer.onLanMessage = ::onLanMessage
-        // Set session password on the server.
-        SaatirilServer.setSessionPasswordHash(password?.let { sha256(it) })
+                projectStore.save(project)
+                _project.value = project
+                refreshProjects()
 
-        // Start the foreground service → which keeps SaatirilServer alive.
-        ServerService.start(app)
-        // Start the ktor server (singleton).
-        SaatirilServer.start(app)
+                // Wire the lan-message handler BEFORE starting the server.
+                SaatirilServer.onLanMessage = ::onLanMessage
+                SaatirilServer.setSessionPasswordHash(password?.let { sha256(it) })
 
-        _screen.value = Screen.MAIN
+                // Start the foreground service first (keeps the process alive).
+                // This calls startForegroundService() which is async — the service's
+                // onStartCommand runs on the main thread shortly after.
+                withContext(Dispatchers.IO) {
+                    try {
+                        ServerService.start(app)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Foreground service start failed (non-fatal): ${e.message}", e)
+                        // Non-fatal — the ktor server can still run while app is in foreground.
+                    }
+
+                    // Start the ktor server (singleton). This is the call most likely
+                    // to throw if there's a port conflict or a ktor init error.
+                    try {
+                        SaatirilServer.start(app)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "SaatirilServer.start FAILED", e)
+                        throw e
+                    }
+                }
+
+                _screen.value = Screen.MAIN
+            } catch (e: Exception) {
+                Log.e(TAG, "createAndStartProject FAILED", e)
+                _startupError.value = "Gagal memulai server: ${e.message ?: e.javaClass.simpleName}"
+                // Clean up partial state
+                try { SaatirilServer.stop() } catch (_: Exception) {}
+                try { ServerService.stop(app) } catch (_: Exception) {}
+                SaatirilServer.onLanMessage = null
+            } finally {
+                _starting.value = false
+            }
+        }
     }
 
     /** Stop the server and return to the Hub. */
@@ -247,6 +291,44 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _project.value = null
         _screen.value = Screen.HUB
         refreshProjects()
+    }
+
+    /**
+     * Handle a photo captured locally by the admin's own phone camera (the
+     * Operator tab in MainScaffold). This saves the photo to the output folder,
+     * updates the project DB, and broadcasts SYNC_DB to all connected clients —
+     * the same flow as [handlePhotosSaved] but initiated locally instead of
+     * arriving via socket from a remote operator.
+     */
+    fun handleLocalCapture(student: Student, base64Photo: String, channel: Int) {
+        val proj = _project.value ?: return
+
+        // Build the filename: NIM_Nama_1_Toga.jpg (standard mode, version 1)
+        val filename = com.saatiril.andro.util.FilenameUtils.buildStandardFilename(
+            student.nim, student.nama, 1, "Toga", 1
+        )
+
+        // Save to the SAF output folder (on IO dispatcher)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                photoSaver.savePhoto(base64Photo, filename)
+                Log.i(TAG, "Local capture saved: $filename")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save local capture: ${e.message}", e)
+            }
+        }
+
+        // Update project: add to photoHistory, mark student done
+        val updatedDb = proj.database.map { s ->
+            if (s.id == student.id) s.copy(status = "done") else s
+        }
+        val historyItem = PhotoHistoryItem(student = student, photos = listOf(base64Photo), channel = channel)
+        val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
+        _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
+        _project.value?.let { projectStore.save(it) }
+
+        // Broadcast SYNC_DB so all connected MC/operator clients update their state
+        pushSyncDb()
     }
 
     // ─── Server state (delegated to SaatirilServer singleton) ───

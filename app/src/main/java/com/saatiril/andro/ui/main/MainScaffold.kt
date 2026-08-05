@@ -30,15 +30,17 @@ private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
 private val CYAN = Color(0xFF06b6d4)
 
-private enum class Tab(val label: String) { ADMIN("Admin"), MC("MC") }
+private enum class Tab(val label: String) { ADMIN("Admin"), MC("MC"), OPERATOR("Operator") }
 
 /**
- * Main scaffold shown while the server is running. Two tabs:
+ * Main scaffold shown while the server is running. Three tabs (matching the
+ * Electron app's unified view):
  *  - Admin: dashboard (project summary, server info + QR, clients, gallery, DB)
  *  - MC: call students to the stage
+ *  - Operator: backup camera using the admin phone's built-in Camera2
  *
- * The top bar shows the live server status (LAN IP, clients, latency proxy)
- * and a "Stop" button that tears down the server and returns to the Hub.
+ * The top bar shows the live server status (LAN IP, clients) and a "Stop"
+ * button that tears down the server and returns to the Hub.
  */
 @Composable
 fun MainScaffold(viewModel: AdminViewModel) {
@@ -69,6 +71,7 @@ fun MainScaffold(viewModel: AdminViewModel) {
             when (selectedTab) {
                 Tab.ADMIN -> AdminDashboardScreen(viewModel)
                 Tab.MC -> McScreen(viewModel)
+                Tab.OPERATOR -> com.saatiril.andro.ui.operator.AdminOperatorScreen(viewModel)
             }
         }
     }
@@ -111,6 +114,7 @@ private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
         ) {
             TabItem(Tab.ADMIN, Icons.Default.Dashboard, selected == Tab.ADMIN, onSelect, Modifier.weight(1f))
             TabItem(Tab.MC, Icons.Default.Mic, selected == Tab.MC, onSelect, Modifier.weight(1f))
+            TabItem(Tab.OPERATOR, Icons.Default.PhotoCamera, selected == Tab.OPERATOR, onSelect, Modifier.weight(1f))
         }
     }
 }

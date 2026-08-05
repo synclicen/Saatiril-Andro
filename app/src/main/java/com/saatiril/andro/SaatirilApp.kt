@@ -22,9 +22,10 @@ class SaatirilApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Set up global uncaught exception handler to prevent silent crashes
-        // and log all errors for debugging. This catches library conflicts
-        // (NoSuchMethodError, NoClassDefFoundError) that would otherwise crash.
+        // Set up global uncaught exception handler to prevent silent crashes.
+        // For non-fatal errors on background threads (coroutine exceptions from
+        // ktor, etc.), we log but DON'T kill the app — only main-thread errors
+        // are passed to the default handler (which shows the crash dialog).
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e(TAG, "=== UNCAUGHT EXCEPTION on thread: ${thread.name} ===")
@@ -32,25 +33,24 @@ class SaatirilApp : Application() {
             Log.e(TAG, "Message: ${throwable.message}")
             Log.e(TAG, "Full stacktrace:", throwable)
 
-            // For library conflicts that happen on the main thread,
-            // show a Toast instead of crashing the entire app
-            if (thread == Looper.getMainLooper().thread &&
-                (throwable is NoSuchMethodError ||
-                 throwable is NoClassDefFoundError ||
-                 throwable is VerifyError)) {
+            val isMainThread = thread == Looper.getMainLooper().thread
+
+            if (isMainThread) {
+                // Main thread errors are fatal — show toast + pass to default handler
                 try {
                     Toast.makeText(
                         this,
-                        "Saatiril: Library error — ${throwable.javaClass.simpleName}: ${throwable.message}",
+                        "Saatiril error: ${throwable.javaClass.simpleName}: ${throwable.message}",
                         Toast.LENGTH_LONG
                     ).show()
-                } catch (_: Exception) {
-                    // Can't show toast either — just log
-                }
+                } catch (_: Exception) { }
+                defaultHandler?.uncaughtException(thread, throwable)
+            } else {
+                // Background thread (ktor coroutine, IO, etc.) — log and swallow.
+                // Killing the app from a background thread exception is worse than
+                // continuing (the server might still work, the user can retry).
+                Log.w(TAG, "Background exception swallowed (app kept alive): ${throwable.message}")
             }
-
-            // Pass to default handler (which shows the crash dialog)
-            defaultHandler?.uncaughtException(thread, throwable)
         }
     }
 }

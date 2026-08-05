@@ -7,12 +7,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.saatiril.andro.MainActivity
-import com.saatiril.andro.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,23 +70,40 @@ class ServerService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 Log.i(TAG, "STOP requested")
-                SaatirilServer.stop()
+                try { SaatirilServer.stop() } catch (e: Exception) { Log.e(TAG, "stop error: ${e.message}", e) }
                 statsJob?.cancel()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
                 Log.i(TAG, "START — promoting to foreground")
-                createNotificationChannel()
-                startForeground(NOTIF_ID, buildNotification("Saatiril server berjalan…", 0))
+                try {
+                    createNotificationChannel()
+                    val notif = buildNotification("Saatiril server berjalan…", 0)
+                    // Android 10+ (API 29) REQUIRES the foreground service type to be
+                    // passed explicitly to startForeground(). On Android 14 (API 34),
+                    // omitting it throws ForegroundServiceTypeNotAllowed → app crash.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    } else {
+                        startForeground(NOTIF_ID, notif)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "startForeground FAILED — will degrade to background service", e)
+                    // If we can't go foreground (e.g. POST_NOTIFICATIONS denied on some
+                    // OEM ROMs), don't crash — just run as a regular service. The ktor
+                    // server will still work while the app is in the foreground.
+                }
                 // Observe client count → update notification
                 statsJob?.cancel()
                 statsJob = scope.launch {
                     SaatirilServer.clients.collect { clients ->
                         val authCount = clients.count { it.authenticated }
-                        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                        nm.notify(NOTIF_ID, buildNotification("Saatiril server aktif • $authCount klien terhubung", authCount))
+                        try {
+                            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                            nm.notify(NOTIF_ID, buildNotification("Saatiril server aktif • $authCount klien terhubung", authCount))
+                        } catch (_: Exception) { /* notification update failed — ignore */ }
                     }
                 }
             }

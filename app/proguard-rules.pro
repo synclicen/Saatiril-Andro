@@ -35,6 +35,21 @@
 -dontwarn io.ktor.**
 -dontwarn org.slf4j.**
 
+# ktor CIO engine internals — accessed via reflection, must survive R8
+-keep class io.ktor.server.cio.** { *; }
+-keep class io.ktor.util.** { *; }
+-keep class io.ktor.events.** { *; }
+-keep class io.ktor.application.** { *; }
+-keep class io.ktor.config.** { *; }
+-keep class io.ktor.features.** { *; }
+-keep class io.ktor.http.** { *; }
+-keep class io.ktor.network.** { *; }
+-keep class io.ktor.websocket.** { *; }
+
+# ktor service loaders (META-INF/services)
+-keep class META-INF.services.**
+-keepdirectories META-INF/services
+
 # ── ZXing (QR code generation for joining the LAN server) ──
 -keep class com.google.zxing.** { *; }
 -dontwarn com.google.zxing.**

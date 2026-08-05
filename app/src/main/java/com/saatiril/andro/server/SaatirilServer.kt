@@ -106,6 +106,11 @@ object SaatirilServer {
     /**
      * Start the ktor server on the first free port from 3003 upward.
      * Safe to call repeatedly (no-op if already running).
+     *
+     * @throws RuntimeException if the server fails to bind any port or ktor
+     *   initialization fails (e.g. missing class after R8 shrinking). The
+     *   caller ([com.saatiril.andro.data.AdminViewModel]) catches this and
+     *   surfaces it to the user instead of crashing.
      */
     fun start(@Suppress("UNUSED_PARAMETER") context: Context) {
         if (_running.value) {
@@ -117,7 +122,7 @@ object SaatirilServer {
         Log.i(TAG, "Starting Saatiril LAN server. LAN IP: $ip")
 
         var boundPort = DEFAULT_PORT
-        var lastError: Exception? = null
+        var lastError: Throwable? = null
         for (attempt in 0 until MAX_PORT_ATTEMPTS) {
             val tryPort = DEFAULT_PORT + attempt
             try {
@@ -137,16 +142,19 @@ object SaatirilServer {
                 boundPort = tryPort
                 lastError = null
                 break
-            } catch (e: Exception) {
-                Log.w(TAG, "Port $tryPort busy: ${e.message}")
+            } catch (e: Throwable) {
+                // Catch Throwable (not just Exception) so NoClassDefFoundError
+                // and NoSuchMethodError (common after R8 shrinking) are caught
+                // and reported, rather than crashing the app silently.
+                Log.w(TAG, "Port $tryPort bind/init failed: ${e.javaClass.simpleName}: ${e.message}")
                 lastError = e
             }
         }
 
         if (lastError != null && engine == null) {
-            Log.e(TAG, "Failed to bind any port", lastError)
+            Log.e(TAG, "Failed to bind any port or init ktor", lastError)
             _running.value = false
-            return
+            throw RuntimeException("SaatirilServer init failed: ${lastError.message}", lastError)
         }
 
         _port.value = boundPort
