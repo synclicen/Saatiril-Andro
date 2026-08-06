@@ -93,11 +93,11 @@ private fun ProsesiScreen(viewModel: AdminViewModel) {
     Column(
         modifier = Modifier.fillMaxSize().background(BG)
     ) {
-        // MC panel (top, takes ~45% of screen)
+        // MC panel (top, 35% of screen — compact so camera gets more space)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.45f)
+                .weight(0.35f)
         ) {
             McScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
@@ -108,11 +108,11 @@ private fun ProsesiScreen(viewModel: AdminViewModel) {
                 .height(1.dp)
                 .background(BORDER)
         )
-        // Operator camera (bottom, takes ~55% of screen)
+        // Operator camera (bottom, 65% of screen — more space for preview)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.55f)
+                .weight(0.65f)
         ) {
             AdminOperatorScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }

@@ -136,25 +136,33 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                 Text("${stats.connectedClients} klien • ${stats.totalMessagesRelayed} pesan • uptime ${stats.uptimeMs / 1000}s",
                     style = TextStyle(color = MUTED, fontSize = 10.sp))
 
-                // Per-role QR codes (MC Ch.1, Operator Ch.1, Operator Ch.2) — matches Electron
+                // Per-role QR codes — mode-aware (matches Electron admin-dashboard.tsx:1008-1500)
+                // single: MC Ch.1 + Op Ch.1 (2 QRs)
+                // dual: MC Ch.1 + MC Ch.2 + Op Ch.1 + Op Ch.2 (4 QRs)
+                // single-photoshoot: MC Ch.1 + Op Ch.1 (2 QRs)
+                // dual-photoshoot: MC Ch.1 + Op Ch.1 + Op Ch.2 (3 QRs — 1 MC, 2 operators)
                 Text("Scan QR untuk gabung:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val baseUrl = "http://${lanIp ?: "0.0.0.0"}:$port"
-                    QrCodeWithLabel(
-                        url = "$baseUrl/?role=mc&channel=1",
-                        label = "MC Ch.1",
-                        modifier = Modifier.weight(1f)
-                    )
-                    QrCodeWithLabel(
-                        url = "$baseUrl/?role=operator&channel=1",
-                        label = "Operator Ch.1",
-                        modifier = Modifier.weight(1f)
-                    )
-                    QrCodeWithLabel(
-                        url = "$baseUrl/?role=operator&channel=2",
-                        label = "Operator Ch.2",
-                        modifier = Modifier.weight(1f)
-                    )
+                val baseUrl = "http://${lanIp ?: "0.0.0.0"}:$port"
+                val mode = proj?.config?.mode ?: com.saatiril.andro.data.CameraModes.SINGLE
+                val isDual = com.saatiril.andro.data.CameraModes.isDualMode(mode)
+                val isPhotoshoot = com.saatiril.andro.data.CameraModes.isPhotoshootMode(mode)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (isDual && !isPhotoshoot) {
+                        // dual: 4 QRs — MC1, MC2, Op1, Op2
+                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=2", label = "MC Ch.2", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=2", label = "Op Ch.2", modifier = Modifier.weight(1f))
+                    } else if (isDual && isPhotoshoot) {
+                        // dual-photoshoot: 3 QRs — MC1, Op1, Op2
+                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=2", label = "Op Ch.2", modifier = Modifier.weight(1f))
+                    } else {
+                        // single / single-photoshoot: 2 QRs — MC1, Op1
+                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
+                    }
                 }
 
                 // Session password display (if set)
