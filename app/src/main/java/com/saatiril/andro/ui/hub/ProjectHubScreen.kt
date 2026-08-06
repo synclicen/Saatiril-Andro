@@ -39,7 +39,6 @@ private val RED = Color(0xFFef4444)
 @Composable
 fun ProjectHubScreen(viewModel: AdminViewModel) {
     val projects by viewModel.savedProjects.collectAsState()
-    val license by viewModel.licenseStatus.collectAsState()
 
     LaunchedEffect(Unit) { viewModel.refreshProjects() }
 
@@ -51,28 +50,10 @@ fun ProjectHubScreen(viewModel: AdminViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header
+        // Header — clean, no logo, no license text (user request)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = GOLD, modifier = Modifier.size(28.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("SAATIRIL", style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = GOLD))
-                Text("Admin • ${license.daysLeft} hari lisensi tersisa", style = TextStyle(color = MUTED, fontSize = 11.sp))
-            }
-            // Developer generator icon (discrete — only developers know what it's for)
-            IconButton(
-                onClick = { viewModel.openGenerator() },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(Icons.Default.Key, contentDescription = "Generator Kode (Developer)", tint = MUTED.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
-            }
-            OutlinedButton(
-                onClick = { viewModel.deactivateLicense() },
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MUTED),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BORDER),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                Text("Lisensi", fontSize = 10.sp)
+                Text("Proyek Wisuda", style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White))
             }
         }
 
