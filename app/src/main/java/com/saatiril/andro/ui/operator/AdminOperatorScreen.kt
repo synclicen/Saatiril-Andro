@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -265,19 +266,43 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
 
-        // ─── Camera preview ───
+        // ─── Camera preview — forced to project aspect ratio ───
+        // The preview Box is sized to match the selected ratio (e.g. 3:4 = portrait,
+        // 4:3 = landscape, 16:9 = widescreen). The TextureView fills the Box,
+        // and the Box is aspect-locked so the preview never goes offside.
+        val ratio = project?.config?.ratio ?: "4:3"
+        val aspectRatio = when (ratio) {
+            "4:3" -> 4f / 3f
+            "3:4" -> 3f / 4f
+            "16:9" -> 16f / 9f
+            "9:16" -> 9f / 16f
+            "2:3" -> 2f / 3f
+            "4:6" -> 4f / 6f
+            "1:1" -> 1f
+            else -> 4f / 3f
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
-                .border(1.dp, BORDER, RoundedCornerShape(12.dp))
+                .border(1.dp, BORDER, RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
         ) {
-            AndroidView(
-                factory = { textureView },
-                modifier = Modifier.fillMaxSize()
-            )
+            // Aspect-ratio-locked container for the camera preview
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(aspectRatio)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.Black)
+            ) {
+                AndroidView(
+                    factory = { textureView },
+                    modifier = Modifier.fillMaxSize()
+                )
 
             // Gridline overlay (matches Electron operator-panel.tsx:1370-1640)
             if (gridlineEnabled) {
@@ -399,7 +424,8 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     Text(err, Modifier.padding(8.dp), style = TextStyle(color = Color.White, fontSize = 10.sp))
                 }
             }
-        }
+            } // end inner aspect-ratio Box
+        } // end outer camera preview Box
 
         // ─── Photoshoot: operator queue + search (matches Electron renderOpSearch) ───
         if (isPhotoshoot && opSentQueue.isNotEmpty()) {
@@ -587,27 +613,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
 
-        // ─── Captured preview thumbnail + shutter ───
+        // ─── Shutter button (no gallery thumbnail — user request) ───
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Last captured photo thumbnail
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(PANEL)
-                    .border(1.dp, BORDER, RoundedCornerShape(6.dp))
-            ) {
-                capturedBitmap?.let { bmp ->
-                    Image(bitmap = bmp.asImageBitmap(), contentDescription = "Foto terakhir", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                } ?: run {
-                    Icon(Icons.Default.Photo, contentDescription = null, tint = MUTED.copy(alpha = 0.3f), modifier = Modifier.size(24.dp).align(Alignment.Center))
-                }
-            }
-
             // Shutter button — label changes based on capture phase
             val shutterLabel = when {
                 isCapturing -> "Menyimpan..."

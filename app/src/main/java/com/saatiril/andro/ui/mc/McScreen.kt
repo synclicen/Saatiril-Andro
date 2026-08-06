@@ -84,14 +84,11 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
 
     val scrollState = rememberScrollState()
 
-    // Auto-scroll to keep the active/next pending student visible
+    // Auto-scroll to TOP when student is called or done — so MC sees the
+    // most recently active/done student at the top of the queue list.
+    // (matches Electron mc-panel.tsx:157-165 scrollIntoView to active row)
     LaunchedEffect(active.firstOrNull()?.id, done.size) {
-        if (!isPhotoshoot) {
-            val nextIdx = channelStudents.indexOfFirst { it.status == "pending" }
-            if (nextIdx >= 0) {
-                scrollState.animateScrollTo((nextIdx * 45).coerceAtLeast(0))
-            }
-        }
+        scrollState.animateScrollTo(0)
     }
 
     // ── STICKY HEADER (channel + call button + active card — never scrolls away) ──
@@ -124,11 +121,18 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                 }
             }
 
-            // Non-photoshoot: PANGGIL button (STICKY — always visible)
+            // Non-photoshoot: Next student name (info) + PANGGIL button (separate)
             if (!isPhotoshoot) {
+                // Next student name display (read-only info for MC)
+                if (nextPending != null && !hasActive) {
+                    val shortName = nextPending.nama.take(30).ifBlank { nextPending.nim.take(30) }
+                    val shortNim = nextPending.nim.take(15)
+                    Text("→ $shortName ($shortNim)", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                }
+                // PANGGIL button (separate, compact)
                 Button(
                     onClick = { nextPending?.let { viewModel.callStudent(it, myChannel) } },
-                    modifier = Modifier.fillMaxWidth().height(38.dp),
+                    modifier = Modifier.fillMaxWidth().height(32.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = when {
                             hasActive -> BORDER
@@ -136,21 +140,20 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                             else -> GOLD
                         }
                     ),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(6.dp),
                     enabled = !hasActive && nextPending != null,
                     contentPadding = PaddingValues(horizontal = 8.dp)
                 ) {
                     if (hasActive) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), color = GOLD, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), color = GOLD, strokeWidth = 2.dp)
                         Spacer(Modifier.width(4.dp))
-                        Text("TUNGGU KAMERA…", color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("TUNGGU KAMERA…", color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     } else if (nextPending != null) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp), tint = BG)
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp), tint = BG)
                         Spacer(Modifier.width(4.dp))
-                        val shortName = nextPending.nama.take(20).ifBlank { nextPending.nim.take(20) }
-                        Text("PANGGIL: $shortName", color = BG, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text("PANGGIL SEKARANG", color = BG, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     } else {
-                        Text("ANTREAN HABIS", color = MUTED, fontSize = 10.sp)
+                        Text("ANTREAN HABIS", color = MUTED, fontSize = 9.sp)
                     }
                 }
             }
