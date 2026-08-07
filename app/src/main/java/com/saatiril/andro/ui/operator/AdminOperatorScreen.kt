@@ -402,7 +402,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     Text(err, Modifier.padding(8.dp), style = TextStyle(color = Color.White, fontSize = 10.sp))
                 }
             }
-            }
         } // end camera preview Box
 
         // ─── Operator queue + search (ALL modes — matches Electron renderQueueList) ───
