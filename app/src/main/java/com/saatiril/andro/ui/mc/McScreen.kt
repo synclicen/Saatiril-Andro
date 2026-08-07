@@ -252,10 +252,21 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                     if (channelStudents.size > 50) Text("… dan ${channelStudents.size - 50} lainnya", style = TextStyle(color = MUTED, fontSize = 8.sp), modifier = Modifier.padding(2.dp))
                 }
             } else {
-                // Non-photoshoot: queue list with status badges
-                val queueFilter = if (q.isEmpty()) channelStudents else channelStudents.filter {
+                // Non-photoshoot: queue list SORTED — active first, then pending, then done
+                // so the current/next student is always at the top (auto-scroll target).
+                val rawFilter = if (q.isEmpty()) channelStudents else channelStudents.filter {
                     it.nama.contains(q, ignoreCase = true) || it.nim.contains(q, ignoreCase = true)
                 }
+                // Sort: active > pending > sent > done (active student rises to top)
+                val queueFilter = rawFilter.sortedWith(compareBy { s ->
+                    when {
+                        isActiveStatus(s.status) -> 0
+                        s.status == "pending" -> 1
+                        s.status == "sent" -> 2
+                        s.status == "done" -> 3
+                        else -> 4
+                    }
+                })
                 if (q.isNotEmpty()) {
                     OutlinedTextField(
                         value = searchQuery, onValueChange = { searchQuery = it },

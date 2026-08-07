@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -265,55 +266,89 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
 
-        // ─── Camera preview — fills available space, crop to ratio at capture ───
-        // The preview Box fills all available space. TextureView fills the Box.
-        // Camera switch button + status overlay are INSIDE this Box (always visible).
-        // The actual aspect-ratio crop happens at capture time via CameraCapture.processFrame.
+        // ─── Camera preview — aspect-ratio-locked to project ratio ───
+        // The outer Box fills available space (black background for letterbox bars).
+        // The inner Box is aspect-ratio-locked to the project's selected ratio.
+        // TextureView + gridline + frame overlay go INSIDE the inner box.
+        // Camera switch button + status overlay go in the OUTER box (always visible).
+        val ratio = project?.config?.ratio ?: "4:3"
+        val aspectRatio = when (ratio) {
+            "4:3" -> 4f / 3f
+            "3:4" -> 3f / 4f
+            "16:9" -> 16f / 9f
+            "9:16" -> 9f / 16f
+            "2:3" -> 2f / 3f
+            "4:6" -> 4f / 6f
+            "1:1" -> 1f
+            else -> 4f / 3f
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
-                .border(1.dp, BORDER, RoundedCornerShape(8.dp))
+                .border(1.dp, BORDER, RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
         ) {
-            AndroidView(
-                factory = { textureView },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // Gridline overlay (matches Electron operator-panel.tsx:1370-1640)
-            if (gridlineEnabled) {
-                GridlineCanvas(
-                    type = gridlineType,
-                    thickness = gridlineThickness,
-                    colorName = gridlineColor,
+            // Inner Box: aspect-ratio-locked container for camera + overlays
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(aspectRatio)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black)
+            ) {
+                AndroidView(
+                    factory = { textureView },
                     modifier = Modifier.fillMaxSize()
                 )
-            }
 
-            // Frame overlay on top of the preview (shows the PNG frame)
-            frameBitmap?.let { fb ->
-                Image(
-                    bitmap = fb.asImageBitmap(),
-                    contentDescription = "Frame overlay",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
-            }
+                // Gridline overlay (inside ratio box so it matches the preview)
+                if (gridlineEnabled) {
+                    GridlineCanvas(
+                        type = gridlineType,
+                        thickness = gridlineThickness,
+                        colorName = gridlineColor,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
-            // Camera status + source overlay (top-left)
+                // Frame overlay on top of the preview (shows the PNG frame)
+                frameBitmap?.let { fb ->
+                    Image(
+                        bitmap = fb.asImageBitmap(),
+                        contentDescription = "Frame overlay",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+
+                // Capture error overlay (inside ratio box)
+                captureError?.let { err ->
+                    Card(
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(4.dp),
+                        colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.8f)),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(err, Modifier.padding(4.dp), style = TextStyle(color = Color.White, fontSize = 8.sp))
+                    }
+                }
+            } // end inner aspect-ratio Box
+
+            // Camera status + source overlay (OUTER box — always visible, not clipped by ratio)
             Row(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(8.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(if (cameraConnected) GREEN else RED))
+                Box(Modifier.size(5.dp).clip(RoundedCornerShape(2.dp)).background(if (cameraConnected) GREEN else RED))
                 val srcLabel = when (cameraSource) { "uvc" -> "USB"; "builtin" -> "HP"; else -> "-" }
                 Text(
                     "Ch.$activeChannel • $srcLabel ${if (cameraConnected) "●" else "○"}",
@@ -389,17 +424,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             showCameraPicker = false
                         }
                     )
-                }
-            }
-
-            // Capture error overlay
-            captureError?.let { err ->
-                Card(
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.8f)),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(err, Modifier.padding(8.dp), style = TextStyle(color = Color.White, fontSize = 10.sp))
                 }
             }
         } // end camera preview Box
