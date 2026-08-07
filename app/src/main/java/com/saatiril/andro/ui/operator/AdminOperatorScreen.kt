@@ -315,13 +315,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     )
                 }
 
-                // Frame overlay on top of the preview (shows the PNG frame)
+                // Frame overlay on top of the preview — MATCHES ELECTRON exactly.
+                // Electron: <img src={frameData} className="absolute inset-0 w-full h-full object-fill" style={{ zIndex: 5 }} />
+                // The frame PNG is transparent in the center (where camera shows through)
+                // and opaque at the borders (decorative frame with text/logos).
+                // object-fill = ContentScale.FillBounds in Compose (stretches to fill container).
                 frameBitmap?.let { fb ->
                     Image(
                         bitmap = fb.asImageBitmap(),
                         contentDescription = "Frame overlay",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
+                        contentScale = ContentScale.FillBounds
                     )
                 }
 
