@@ -84,10 +84,17 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
 
     val scrollState = rememberScrollState()
 
-    // Auto-scroll to TOP when student is called or done — so MC sees the
-    // most recently active/done student at the top of the queue list.
-    // (matches Electron mc-panel.tsx:157-165 scrollIntoView to active row)
-    LaunchedEffect(active.firstOrNull()?.id, done.size) {
+    // Auto-scroll to TOP when queue state changes (student called, done, etc.)
+    // Use multiple triggers to ensure scroll fires on ANY status change.
+    val activeCount = active.size
+    val pendingCount = pending.size
+    val sentCount = sent.size
+    val doneCount = done.size
+    val activeId = active.firstOrNull()?.id ?: ""
+
+    LaunchedEffect(activeId, activeCount, pendingCount, sentCount, doneCount) {
+        // Small delay to let Compose recompose the list before scrolling
+        kotlinx.coroutines.delay(100)
         scrollState.animateScrollTo(0)
     }
 

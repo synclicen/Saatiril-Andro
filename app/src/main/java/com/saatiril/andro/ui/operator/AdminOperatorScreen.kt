@@ -12,7 +12,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -266,43 +265,22 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         }
 
-        // ─── Camera preview — forced to project aspect ratio ───
-        // The preview Box is sized to match the selected ratio (e.g. 3:4 = portrait,
-        // 4:3 = landscape, 16:9 = widescreen). The TextureView fills the Box,
-        // and the Box is aspect-locked so the preview never goes offside.
-        val ratio = project?.config?.ratio ?: "4:3"
-        val aspectRatio = when (ratio) {
-            "4:3" -> 4f / 3f
-            "3:4" -> 3f / 4f
-            "16:9" -> 16f / 9f
-            "9:16" -> 9f / 16f
-            "2:3" -> 2f / 3f
-            "4:6" -> 4f / 6f
-            "1:1" -> 1f
-            else -> 4f / 3f
-        }
-
+        // ─── Camera preview — fills available space, crop to ratio at capture ───
+        // The preview Box fills all available space. TextureView fills the Box.
+        // Camera switch button + status overlay are INSIDE this Box (always visible).
+        // The actual aspect-ratio crop happens at capture time via CameraCapture.processFrame.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
-                .border(1.dp, BORDER, RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center
+                .border(1.dp, BORDER, RoundedCornerShape(8.dp))
         ) {
-            // Aspect-ratio-locked container for the camera preview
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(aspectRatio)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Black)
-            ) {
-                AndroidView(
-                    factory = { textureView },
-                    modifier = Modifier.fillMaxSize()
-                )
+            AndroidView(
+                factory = { textureView },
+                modifier = Modifier.fillMaxSize()
+            )
 
             // Gridline overlay (matches Electron operator-panel.tsx:1370-1640)
             if (gridlineEnabled) {
@@ -424,12 +402,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     Text(err, Modifier.padding(8.dp), style = TextStyle(color = Color.White, fontSize = 10.sp))
                 }
             }
-            } // end inner aspect-ratio Box
-        } // end outer camera preview Box
+            }
+        } // end camera preview Box
 
-        // ─── Photoshoot: operator queue + search (matches Electron renderOpSearch) ───
+        // ─── Operator queue + search (ALL modes — matches Electron renderQueueList) ───
+        // Photoshoot: show 'sent' students (operator picks who to photograph)
+        // Non-photoshoot: show pending+active queue for this channel
         if (isPhotoshoot && opSentQueue.isNotEmpty()) {
-            // Search box
+            // Photoshoot: search box + sent queue
             OutlinedTextField(
                 value = opSearchQuery, onValueChange = { opSearchQuery = it },
                 label = { Text("Cari peserta dikirim…", color = MUTED, fontSize = 10.sp) },
@@ -470,6 +450,32 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         } else if (isPhotoshoot && opSentQueue.isEmpty()) {
             Text("Menunggu MC mengirim peserta…", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(4.dp))
+        } else if (!isPhotoshoot) {
+            // Non-photoshoot: show channel queue (pending + active students)
+            val opQueue = db.filter {
+                it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status))
+            }
+            if (opQueue.isNotEmpty()) {
+                Text("Antrean Ch.$myChannel (${opQueue.size})", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                Column(modifier = Modifier.heightIn(max = 80.dp).verticalScroll(rememberScrollState())) {
+                    opQueue.take(15).forEachIndexed { idx, s ->
+                        val isActive = isActiveStatus(s.status)
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                            colors = CardDefaults.cardColors(containerColor = if (isActive) CARD else PANEL),
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.5f) else BORDER.copy(alpha = 0.2f))
+                        ) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("${idx + 1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
+                                Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(if (isActive) GOLD else MUTED.copy(alpha = 0.3f)))
+                                Text(s.nama.ifBlank { s.nim }.take(25), style = TextStyle(color = if (isActive) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                                if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ─── Shutter mode selector (manual / 3s / 5s / 10s / hand) ───
