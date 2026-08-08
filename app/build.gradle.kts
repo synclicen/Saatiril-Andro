@@ -26,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 37
-        versionName = "1.5.0-saatiril-andro"
+        versionCode = 38
+        versionName = "1.5.1-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -127,6 +127,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.runtime:runtime-livedata")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
