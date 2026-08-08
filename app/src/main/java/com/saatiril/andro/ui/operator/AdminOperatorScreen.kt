@@ -318,42 +318,38 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         return
     }
 
+    // Collapsible panels state
+    var showQueuePanel by remember { mutableStateOf(false) }
+    var showSettingsPanel by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(BG)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .background(BG),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // ─── Current target card ───
+        // ─── Compact target info bar (single line, ~4% of screen) ───
         activeStudent?.let { student ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = CARD.copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(10.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = GOLD, modifier = Modifier.size(20.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp), maxLines = 1)
-                        Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 11.sp, fontFamily = FontFamily.Monospace))
-                    }
-                    Card(colors = CardDefaults.cardColors(containerColor = GOLD), shape = RoundedCornerShape(4.dp)) {
-                        Text("Ch.$activeChannel", Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 10.sp))
-                    }
+                Icon(Icons.Default.Person, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
+                Text(student.nama.take(25).ifBlank { student.nim.take(25) }, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                Text(student.nim.take(15), style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace))
+                Card(colors = CardDefaults.cardColors(containerColor = GOLD), shape = RoundedCornerShape(3.dp)) {
+                    Text("Ch.$activeChannel", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 8.sp))
                 }
             }
         } ?: run {
-            Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(10.dp)) {
-                Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Info, contentDescription = null, tint = MUTED, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("MC belum memanggil mahasiswa. Buka tab MC untuk memanggil.", style = TextStyle(color = MUTED, fontSize = 11.sp))
-                }
+            // Compact "waiting" text
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MUTED, modifier = Modifier.size(12.dp))
+                Text(" Menunggu panggilan MC…", style = TextStyle(color = MUTED, fontSize = 10.sp))
             }
         }
 
@@ -576,320 +572,153 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         } // end camera preview Box
 
-        // ─── Operator queue + search (ALL modes — matches Electron renderQueueList) ───
-        // Photoshoot: show 'sent' students (operator picks who to photograph)
-        // Non-photoshoot: show pending+active queue for this channel
-        if (isPhotoshoot && opSentQueue.isNotEmpty()) {
-            // Photoshoot: search box + sent queue
-            OutlinedTextField(
-                value = opSearchQuery, onValueChange = { opSearchQuery = it },
-                label = { Text("Cari peserta dikirim…", color = MUTED, fontSize = 10.sp) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                    focusedBorderColor = GREEN, unfocusedBorderColor = BORDER, cursorColor = GREEN,
-                    focusedContainerColor = PANEL, unfocusedContainerColor = PANEL
-                ),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MUTED, modifier = Modifier.size(14.dp)) },
-                trailingIcon = { if (opSearchQuery.isNotEmpty()) Icon(Icons.Default.Close, contentDescription = "Hapus", tint = MUTED, modifier = Modifier.size(14.dp).clickable { opSearchQuery = "" }) },
-                textStyle = TextStyle(fontSize = 11.sp)
-            )
-            // Queue count
-            Text("Antrean: ${opSentQueue.size} dikirim", style = TextStyle(color = CYAN, fontSize = 10.sp, fontWeight = FontWeight.Bold))
-            // Queue list (scrollable, max 4 items visible)
-            Column(modifier = Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState())) {
-                opSearchResults.take(20).forEach { s ->
-                    val isSelected = activeStudent?.id == s.id
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp).clickable {
-                            opSelectedStudent = s
-                        },
-                        colors = CardDefaults.cardColors(containerColor = if (isSelected) CARD else PANEL),
-                        shape = RoundedCornerShape(6.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) GOLD else BORDER.copy(alpha = 0.3f))
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(s.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = Color.White, fontSize = 10.sp), maxLines = 1)
-                                Text(s.nim.ifBlank { "-" }, style = TextStyle(color = MUTED, fontSize = 8.sp, fontFamily = FontFamily.Monospace))
-                            }
-                            if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
-                        }
-                    }
-                }
-            }
-        } else if (isPhotoshoot && opSentQueue.isEmpty()) {
-            Text("Menunggu MC mengirim peserta…", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(4.dp))
-        } else if (!isPhotoshoot) {
-            // Non-photoshoot: show channel queue (pending + active students)
-            val opQueue = db.filter {
-                it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status))
-            }
-            if (opQueue.isNotEmpty()) {
-                Text("Antrean Ch.$myChannel (${opQueue.size})", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
-                Column(modifier = Modifier.heightIn(max = 80.dp).verticalScroll(rememberScrollState())) {
-                    opQueue.take(15).forEachIndexed { idx, s ->
-                        val isActive = isActiveStatus(s.status)
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                            colors = CardDefaults.cardColors(containerColor = if (isActive) CARD else PANEL),
-                            shape = RoundedCornerShape(4.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.5f) else BORDER.copy(alpha = 0.2f))
-                        ) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("${idx + 1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
-                                Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(if (isActive) GOLD else MUTED.copy(alpha = 0.3f)))
-                                Text(s.nama.ifBlank { s.nim }.take(25), style = TextStyle(color = if (isActive) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
-                                if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ─── Shutter mode selector (manual / 3s / 5s / 10s / hand) ───
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // ─── COMPACT BOTTOM BAR (shutter + toggles, ~20% of screen) ───
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(PANEL.copy(alpha = 0.5f))
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s", "hand" to "Tangan").forEach { (mode, label) ->
-                Card(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { shutterMode = mode }
-                        .border(1.dp, if (shutterMode == mode) GOLD else BORDER, RoundedCornerShape(6.dp)),
-                    colors = CardDefaults.cardColors(containerColor = if (shutterMode == mode) CARD else PANEL),
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(label, modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp).fillMaxWidth(),
-                        style = TextStyle(color = if (shutterMode == mode) GOLD else MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center))
-                }
-            }
-        }
-
-        // ─── Capture phase indicator (Toga / Ijazah / Sending) ───
-        val phaseLabel = when (capturePhase) {
-            CapturePhase.STANDBY -> "Standby"
-            CapturePhase.READY_1 -> "Pose 1 — Toga"
-            CapturePhase.READY_2 -> "Pose 2 — Ijazah"
-            CapturePhase.SENDING -> "Mengirim..."
-        }
-        val photosCaptured = opCapturedPhotos.size
-        Text(
-            "Fase: $phaseLabel  •  $photosCaptured foto tersimpan",
-            style = TextStyle(color = if (capturePhase == CapturePhase.SENDING) GREEN else GOLD, fontSize = 10.sp, fontWeight = FontWeight.Medium),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // Timer countdown overlay (big number in center of preview) + cancel button
-        if (timerCountdown != null) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
-                    shape = RoundedCornerShape(50)
-                ) {
-                    Text(
-                        "${timerCountdown}",
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                        style = TextStyle(color = GOLD, fontSize = 36.sp, fontWeight = FontWeight.Black)
-                    )
-                }
-            }
-            // Cancel timer button (matches Electron Esc key / BATAL button)
-            Button(
-                onClick = {
-                    timerJob?.cancel()
-                    timerJob = null
-                    timerCountdown = null
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = RED),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
-                Spacer(Modifier.width(4.dp))
-                Text("BATAL", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        // Flash overlay (white flash on capture — matches Electron operator-panel.tsx:1738-1747)
-        if (showFlash) {
-            Box(Modifier.fillMaxWidth().height(100.dp).background(Color.White.copy(alpha = 0.6f)))
-        }
-
-        // Gridline toggle button (matches Electron Grid toggle)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Grid toggle
-            Card(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable { gridlineEnabled = !gridlineEnabled }
-                    .border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(6.dp)),
-                colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL),
-                shape = RoundedCornerShape(6.dp)
-            ) {
-                Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.GridView, contentDescription = "Grid", tint = if (gridlineEnabled) GOLD else MUTED, modifier = Modifier.size(11.dp))
-                    Spacer(Modifier.width(2.dp))
-                    Text("Grid", style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 8.sp))
-                }
-            }
-            // Grid type selector (only when enabled)
-            if (gridlineEnabled) {
-                listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (type, label) ->
-                    Card(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { gridlineType = type }
-                            .border(1.dp, if (gridlineType == type) GOLD else BORDER, RoundedCornerShape(4.dp)),
-                        colors = CardDefaults.cardColors(containerColor = if (gridlineType == type) CARD else PANEL),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text(label, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-                            style = TextStyle(color = if (gridlineType == type) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold))
-                    }
-                }
-                // Thickness selector (1=thin, 2=medium, 3=thick)
-                listOf(1 to "T", 2 to "M", 3 to "K").forEach { (thick, label) ->
-                    Card(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { gridlineThickness = thick }
-                            .border(1.dp, if (gridlineThickness == thick) GOLD else BORDER, RoundedCornerShape(4.dp)),
-                        colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == thick) CARD else PANEL),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text(label, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-                            style = TextStyle(color = if (gridlineThickness == thick) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+            // Row 1: Shutter modes (compact)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                listOf("manual" to "M", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s", "hand" to "✋").forEach { (mode, label) ->
+                    Card(modifier = Modifier.weight(1f).clip(RoundedCornerShape(4.dp)).clickable { shutterMode = mode }
+                        .border(1.dp, if (shutterMode == mode) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                        colors = CardDefaults.cardColors(containerColor = if (shutterMode == mode) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                        Text(label, modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp).fillMaxWidth(),
+                            style = TextStyle(color = if (shutterMode == mode) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center))
                     }
                 }
             }
-        }
-        // Color selector row (only when gridline enabled)
-        if (gridlineEnabled) {
+            // Row 2: Shutter button + Queue toggle + Settings toggle
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Warna:", style = TextStyle(color = MUTED, fontSize = 8.sp))
-                listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (name, color) ->
-                    Card(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { gridlineColor = name }
-                            .border(2.dp, if (gridlineColor == name) GOLD else Color.Transparent, RoundedCornerShape(8.dp)),
-                        colors = CardDefaults.cardColors(containerColor = color),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {}
+                val shutterLabel = when {
+                    isCapturing -> "..."
+                    capturePhase == CapturePhase.READY_2 -> "Ijazah"
+                    capturePhase == CapturePhase.SENDING -> "Kirim"
+                    else -> if (CameraModes.isPhotoshootMode(project?.config?.mode ?: CameraModes.SINGLE)) "Foto" else "Toga"
+                }
+                Button(
+                    onClick = {
+                        if (isCapturing || activeStudent == null || timerCountdown != null) return@Button
+                        captureError = null
+                        val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
+                        val doCapture: () -> Unit = {
+                            isCapturing = true
+                            try {
+                                val bitmap = textureView.bitmap
+                                val proj = project
+                                if (bitmap != null && proj != null) {
+                                    val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
+                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                    showFlash = true
+                                    kotlinx.coroutines.MainScope().launch { kotlinx.coroutines.delay(200); showFlash = false }
+                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                                } else { captureError = if (bitmap == null) "Preview belum siap." else "Proyek tidak ditemukan." }
+                            } catch (e: Exception) { captureError = "Gagal: ${e.message}" } finally { isCapturing = false }
+                        }
+                        if (timerDuration > 0) {
+                            timerCountdown = timerDuration
+                            timerJob = kotlinx.coroutines.MainScope().launch {
+                                for (i in timerDuration downTo 1) { timerCountdown = i; kotlinx.coroutines.delay(1000) }
+                                timerCountdown = null; timerJob = null; doCapture()
+                            }
+                        } else { doCapture() }
+                    },
+                    modifier = Modifier.weight(1f).height(42.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER),
+                    shape = RoundedCornerShape(8.dp), enabled = activeStudent != null && !isCapturing && timerCountdown == null,
+                    contentPadding = PaddingValues(horizontal = 6.dp)
+                ) {
+                    if (isCapturing) { CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BG, strokeWidth = 2.dp); Spacer(Modifier.width(4.dp)); Text("Simpan", color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    else if (timerCountdown != null) { Text("$timerCountdown", color = BG, fontSize = 14.sp, fontWeight = FontWeight.Black) }
+                    else { Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = BG); Spacer(Modifier.width(4.dp)); Text(shutterLabel, color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                }
+                // Queue toggle
+                Card(modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)).clickable { showQueuePanel = !showQueuePanel; showSettingsPanel = false }
+                    .border(1.dp, if (showQueuePanel) GOLD else BORDER, RoundedCornerShape(8.dp)),
+                    colors = CardDefaults.cardColors(containerColor = if (showQueuePanel) CARD else PANEL), shape = RoundedCornerShape(8.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Default.List, contentDescription = "Antrean", tint = if (showQueuePanel) GOLD else MUTED, modifier = Modifier.size(18.dp)) }
+                }
+                // Settings toggle
+                Card(modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)).clickable { showSettingsPanel = !showSettingsPanel; showQueuePanel = false }
+                    .border(1.dp, if (showSettingsPanel) GOLD else BORDER, RoundedCornerShape(8.dp)),
+                    colors = CardDefaults.cardColors(containerColor = if (showSettingsPanel) CARD else PANEL), shape = RoundedCornerShape(8.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Default.Tune, contentDescription = "Pengaturan", tint = if (showSettingsPanel) GOLD else MUTED, modifier = Modifier.size(18.dp)) }
+                }
+            }
+            // Timer cancel
+            if (timerCountdown != null) {
+                Button(onClick = { timerJob?.cancel(); timerJob = null; timerCountdown = null },
+                    modifier = Modifier.fillMaxWidth().height(28.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RED), shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp)) { Text("BATAL", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+            }
+            // Collapsible Queue Panel
+            if (showQueuePanel) {
+                Card(modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp), colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(6.dp)) {
+                    Column(Modifier.padding(4.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (isPhotoshoot) {
+                            Text("Dikirim (${opSentQueue.size})", style = TextStyle(color = CYAN, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                            opSentQueue.take(15).forEach { s ->
+                                val isSelected = activeStudent?.id == s.id
+                                Row(Modifier.fillMaxWidth().clickable { opSelectedStudent = s }.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(10.dp))
+                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (isSelected) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                                    if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 8.sp))
+                                }
+                            }
+                        } else {
+                            val opQueue = db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
+                            Text("Ch.$myChannel (${opQueue.size})", style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                            opQueue.take(15).forEachIndexed { i, s ->
+                                val a = isActiveStatus(s.status)
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp), modifier = Modifier.width(12.dp))
+                                    Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(if (a) GOLD else MUTED.copy(alpha = 0.3f)))
+                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                                    if (a) Text("◆", style = TextStyle(color = GOLD, fontSize = 7.sp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Collapsible Settings Panel
+            if (showSettingsPanel) {
+                Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(6.dp)) {
+                    Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        val phaseLabel = when (capturePhase) { CapturePhase.STANDBY -> "Standby"; CapturePhase.READY_1 -> "Pose 1 — Toga"; CapturePhase.READY_2 -> "Pose 2 — Ijazah"; CapturePhase.SENDING -> "Mengirim..." }
+                        Text("Fase: $phaseLabel • ${opCapturedPhotos.size} foto", style = TextStyle(color = GOLD, fontSize = 9.sp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Card(modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { gridlineEnabled = !gridlineEnabled }.border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                                colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                                Text("Grid", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 8.sp))
+                            }
+                            if (gridlineEnabled) {
+                                listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (t, l) ->
+                                    Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineType = t }.border(1.dp, if (gridlineType == t) GOLD else BORDER, RoundedCornerShape(3.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = if (gridlineType == t) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineType == t) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
+                                }
+                                listOf(1 to "T", 2 to "M", 3 to "K").forEach { (th, l) ->
+                                    Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineThickness = th }.border(1.dp, if (gridlineThickness == th) GOLD else BORDER, RoundedCornerShape(3.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == th) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineThickness == th) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
+                                }
+                            }
+                        }
+                        if (gridlineEnabled) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (n, c) ->
+                                    Card(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(7.dp)).clickable { gridlineColor = n }.border(2.dp, if (gridlineColor == n) GOLD else Color.Transparent, RoundedCornerShape(7.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(7.dp)) {}
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-
-        // ─── Shutter button (no gallery thumbnail — user request) ───
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Shutter button — label changes based on capture phase
-            val shutterLabel = when {
-                isCapturing -> "Menyimpan..."
-                capturePhase == CapturePhase.READY_2 -> "Tangkap Ijazah"
-                capturePhase == CapturePhase.SENDING -> "Mengirim..."
-                else -> "Tangkap ${if (CameraModes.isPhotoshootMode(project?.config?.mode ?: CameraModes.SINGLE)) "Foto" else "Toga"}"
-            }
-
-            Button(
-                onClick = {
-                    if (isCapturing || activeStudent == null || timerCountdown != null) return@Button
-                    captureError = null
-
-                    // Timer mode: start countdown, then capture
-                    val timerDuration = when (shutterMode) {
-                        "timer-3" -> 3
-                        "timer-5" -> 5
-                        "timer-10" -> 10
-                        else -> 0
-                    }
-
-                    val doCapture: () -> Unit = {
-                        isCapturing = true
-                        try {
-                            val bitmap = textureView.bitmap
-                            val proj = project
-                            if (bitmap != null && proj != null) {
-                                val processed = try {
-                                    CameraCapture.processFrame(
-                                        sourceBitmap = bitmap,
-                                        config = proj.config,
-                                        frameBitmap = frameBitmap
-                                    )
-                                } catch (e: Exception) {
-                                    bitmap
-                                }
-                                capturedBitmap = processed
-                                val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                                // Flash overlay effect (matches Electron operator-panel.tsx:1738-1747)
-                                showFlash = true
-                                kotlinx.coroutines.MainScope().launch {
-                                    kotlinx.coroutines.delay(200)
-                                    showFlash = false
-                                }
-                                viewModel.handleLocalCapture(activeStudent, base64, activeChannel)
-                            } else {
-                                captureError = if (bitmap == null) "Preview belum siap, coba lagi." else "Proyek tidak ditemukan."
-                            }
-                        } catch (e: Exception) {
-                            captureError = "Gagal capture: ${e.message}"
-                        } finally {
-                            isCapturing = false
-                        }
-                    }
-
-                    if (timerDuration > 0) {
-                        // Countdown timer — store job so it can be cancelled
-                        timerCountdown = timerDuration
-                        timerJob = kotlinx.coroutines.MainScope().launch {
-                            for (i in timerDuration downTo 1) {
-                                timerCountdown = i
-                                kotlinx.coroutines.delay(1000)
-                            }
-                            timerCountdown = null
-                            timerJob = null
-                            doCapture()
-                        }
-                    } else {
-                        doCapture()
-                    }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER
-                ),
-                shape = RoundedCornerShape(14.dp),
-                enabled = activeStudent != null && !isCapturing && timerCountdown == null
-            ) {
-                if (isCapturing) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Menyimpan...", color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                } else if (timerCountdown != null) {
-                    Text("$timerCountdown...", color = BG, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                } else {
-                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(24.dp), tint = BG)
-                    Spacer(Modifier.width(6.dp))
-                    Text(shutterLabel, color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
     }
 }
 
