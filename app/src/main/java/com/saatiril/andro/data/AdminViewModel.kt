@@ -627,6 +627,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         if (currentPhotos.size < photosPerSession) {
             // Not enough photos yet — advance the phase, wait for the next shutter
             _capturePhase.value = if (currentPhotos.size == 1) CapturePhase.READY_2 else CapturePhase.READY_1
+            // #11: Emit OP_PROGRESS so MC tab shows live operator status (matches Electron operator-panel.tsx:805)
+            val progressMsg = if (currentPhotos.size == 1) "Pose 1 OK — Siap Foto 2" else "Siap Foto 1"
+            _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, progressMsg) }
+            SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
+                OpProgressData(channel = channel, status = progressMsg))
             return
         }
 
@@ -691,6 +696,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         if (!isPhotoshoot) {
             SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(student.id, channel))
         }
+        // #11: Emit OP_PROGRESS "Selesai" so MC knows operator is done (matches Electron operator-panel.tsx:907)
+        _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, "Selesai — Menunggu target...") }
+        SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
+            OpProgressData(channel = channel, status = "Selesai — Menunggu target..."))
         pushSyncDb()
 
         // Reset capture state for the next student

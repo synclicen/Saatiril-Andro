@@ -54,6 +54,26 @@ fun MainScaffold(viewModel: AdminViewModel) {
     val running by viewModel.serverRunning.collectAsState()
 
     var selectedTab by remember { mutableStateOf(Tab.PROSESI) }
+    var isFullscreen by remember { mutableStateOf(false) }
+
+    // #7: Fullscreen immersive mode toggle
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? android.app.Activity
+    LaunchedEffect(isFullscreen) {
+        activity?.window?.let { window ->
+            if (isFullscreen) {
+                android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN
+                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+                controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize().background(BG),
@@ -66,6 +86,8 @@ fun MainScaffold(viewModel: AdminViewModel) {
                 port = port,
                 clientCount = clients.count { it.authenticated },
                 running = running,
+                isFullscreen = isFullscreen,
+                onToggleFullscreen = { isFullscreen = !isFullscreen },
                 onStop = { viewModel.stopServer() }
             )
         },
@@ -127,6 +149,8 @@ private fun TopBar(
     port: Int,
     clientCount: Int,
     running: Boolean,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
     onStop: () -> Unit
 ) {
     Surface(color = PANEL, tonalElevation = 4.dp) {
@@ -151,6 +175,14 @@ private fun TopBar(
                         style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1
                     )
                 }
+            }
+            // #7: Fullscreen toggle button
+            IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = "Fullscreen",
+                    tint = GOLD, modifier = Modifier.size(20.dp)
+                )
             }
             OutlinedButton(onClick = onStop, shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = RED),

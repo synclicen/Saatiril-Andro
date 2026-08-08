@@ -122,8 +122,8 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    // ── Hand trigger (matches Electron palmTriggerEnabled) ──
-    var handTriggerEnabled by remember { mutableStateOf(false) }
+    // #2: Hand trigger removed (dead code — HandTriggerDetector not wired)
+    // Will be re-added when MediaPipe Palm detection is properly implemented.
 
     // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
     var gridlineEnabled by remember { mutableStateOf(true) }
@@ -358,6 +358,22 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     "Ch.$activeChannel • $srcLabel ${if (cameraConnected) "●" else "○"}",
                     style = TextStyle(color = Color.White, fontSize = 9.sp)
                 )
+                // #8: Aspect-ratio + frame + gridline badges (matches Electron operator-panel.tsx:1762-1777)
+                if (project?.config?.frame != null) Text("Frame", style = TextStyle(color = GREEN, fontSize = 7.sp))
+                Text(project?.config?.ratio ?: "4:3", style = TextStyle(color = MUTED, fontSize = 7.sp))
+                if (gridlineEnabled) Text(gridlineType, style = TextStyle(color = MUTED, fontSize = 7.sp))
+            }
+
+            // #9: NO CAMERA SIGNAL overlay (matches Electron operator-panel.tsx:1749-1760)
+            if (!cameraConnected) {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.VideocamOff, contentDescription = null, tint = MUTED.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                    Text("NO CAMERA SIGNAL", style = TextStyle(color = MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                    Text("Cek koneksi kamera atau pilih kamera lain", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp))
+                }
             }
 
             // Camera picker dropdown button (top-right) — 3 cameras: USB / Belakang / Depan
@@ -511,7 +527,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s", "hand" to "Tangan").forEach { (mode, label) ->
+            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s").forEach { (mode, label) ->
                 Card(
                     modifier = Modifier
                         .weight(1f)

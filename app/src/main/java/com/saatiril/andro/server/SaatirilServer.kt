@@ -68,6 +68,8 @@ object SaatirilServer {
     private const val SESSION_TIMEOUT_MS = 90_000L   // drop silent sessions
     private const val POLL_HOLD_MS = 25_000L         // long-poll hold
     private const val MAX_PAYLOAD = 20 * 1024 * 1024 // 20MB (matches Node server)
+    private const val MAX_CONNECTIONS = 10           // #32: connection limit (matches Electron)
+    private const val IDENTIFY_TIMEOUT_MS = 30_000L  // #31: disconnect unidentified clients after 30s
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var engine: io.ktor.server.engine.ApplicationEngine? = null
@@ -145,6 +147,13 @@ object SaatirilServer {
                         get("/") { handlePollingGet(call) }
                         post("/") { handlePollingPost(call) }
                         webSocket("/") { handleWebSocket(this) }
+                        // #29: /health endpoint for monitoring (matches Electron index.ts:46-62)
+                        get("/health") {
+                            call.respondText(
+                                """{"status":"ok","uptime":${System.currentTimeMillis() - startedAt},"connectedClients":${sessions.count { it.value.authenticated }},"totalConnections":$totalConnections,"totalMessagesRelayed":$totalMessagesRelayed,"maxConnections":$MAX_CONNECTIONS,"sessionPasswordActive":${sessionPasswordHash != null}}""",
+                                ContentType.Application.Json
+                            )
+                        }
                     }
                 }.also { it.start(wait = false) }
                 boundPort = tryPort
@@ -175,6 +184,14 @@ object SaatirilServer {
     /** Stop the server and drop all sessions. */
     fun stop() {
         Log.i(TAG, "Stopping Saatiril LAN server")
+        // #30: Broadcast SERVER_SHUTDOWN to all clients before closing
+        // (matches Electron index.ts:300-305 — clients get clean disconnect message)
+        try {
+            broadcastLanMessage("SERVER_SHUTDOWN", null)
+        } catch (e: Exception) { Log.w(TAG, "SERVER_SHUTDOWN broadcast failed: ${e.message}") }
+        // Brief delay to let the broadcast flush
+        try { Thread.sleep(500) } catch (_: Exception) {}
+
         cleanupJob?.cancel()
         cleanupJob = null
         try { engine?.stop(1000, 3000) } catch (e: Exception) { Log.w(TAG, "stop error: ${e.message}") }
@@ -253,12 +270,18 @@ object SaatirilServer {
         }
 
         if (sid == null) {
+            // #32: Connection limit enforcement (matches Electron index.ts:90-96)
+            if (sessions.size >= MAX_CONNECTIONS) {
+                Log.w(TAG, "Connection rejected — limit reached (${sessions.size}/$MAX_CONNECTIONS)")
+                call.respondText("Connection limit reached", ContentType.Text.Plain, HttpStatusCode.ServiceUnavailable)
+                return
+            }
             // ── New session handshake ──
             val newSid = EngineIO.newSid()
             val session = ClientSession(newSid).apply { this.transport = "polling" }
             sessions[newSid] = session
             totalConnections++
-            Log.i(TAG, "New polling session: $newSid (total=${sessions.size})")
+            Log.i(TAG, "New polling session: $newSid (total=${sessions.size}/$MAX_CONNECTIONS)")
             val openPacket = EngineIO.encodeEioPacket(EngineIO.TYPE_OPEN,
                 """{"sid":"$newSid","upgrades":["websocket"],"pingInterval":$PING_INTERVAL_MS,"pingTimeout":$PING_TIMEOUT_MS,"maxPayload":$MAX_PAYLOAD}""")
             updateClients()
@@ -557,14 +580,23 @@ object SaatirilServer {
     private fun startCleanupJob() {
         cleanupJob = scope.launch {
             while (true) {
-                delay(30_000)
+                delay(15_000) // check every 15s
                 val now = System.currentTimeMillis()
-                val toRemove = sessions.values.filter { now - it.lastSeen > SESSION_TIMEOUT_MS }
-                toRemove.forEach { s ->
-                    Log.i(TAG, "Reaping inactive session ${s.sid} (idle ${now - s.lastSeen}ms)")
-                    s.close()
-                    sessions.remove(s.sid)
+                val toRemove = mutableListOf<ClientSession>()
+                for (s in sessions.values) {
+                    val idle = now - s.lastSeen
+                    // Drop silent sessions (>90s idle)
+                    if (idle > SESSION_TIMEOUT_MS) {
+                        Log.i(TAG, "Reaping inactive session ${s.sid} (idle ${idle}ms)")
+                        toRemove.add(s)
+                    }
+                    // #31: Drop unidentified sessions after 30s (matches Electron index.ts:133-142)
+                    if (!s.authenticated && !s.pendingAuth && idle > IDENTIFY_TIMEOUT_MS) {
+                        Log.i(TAG, "Reaping unidentified session ${s.sid} (no identify after ${idle}ms)")
+                        toRemove.add(s)
+                    }
                 }
+                toRemove.forEach { s -> s.close(); sessions.remove(s.sid) }
                 if (toRemove.isNotEmpty()) { updateClients(); updateStats() }
             }
         }

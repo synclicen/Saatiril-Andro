@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -32,11 +33,13 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.saatiril.andro.data.AdminViewModel
 import com.saatiril.andro.data.PhotoHistoryItem
+import com.saatiril.andro.data.Project
 import com.saatiril.andro.data.Student
 import com.saatiril.andro.data.getActiveChannel
 import com.saatiril.andro.data.isActiveStatus
 import com.saatiril.andro.data.statusLabel
 import com.saatiril.andro.server.ClientInfo
+import kotlinx.coroutines.delay
 
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
@@ -196,6 +199,30 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
             Text(it, style = TextStyle(color = if (it.startsWith("Tersimpan")) GREEN else RED, fontSize = 10.sp))
         }
 
+        // ─── LAN distribution instructions (Fix #21) ───
+        Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BORDER)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = CYAN, modifier = Modifier.size(16.dp))
+                    Text("Cara Distribusi LAN", style = TextStyle(color = GOLD, fontSize = 13.sp, fontWeight = FontWeight.Bold))
+                }
+                val steps = listOf(
+                    "Operator: Download APK Saatiril Andro dari GitHub Releases",
+                    "Hubungkan kamera USB/HDMI capture card via OTG",
+                    "Pastikan HP dan server di WiFi/LAN yang sama",
+                    "Scan QR Code di atas atau ketik IP server: http://IP:3003",
+                    "Pilih role (Operator/MC) dan channel (1/2)"
+                )
+                steps.forEachIndexed { i, step ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("${i + 1}.", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                        Text(step, style = TextStyle(color = MUTED, fontSize = 11.sp))
+                    }
+                }
+            }
+        }
+
         // ─── Stats grid ───
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile("Total", total, Color.White, Icons.Default.Group, Modifier.weight(1f))
@@ -222,7 +249,15 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                 Column(Modifier.fillMaxWidth().padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recentPhotos.chunked(3).forEach { rowItems ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            rowItems.forEach { item -> Box(Modifier.weight(1f)) { PhotoThumb(item) } }
+                            rowItems.forEach { item ->
+                                Box(Modifier.weight(1f)) {
+                                    PhotoThumb(
+                                        item = item,
+                                        project = proj,
+                                        onReset = { viewModel.resetStudent(item.student.id, item.channel) }
+                                    )
+                                }
+                            }
                             repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
@@ -292,18 +327,46 @@ private fun QrCodeBox(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-// ─── QR Code with Label (per-role) ────────────────────────────
+// ─── QR Code with Label (per-role) + Salin button (Fix #25) ───
 @Composable
 private fun QrCodeWithLabel(url: String, label: String, modifier: Modifier = Modifier) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    // Auto-clear the "Tersalin!" confirmation 2s after copy (Fix #25)
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2000)
+            copied = false
+        }
+    }
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         QrCodeBox(text = url, modifier = Modifier.size(80.dp))
         Spacer(Modifier.height(4.dp))
         Text(label, style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+        // Salin (Copy) URL button — copies URL to clipboard, shows "Tersalin!" for 2s
+        Text(
+            text = if (copied) "Tersalin!" else "Salin",
+            style = TextStyle(
+                color = if (copied) GREEN else MUTED,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            modifier = Modifier
+                .clickable {
+                    clipboardManager.setText(AnnotatedString(url))
+                    copied = true
+                }
+                .padding(horizontal = 4.dp, vertical = 1.dp)
+        )
     }
 }
 
+/**
+ * Photo thumbnail with version-aware filename overlay (Fix #19) and
+ * a per-thumbnail retake button (Fix #20).
+ */
 @Composable
-private fun PhotoThumb(item: PhotoHistoryItem) {
+private fun PhotoThumb(item: PhotoHistoryItem, project: Project?, onReset: () -> Unit) {
     val firstPhoto = item.photos.firstOrNull() ?: return
     val bitmap = remember(firstPhoto) {
         try {
@@ -312,13 +375,38 @@ private fun PhotoThumb(item: PhotoHistoryItem) {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         } catch (e: Exception) { null }
     }
+    // Version-aware filename — retakes produce _v2, _v3, ... instead of overwriting (Fix #19)
+    val version = project?.captureVersions?.get("${item.student.id}_${item.channel}") ?: 1
+    val filename = if (version > 1)
+        "${item.student.nim}_${item.student.nama.take(10)}_v${version}.jpg"
+    else
+        "${item.student.nim}_${item.student.nama.take(10)}.jpg"
     Card(modifier = Modifier.aspectRatio(0.75f).clip(RoundedCornerShape(8.dp)),
         colors = CardDefaults.cardColors(containerColor = CARD), shape = RoundedCornerShape(8.dp)) {
         Box(Modifier.fillMaxSize()) {
             if (bitmap != null) Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Foto ${item.student.nama}", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Box(Modifier.fillMaxSize().background(PANEL), contentAlignment = Alignment.Center) { Icon(Icons.Default.BrokenImage, contentDescription = null, tint = MUTED, modifier = Modifier.size(20.dp)) }
-            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 4.dp, vertical = 2.dp)) {
+            // Retake button: top-right refresh icon, calls viewModel.resetStudent (Fix #20)
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(20.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable(onClick = onReset),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Retake", tint = Color.White, modifier = Modifier.size(14.dp))
+            }
+            // Bottom overlay: student name + version-aware filename (Fix #19)
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
                 Text(item.student.nama.take(14), style = TextStyle(color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+                Text(filename, style = TextStyle(color = MUTED, fontSize = 7.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
             }
         }
     }
