@@ -167,51 +167,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
     }
 
-    // Wire hand trigger callback — when hand leaves frame, trigger capture
-    DisposableEffect(shutterMode) {
-        if (shutterMode == "hand") {
-            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = {
-                // Hand left frame → trigger capture (same as pressing shutter)
-                // Use a 3-second timer so person has time to pose
-                scope.launch(Dispatchers.Main) {
-                    timerCountdown = 3
-                    timerJob = scope.launch {
-                        for (i in 3 downTo 1) {
-                            timerCountdown = i
-                            delay(1000)
-                        }
-                        timerCountdown = null
-                        timerJob = null
-                        // Auto-capture
-                        if (activeStudent != null && !isCapturing) {
-                            isCapturing = true
-                            try {
-                                val bitmap = textureView.bitmap
-                                val proj = project
-                                if (bitmap != null && proj != null) {
-                                    val processed = try {
-                                        CameraCapture.processFrame(bitmap, proj.config, frameBitmap)
-                                    } catch (e: Exception) { bitmap }
-                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                                    showFlash = true
-                                    scope.launch { delay(200); showFlash = false }
-                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
-                                }
-                            } catch (e: Exception) {
-                                captureError = "Gagal capture: ${e.message}"
-                            } finally {
-                                isCapturing = false
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        onDispose {
-            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = null
-        }
-    }
-
     // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
     var gridlineEnabled by remember { mutableStateOf(true) }
     var gridlineType by remember { mutableStateOf("thirds") }  // thirds | quarters | crosshair | diagonal
@@ -267,6 +222,49 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     LaunchedEffect(opSelectedStudent?.status) {
         if (opSelectedStudent?.status == "done") {
             opSelectedStudent = null
+        }
+    }
+
+    // Wire hand trigger callback — when hand leaves frame, trigger capture
+    // (placed here AFTER activeStudent/activeChannel/showFlash are declared)
+    DisposableEffect(shutterMode) {
+        if (shutterMode == "hand") {
+            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = {
+                scope.launch(Dispatchers.Main) {
+                    timerCountdown = 3
+                    timerJob = scope.launch {
+                        for (i in 3 downTo 1) {
+                            timerCountdown = i
+                            delay(1000)
+                        }
+                        timerCountdown = null
+                        timerJob = null
+                        if (activeStudent != null && !isCapturing) {
+                            isCapturing = true
+                            try {
+                                val bitmap = textureView.bitmap
+                                val proj = project
+                                if (bitmap != null && proj != null) {
+                                    val processed = try {
+                                        CameraCapture.processFrame(bitmap, proj.config, frameBitmap)
+                                    } catch (e: Exception) { bitmap }
+                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                    showFlash = true
+                                    scope.launch { delay(200); showFlash = false }
+                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                                }
+                            } catch (e: Exception) {
+                                captureError = "Gagal capture: ${e.message}"
+                            } finally {
+                                isCapturing = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        onDispose {
+            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = null
         }
     }
 
