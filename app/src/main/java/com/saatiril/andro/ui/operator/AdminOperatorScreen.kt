@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.util.Log
 import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,9 +45,11 @@ import com.saatiril.andro.data.CapturePhase
 import com.saatiril.andro.data.Student
 import com.saatiril.andro.data.getActiveChannel
 import com.saatiril.andro.data.isActiveStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
@@ -117,13 +120,97 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var captureError by remember { mutableStateOf<String?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
 
-    // ── Shutter modes (matches Electron: manual / timer-3 / timer-5 / timer-10 / hand) ──
+    // ── Shutter modes (manual / timer-3 / timer-5 / timer-10 / hand) ──
     var shutterMode by remember { mutableStateOf("manual") }
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    // #2: Hand trigger removed (dead code — HandTriggerDetector not wired)
-    // Will be re-added when MediaPipe Palm detection is properly implemented.
+    // ── Hand trigger (matches Electron palmTriggerEnabled + usePalmDetection) ──
+    var handState by remember { mutableStateOf(com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE) }
+    var handDetectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Initialize + start/stop hand detection based on shutter mode
+    LaunchedEffect(shutterMode) {
+        if (shutterMode == "hand") {
+            // Initialize MediaPipe Hand Landmarker (loads 7.8MB model from assets)
+            val initialized = com.saatiril.andro.camera.HandTriggerDetector.initialize(context)
+            if (initialized) {
+                com.saatiril.andro.camera.HandTriggerDetector.start()
+                Log.i("OperatorScreen", "Hand trigger detection started")
+
+                // Start detection loop — grab preview frame every 200ms
+                handDetectionJob = scope.launch(Dispatchers.IO) {
+                    while (shutterMode == "hand" && com.saatiril.andro.camera.HandTriggerDetector.isDetecting()) {
+                        try {
+                            val bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
+                            if (bitmap != null) {
+                                com.saatiril.andro.camera.HandTriggerDetector.processFrame(bitmap)
+                                handState = com.saatiril.andro.camera.HandTriggerDetector.handState
+                            }
+                        } catch (e: Exception) {
+                            Log.w("OperatorScreen", "Hand detect frame error: ${e.message}")
+                        }
+                        delay(200)
+                    }
+                }
+            } else {
+                Log.e("OperatorScreen", "Failed to initialize HandTriggerDetector")
+                shutterMode = "manual" // fallback
+            }
+        } else {
+            // Stop hand detection when mode changes
+            com.saatiril.andro.camera.HandTriggerDetector.stop()
+            handDetectionJob?.cancel()
+            handDetectionJob = null
+            handState = com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE
+        }
+    }
+
+    // Wire hand trigger callback — when hand leaves frame, trigger capture
+    DisposableEffect(shutterMode) {
+        if (shutterMode == "hand") {
+            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = {
+                // Hand left frame → trigger capture (same as pressing shutter)
+                // Use a 3-second timer so person has time to pose
+                scope.launch(Dispatchers.Main) {
+                    timerCountdown = 3
+                    timerJob = scope.launch {
+                        for (i in 3 downTo 1) {
+                            timerCountdown = i
+                            delay(1000)
+                        }
+                        timerCountdown = null
+                        timerJob = null
+                        // Auto-capture
+                        if (activeStudent != null && !isCapturing) {
+                            isCapturing = true
+                            try {
+                                val bitmap = textureView.bitmap
+                                val proj = project
+                                if (bitmap != null && proj != null) {
+                                    val processed = try {
+                                        CameraCapture.processFrame(bitmap, proj.config, frameBitmap)
+                                    } catch (e: Exception) { bitmap }
+                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                    showFlash = true
+                                    scope.launch { delay(200); showFlash = false }
+                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                                }
+                            } catch (e: Exception) {
+                                captureError = "Gagal capture: ${e.message}"
+                            } finally {
+                                isCapturing = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        onDispose {
+            com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = null
+        }
+    }
 
     // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
     var gridlineEnabled by remember { mutableStateOf(true) }
@@ -376,6 +463,38 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 }
             }
 
+            // Hand trigger state indicator (matches Electron operator-panel.tsx:1708-1721)
+            if (shutterMode == "hand" && handState != com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE) {
+                Card(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(4.dp),
+                    colors = CardDefaults.cardColors(containerColor = when (handState) {
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.HAND_DETECTED -> Color.Black.copy(alpha = 0.7f)
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.CONFIRMED -> GREEN.copy(alpha = 0.8f)
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.TRIGGERED -> GOLD.copy(alpha = 0.8f)
+                        else -> Color.Black.copy(alpha = 0.7f)
+                    }),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    val handLabel = when (handState) {
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.HAND_DETECTED -> "Tangan terdeteksi…"
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.CONFIRMED -> "Tangan ✓ — lepaskan untuk foto"
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.TRIGGERED -> "Timer berjalan!"
+                        else -> ""
+                    }
+                    val handTint = when (handState) {
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.HAND_DETECTED -> MUTED
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.CONFIRMED -> BG
+                        com.saatiril.andro.camera.HandTriggerDetector.HandState.TRIGGERED -> BG
+                        else -> MUTED
+                    }
+                    Text(
+                        handLabel,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = TextStyle(color = handTint, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
+
             // Camera picker dropdown button (top-right) — 3 cameras: USB / Belakang / Depan
             Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                 IconButton(
@@ -527,7 +646,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s").forEach { (mode, label) ->
+            listOf("manual" to "Manual", "timer-3" to "3s", "timer-5" to "5s", "timer-10" to "10s", "hand" to "Tangan").forEach { (mode, label) ->
                 Card(
                     modifier = Modifier
                         .weight(1f)
