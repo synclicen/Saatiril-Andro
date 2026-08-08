@@ -271,6 +271,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // Init camera on first show (only if permission granted), release on dispose
     DisposableEffect(hasCameraPermission) {
         if (hasCameraPermission) {
+            // Set project aspect ratio so camera preview buffer matches selected ratio
+            val projRatio = project?.config?.ratio ?: "4:3"
+            val parts = projRatio.split(":")
+            val ar = if (parts.size == 2) (parts[0].toFloatOrNull() ?: 4f) / (parts[1].toFloatOrNull() ?: 3f) else 4f / 3f
+            viewModel.camera2Manager.setProjectAspectRatio(ar)
+
             // Bind TextureView to both managers + enumerate + open default (back camera)
             viewModel.camera2Manager.setTextureView(textureView)
             viewModel.cameraUVCManager.setTextureView(textureView)

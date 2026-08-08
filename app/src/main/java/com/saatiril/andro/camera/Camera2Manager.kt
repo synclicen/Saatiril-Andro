@@ -117,6 +117,26 @@ class Camera2Manager(private val context: Context) {
     private var previewWidth = CAPTURE_WIDTH
     private var previewHeight = CAPTURE_HEIGHT
 
+    /** Project aspect ratio (w/h) — set by AdminOperatorScreen so the preview
+     *  buffer matches the selected ratio (e.g. 9:16 = portrait, 4:3 = landscape). */
+    private var projectAspectRatio: Float = 16f / 9f  // default landscape
+
+    /** Set the project's aspect ratio so camera preview + capture match. */
+    fun setProjectAspectRatio(ratio: Float) {
+        projectAspectRatio = ratio
+        // Update preview dimensions to match the ratio
+        if (ratio >= 1f) {
+            // Landscape: width > height (e.g. 4:3, 16:9)
+            previewWidth = CAPTURE_WIDTH
+            previewHeight = (CAPTURE_WIDTH / ratio).toInt()
+        } else {
+            // Portrait: height > width (e.g. 9:16, 3:4)
+            previewHeight = CAPTURE_WIDTH  // use max as the longer dimension
+            previewWidth = (CAPTURE_WIDTH * ratio).toInt()
+        }
+        Log.i(TAG, "Project aspect ratio set: $ratio → preview ${previewWidth}x${previewHeight}")
+    }
+
     // ─── TextureView Setup ───────────────────────────────────────
 
     /**
