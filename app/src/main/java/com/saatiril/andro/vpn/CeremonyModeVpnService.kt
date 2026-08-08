@@ -120,6 +120,11 @@ class CeremonyModeVpnService : VpnService() {
         //   internet (Google Drive upload) via the real network interface
         builder.addDisallowedApplication("com.saatiril.andro")
 
+        // EXCLUDE Google Drive app: allows admin to manually upload files
+        // via Google Drive app if needed (Saatiril's built-in upload uses SAF
+        // which goes through Saatiril app and is already exempt)
+        builder.addDisallowedApplication("com.google.android.apps.docs")
+
         builder.setMtu(1500)
 
         // Build and establish the VPN interface

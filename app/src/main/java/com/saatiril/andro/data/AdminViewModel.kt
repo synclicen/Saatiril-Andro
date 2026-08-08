@@ -56,6 +56,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val licenseManager = LicenseManager(application)
     private val projectStore = ProjectStore(application)
     val photoSaver = PhotoSaver(application)
+    val driveBackupManager = com.saatiril.andro.backup.DriveBackupManager(application)
+
+    init {
+        // Start the Google Drive upload worker (processes queue in background)
+        com.saatiril.andro.backup.DriveUploadWorker.getInstance(application)
+    }
 
     // ─── Camera managers (3-camera support: USB UVC + back + front) ───
     // Exposed so the AdminOperatorScreen can bind a TextureView and call
@@ -728,6 +734,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     val savedUri = photoSaver.savePhoto(photo, filenames[i])
                     if (savedUri != null) {
                         Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
+                        // Enqueue Google Drive backup (async, non-blocking)
+                        val projName = _project.value?.name?.replace(" ", "_") ?: "Saatiril"
+                        driveBackupManager.enqueueUpload(filenames[i], savedUri.toString(), projName)
                     } else {
                         Log.e(TAG, "❌ Photo save returned null: ${filenames[i]} " +
                             "(savePhoto returned null — check PhotoSaver logs)")
@@ -928,7 +937,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             for ((i, photo) in photos.withIndex()) {
                 val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size, isPhotoshoot)
                 try {
-                    photoSaver.savePhoto(photo, filename)
+                    val savedUri = photoSaver.savePhoto(photo, filename)
+                    if (savedUri != null) {
+                        // Enqueue Google Drive backup (async, non-blocking)
+                        val projName = proj.name.replace(" ", "_")
+                        driveBackupManager.enqueueUpload(filename, savedUri.toString(), projName)
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to save photo $filename: ${e.message}")
                 }
