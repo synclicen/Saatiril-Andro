@@ -570,6 +570,28 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     )
                 }
             }
+
+            // #4: Timer countdown overlay ON camera preview (big number, centered)
+            // Matches Electron operator-panel.tsx:1686-1706
+            if (timerCountdown != null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            "$timerCountdown",
+                            modifier = Modifier.padding(horizontal = 30.dp, vertical = 12.dp),
+                            style = TextStyle(color = GOLD, fontSize = 48.sp, fontWeight = FontWeight.Black)
+                        )
+                    }
+                }
+            }
+
+            // Flash overlay on capture
+            if (showFlash) {
+                Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.6f)))
+            }
         } // end camera preview Box
 
         // ─── COMPACT BOTTOM BAR (shutter + toggles, ~20% of screen) ───
