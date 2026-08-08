@@ -102,15 +102,20 @@ class CeremonyModeVpnService : VpnService() {
     /**
      * Configure the VPN to block all internet apps except Saatiril.
      *
-     * Strategy: `addDisallowedApplication("com.saatiril.andro")` + route 0.0.0.0/0
+     * Strategy: Split routing — route ONLY internet ranges through TUN,
+     * leave private/LAN ranges (10.x, 172.16-31.x, 192.168.x) unrouted.
      *
-     * - ALL apps' traffic goes through the TUN (and gets dropped) → no internet
-     * - Saatiril app is DISALLOWED from VPN → bypasses TUN, uses real network
-     * - Saatiril can access LAN (localhost:3003, 192.168.43.1:3003) AND
-     *   internet (Google Drive upload) via the real network interface
+     * - Internet traffic from other apps → goes through TUN → dropped (BLOCKED)
+     * - LAN traffic (192.168.x.x, etc.) → uses real interface → WORKING
+     * - Saatiril app: disallowed from VPN → bypasses TUN, uses real network
+     *   → can access LAN (server on localhost:3003) AND internet (Google Drive)
+     *
+     * This split routing is CRITICAL: if we used addRoute("0.0.0.0", 0) it
+     * would capture ALL traffic including LAN, which breaks incoming
+     * connections from MC web (browser) and operator APKs to the server.
      *
      * Result: WhatsApp, Instagram, Play Store, OS updates = BLOCKED.
-     * Saatiril server + Socket.io + Google Drive = WORKING.
+     * Saatiril server + LAN clients (MC web, operators) = WORKING.
      */
     private fun setupVpn() {
         val builder = Builder()
@@ -121,8 +126,59 @@ class CeremonyModeVpnService : VpnService() {
         // DNS server that won't resolve (forces DNS failures for internet domains)
         builder.addDnsServer("10.200.200.2")
 
-        // Route ALL traffic (0.0.0.0/0) through TUN — everything gets dropped
-        builder.addRoute("0.0.0.0", 0)
+        // ── CRITICAL: Route ONLY internet traffic through TUN, NOT LAN ──
+        // If we use addRoute("0.0.0.0", 0) it captures ALL traffic including
+        // LAN (192.168.x.x, 10.x.x.x). This breaks incoming connections to
+        // the Saatiril server from hotspot clients (MC web, operator APK).
+        //
+        // Instead, we add routes that cover ALL IPv4 EXCEPT private/LAN ranges:
+        //   - 10.0.0.0/8      (10.x.x.x)
+        //   - 172.16.0.0/12   (172.16.x.x - 172.31.x.x)
+        //   - 192.168.0.0/16  (192.168.x.x)
+        //
+        // These private ranges are left UNROUTED → traffic uses real interface.
+        // This allows MC web (browser) and operator APKs to connect to the
+        // server via LAN while Mode Prosesi blocks internet for other apps.
+        //
+        // The routes below cover 0.0.0.0 - 255.255.255.255 EXCEPT the 3 private ranges:
+
+        // Skip 10.0.0.0/8 (10.x.x.x):
+        builder.addRoute("0.0.0.0", 5)       // 0-7
+        builder.addRoute("8.0.0.0", 7)       // 8-9
+        builder.addRoute("11.0.0.0", 8)      // 11
+        builder.addRoute("12.0.0.0", 6)      // 12-15
+        builder.addRoute("16.0.0.0", 4)      // 16-31
+        builder.addRoute("32.0.0.0", 3)      // 32-63
+        builder.addRoute("64.0.0.0", 2)      // 64-127
+
+        // Skip 172.16.0.0/12 (172.16-172.31):
+        builder.addRoute("128.0.0.0", 3)     // 128-159
+        builder.addRoute("160.0.0.0", 5)     // 160-167
+        builder.addRoute("168.0.0.0", 6)     // 168-171
+        builder.addRoute("172.0.0.0", 12)    // 172.0-172.15
+        builder.addRoute("172.32.0.0", 11)   // 172.32-172.63
+        builder.addRoute("172.64.0.0", 10)   // 172.64-172.127
+        builder.addRoute("172.128.0.0", 9)   // 172.128-172.255
+        builder.addRoute("173.0.0.0", 8)     // 173
+        builder.addRoute("174.0.0.0", 7)     // 174-175
+        builder.addRoute("176.0.0.0", 4)     // 176-191
+
+        // Skip 192.168.0.0/16 (192.168.x.x):
+        builder.addRoute("192.0.0.0", 9)     // 192.0-192.127
+        builder.addRoute("192.128.0.0", 10)  // 192.128-192.191
+        builder.addRoute("192.192.0.0", 11)  // 192.192-192.223
+        builder.addRoute("192.224.0.0", 12)  // 192.224-192.239
+        builder.addRoute("192.240.0.0", 13)  // 192.240-192.247
+        builder.addRoute("192.248.0.0", 14)  // 192.248-192.251
+        builder.addRoute("192.252.0.0", 15)  // 192.252-192.253
+        builder.addRoute("192.254.0.0", 16)  // 192.254
+        builder.addRoute("192.255.0.0", 16)  // 192.255
+        builder.addRoute("193.0.0.0", 8)     // 193
+        builder.addRoute("194.0.0.0", 7)     // 194-195
+        builder.addRoute("196.0.0.0", 6)     // 196-199
+        builder.addRoute("200.0.0.0", 5)     // 200-207
+        builder.addRoute("208.0.0.0", 4)     // 208-223
+        builder.addRoute("224.0.0.0", 3)     // 224-255
 
         // EXCLUDE Saatiril app: its traffic bypasses VPN entirely
         // → Saatiril can access LAN (server on localhost:3003) AND
