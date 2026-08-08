@@ -403,28 +403,29 @@ class Camera2Manager(private val context: Context) {
             if (configMap != null) {
                 val jpegSizes = configMap.getOutputSizes(ImageFormat.JPEG)
                 if (jpegSizes != null && jpegSizes.isNotEmpty()) {
-                    // Prefer 1920x1080 (16:9), then largest available
-                    val preferred = jpegSizes.find {
-                        it.width == CAPTURE_WIDTH && it.height == CAPTURE_HEIGHT
+                    // DON'T override previewWidth/previewHeight here — they were set
+                    // by setProjectAspectRatio() to match the project's selected ratio.
+                    // Just find the best capture size that's CLOSEST to our target ratio.
+                    val targetW = previewWidth
+                    val targetH = previewHeight
+                    val targetRatio = targetW.toFloat() / targetH.toFloat()
+
+                    // Find the JPEG size closest to our target dimensions
+                    val best = jpegSizes.minByOrNull { size ->
+                        val sizeRatio = size.width.toFloat() / size.height.toFloat()
+                        Math.abs(sizeRatio - targetRatio) * 1000 +  // ratio match priority
+                        Math.abs(size.width - targetW) + Math.abs(size.height - targetH)  // then size match
                     }
-                    if (preferred != null) {
-                        previewWidth = CAPTURE_WIDTH
-                        previewHeight = CAPTURE_HEIGHT
-                    } else {
-                        // Use the largest available JPEG size
-                        val largest = jpegSizes.maxByOrNull { it.width * it.height }
-                        if (largest != null) {
-                            previewWidth = largest.width
-                            previewHeight = largest.height
-                        }
+                    if (best != null) {
+                        // Keep preview dimensions as set by setProjectAspectRatio()
+                        // but log the actual capture size for debugging
+                        Log.i(TAG, "Capture size available: ${best.width}x${best.height} (preview stays ${previewWidth}x${previewHeight} @ ratio $targetRatio)")
                     }
-                    Log.i(TAG, "Capture size: ${previewWidth}x${previewHeight}")
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not determine capture size, using defaults: ${e.message}")
-            previewWidth = CAPTURE_WIDTH
-            previewHeight = CAPTURE_HEIGHT
+            Log.w(TAG, "Could not determine capture size, using project ratio defaults: ${e.message}")
+            // Don't override — keep previewWidth/previewHeight as set by setProjectAspectRatio()
         }
     }
 
