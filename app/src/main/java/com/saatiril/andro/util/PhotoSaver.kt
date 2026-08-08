@@ -227,7 +227,7 @@ class PhotoSaver(private val context: Context) {
                     val mime = c.getString(2)
                     if (name == folderName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                         val docId = c.getString(0)
-                        val subTreeUri = DocumentsContract.buildTreeDocumentUriUsingTree(treeUri, docId)
+                        val subTreeUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
                         Log.i(TAG, "createSubfolder: folder already exists → $subTreeUri")
                         return subTreeUri
                     }
@@ -249,7 +249,7 @@ class PhotoSaver(private val context: Context) {
 
             // Convert the document URI to a tree URI so we can use it as a new output folder
             val docId = DocumentsContract.getDocumentId(docUri)
-            val subTreeUri = DocumentsContract.buildTreeDocumentUriUsingTree(treeUri, docId)
+            val subTreeUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
             Log.i(TAG, "createSubfolder SUCCESS: $folderName → $subTreeUri")
             subTreeUri
