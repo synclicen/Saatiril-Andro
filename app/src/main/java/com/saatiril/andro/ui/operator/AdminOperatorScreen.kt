@@ -751,7 +751,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp), modifier = Modifier.width(12.dp))
                                     Box(Modifier.size(5.dp).clip(RoundedCornerShape(2.dp)).background(if (a) GOLD else MUTED.copy(alpha = 0.3f)))
-                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 9.sp, modifier = Modifier.weight(1f), maxLines = 1))
+                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
                                     if (a) Text("◆", style = TextStyle(color = GOLD, fontSize = 7.sp))
                                 }
                             }
