@@ -413,6 +413,30 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 val password = _setupPassword.value
 
                 val projectId = _editingProjectId.value ?: java.util.UUID.randomUUID().toString()
+
+                // Create project subfolder inside the admin's chosen output folder.
+                // Matches Electron: targetFolder = root/sanitized_project_name
+                // Electron uses fs.mkdirSync(targetFolder, {recursive:true}) + path.join.
+                // Android SAF: create a sub-document (folder) inside the tree URI.
+                val rootFolderUri = _setupOutputFolderUri.value ?: ""
+                val sanitizedName = name.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "").replace(Regex("\\s+"), "_")
+                if (rootFolderUri.isNotEmpty()) {
+                    try {
+                        val treeUri = android.net.Uri.parse(rootFolderUri)
+                        val subfolderUri = photoSaver.createSubfolder(treeUri, sanitizedName)
+                        if (subfolderUri != null) {
+                            // Update the output folder to the subfolder — photos go here
+                            photoSaver.setOutputFolder(subfolderUri)
+                            _setupOutputFolderUri.value = subfolderUri.toString()
+                            Log.i(TAG, "Project subfolder created: $sanitizedName → $subfolderUri")
+                        } else {
+                            Log.w(TAG, "Failed to create subfolder '$sanitizedName' — using root folder")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error creating project subfolder: ${e.message}", e)
+                    }
+                }
+
                 val project = Project(
                     id = projectId,
                     name = name,
@@ -423,7 +447,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         targetFolder = _setupOutputFolderUri.value ?: "",
                         frame = _setupFrame.value,
                         sessionPassword = password,
-                        localFolder = ""
+                        localFolder = sanitizedName
                     ),
                     database = students,
                     photoHistory = emptyList(),

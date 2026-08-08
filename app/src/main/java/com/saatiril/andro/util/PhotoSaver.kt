@@ -201,6 +201,65 @@ class PhotoSaver(private val context: Context) {
     }
 
     /**
+     * Create a subfolder inside the given tree URI.
+     * Matches Electron's `createFolder(targetFolder)` which uses `fs.mkdirSync(path, {recursive:true})`.
+     *
+     * On Android SAF, we use `DocumentsContract.createDocument` with MIME type
+     * `vnd.android.document/directory` to create a folder inside the tree.
+     *
+     * @param treeUri The parent folder's tree URI
+     * @param folderName The name for the new subfolder (e.g. "Wisuda_2026")
+     * @return The tree URI of the new subfolder, or null on failure
+     */
+    fun createSubfolder(treeUri: Uri, folderName: String): Uri? {
+        Log.i(TAG, "createSubfolder: parent=$treeUri, name=$folderName")
+        return try {
+            // Check if folder already exists (e.g. resuming a project)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, null)
+            val cursor = resolver.query(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
+                null, null, null
+            )
+            cursor?.use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(1)
+                    val mime = c.getString(2)
+                    if (name == folderName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        val docId = c.getString(0)
+                        val subTreeUri = DocumentsContract.buildTreeDocumentUri(docId)
+                        Log.i(TAG, "createSubfolder: folder already exists → $subTreeUri")
+                        return subTreeUri
+                    }
+                }
+            }
+
+            // Create new folder
+            val docUri = DocumentsContract.createDocument(
+                resolver,
+                treeUri,
+                DocumentsContract.Document.MIME_TYPE_DIR,  // "vnd.android.document/directory"
+                folderName
+            )
+
+            if (docUri == null) {
+                Log.e(TAG, "createSubfolder FAILED: createDocument returned null for '$folderName'")
+                return null
+            }
+
+            // Convert the document URI to a tree URI so we can use it as a new output folder
+            val docId = DocumentsContract.getDocumentId(docUri)
+            val subTreeUri = DocumentsContract.buildTreeDocumentUri(docId)
+
+            Log.i(TAG, "createSubfolder SUCCESS: $folderName → $subTreeUri")
+            subTreeUri
+        } catch (e: Exception) {
+            Log.e(TAG, "createSubfolder FAILED: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * Save a binary file (e.g. .xlsx Excel export) to the output folder.
      * @param bytes the file contents as a byte array
      * @param filename e.g. "Daftar_Peserta_20260805.xlsx"
