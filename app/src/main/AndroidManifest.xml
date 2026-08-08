@@ -25,6 +25,10 @@
     <!-- Foreground service notification (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Ceremony Mode VPN — blocks internet during ceremony -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- Application -->
     <application
         android:name=".SaatirilApp"
@@ -68,5 +72,18 @@
             android:name=".server.ServerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- Ceremony Mode VPN Service — blocks internet traffic         -->
+        <!-- during the ceremony so notifications/updates don't disturb.  -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <service
+            android:name=".vpn.CeremonyModeVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -104,15 +105,38 @@ fun OperatorCameraScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted -> hasCameraPermission = granted }
 
+    // VPN permission launcher for Ceremony Mode (auto-activates when connected)
+    val ceremonyActive by com.saatiril.andro.vpn.CeremonyModeManager.isActive.observeAsState(false)
+    val vpnPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        com.saatiril.andro.vpn.CeremonyModeManager.onPermissionResult(context, result.resultCode)
+    }
+
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
+    // Auto-activate Ceremony Mode when operator connects (blocks internet distractions)
+    LaunchedEffect(connectionState) {
+        if ((connectionState == ConnectionState.AUTHENTICATED ||
+             connectionState == ConnectionState.WAITING_FOR_DATA) &&
+            !ceremonyActive
+        ) {
+            // Auto-enable VPN — operator won't be disturbed by WhatsApp/Play Store during ceremony
+            com.saatiril.andro.vpn.CeremonyModeManager.enable(context, vpnPermissionLauncher)
+        }
+    }
+
     // Auto-disconnect handling: if connection drops, go back to connect screen
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.DISCONNECTED) {
+            // Disable VPN when disconnecting
+            if (ceremonyActive) {
+                com.saatiril.andro.vpn.CeremonyModeManager.disable(context)
+            }
             delay(500)
             adminViewModel.operatorDisconnected()
         }
@@ -245,10 +269,18 @@ fun OperatorCameraScreen(
                 style = TextStyle(color = connColor, fontSize = 10.sp, fontWeight = FontWeight.Bold),
                 modifier = Modifier.weight(1f)
             )
+            // Ceremony Mode shield indicator
+            if (ceremonyActive) {
+                Icon(Icons.Default.Shield, contentDescription = "Mode Prosesi", tint = GREEN, modifier = Modifier.size(14.dp))
+            }
             // Disconnect button
             Card(
                 modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp))
                     .clickable {
+                        // Disable VPN before disconnecting
+                        if (ceremonyActive) {
+                            com.saatiril.andro.vpn.CeremonyModeManager.disable(context)
+                        }
                         opViewModel.disconnect()
                         adminViewModel.backToRoleSelect()
                     },

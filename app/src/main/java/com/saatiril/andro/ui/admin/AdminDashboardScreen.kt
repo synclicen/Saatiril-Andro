@@ -2,6 +2,8 @@ package com.saatiril.andro.ui.admin
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +70,15 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var filterStatus by remember { mutableStateOf("all") }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+
+    // Ceremony Mode (VPN internet blocker)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val ceremonyActive by com.saatiril.andro.vpn.CeremonyModeManager.isActive.observeAsState(false)
+    val vpnPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        com.saatiril.andro.vpn.CeremonyModeManager.onPermissionResult(context, result.resultCode)
+    }
 
     val proj = project
     val db = proj?.database ?: emptyList()
@@ -123,6 +135,64 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                         )
                     }
                 }
+            }
+        }
+
+        // ─── Ceremony Mode (VPN internet blocker) ───
+        Card(
+            colors = CardDefaults.cardColors(containerColor = if (ceremonyActive) GREEN.copy(alpha = 0.1f) else PANEL),
+            shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (ceremonyActive) GREEN.copy(alpha = 0.5f) else BORDER
+            )
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(
+                        if (ceremonyActive) Icons.Default.Shield else Icons.Default.ShieldMoon,
+                        contentDescription = null,
+                        tint = if (ceremonyActive) GREEN else GOLD,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text("Mode Prosesi", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp))
+                        Text(
+                            if (ceremonyActive) "AKTIF — internet diblokir" else "Nonaktif — internet normal",
+                            style = TextStyle(color = if (ceremonyActive) GREEN else MUTED, fontSize = 10.sp)
+                        )
+                    }
+                    // Toggle switch
+                    Switch(
+                        checked = ceremonyActive,
+                        onCheckedChange = { enable ->
+                            if (enable) {
+                                com.saatiril.andro.vpn.CeremonyModeManager.enable(context, vpnPermissionLauncher)
+                            } else {
+                                com.saatiril.andro.vpn.CeremonyModeManager.disable(context)
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = GREEN,
+                            checkedTrackColor = GREEN.copy(alpha = 0.3f),
+                            uncheckedThumbColor = MUTED,
+                            uncheckedTrackColor = BORDER
+                        )
+                    )
+                }
+                // Explanation
+                Text(
+                    if (ceremonyActive) {
+                        "🛡️ VPN aktif: WhatsApp, Instagram, Play Store, dan update OS diblokir di HP ini. " +
+                        "Server Saatiril + Google Drive tetap berfungsi.\n\n" +
+                        "⚠️ Petugas lain (MC/Operator) perlu aktifkan Mode Prosesi di HP masing-masing."
+                    } else {
+                        "Aktifkan untuk memblokir internet di HP ini selama prosesi — " +
+                        "mencegah notifikasi WhatsApp, Instagram, dan update yang mengganggu. " +
+                        "Server LAN tetap berjalan normal."
+                    },
+                    style = TextStyle(color = MUTED, fontSize = 9.sp)
+                )
             }
         }
 
