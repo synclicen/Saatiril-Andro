@@ -1011,6 +1011,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             }
             _project.value = proj.copy(database = updatedDb)
         }
+        // Broadcast updated DB to all clients (including the MC that sent this)
+        // so MC web panel sees the status change confirmed
+        pushSyncDb()
     }
 
     private fun handleStudentDone(data: JsonElement?) {
@@ -1022,6 +1025,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             }
             _project.value = proj.copy(database = updatedDb)
         }
+        // Broadcast updated DB to all clients
+        pushSyncDb()
     }
 
     private fun handleStudentReset(data: JsonElement?) {
@@ -1037,6 +1042,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
             _project.value?.let { projectStore.save(it) }
         }
+        // Broadcast updated DB to all clients
+        pushSyncDb()
     }
 
     private fun handleRequestState(senderSid: String?) {

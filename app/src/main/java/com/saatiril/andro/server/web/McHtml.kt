@@ -375,13 +375,17 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     html += '</div>';
 
     if(nextPending && !hasActive) {
-      html += '<button class="panggil-btn ' + btnClass + '" onclick="window.__call(' + JSON.stringify(JSON.stringify(nextPending)) + ')">' + btnText + '</button>';
+      // Store nextPending in global var — avoids HTML attribute escaping issues
+      // with JSON.stringify(double-stringify) which breaks onclick parsing
+      window.__nextPending = nextPending;
+      html += '<button class="panggil-btn ' + btnClass + '" onclick="window.__call()">' + btnText + '</button>';
     } else {
       html += '<button class="panggil-btn ' + btnClass + '" disabled>' + btnText + '</button>';
     }
 
     if(hasActive) {
-      html += '<button class="reset-btn" onclick="window.__reset(\'' + active[0].id + '\')">Reset (Ulang)</button>';
+      window.__activeId = active[0].id;
+      html += '<button class="reset-btn" onclick="window.__reset()">Reset (Ulang)</button>';
     }
 
     html += '<div class="stats">';
@@ -427,12 +431,13 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     app.innerHTML = '<div class="error-box">' + escapeHtml(msg) + '</div><div class="loading">Mencoba menghubungkan ulang\u2026</div>';
   }
 
-  window.__call = function(studentJson) {
-    var student = JSON.parse(studentJson);
-    callStudent(student);
+  window.__call = function() {
+    var student = window.__nextPending;
+    if(student) callStudent(student);
   };
-  window.__reset = function(studentId) {
-    resetStudent(studentId);
+  window.__reset = function() {
+    var studentId = window.__activeId;
+    if(studentId) resetStudent(studentId);
   };
 
   connect();
