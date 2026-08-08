@@ -73,47 +73,75 @@ class PhotoSaver(private val context: Context) {
      *   returns `null` if no output folder is set).
      */
     fun savePhoto(base64Data: String, filename: String): Uri? {
+        Log.i(TAG, "savePhoto START: filename=$filename, base64Length=${base64Data.length}")
+
         val treeUri = getOutputFolder() ?: run {
-            Log.w(TAG, "savePhoto: no output folder set")
+            Log.e(TAG, "savePhoto FAILED: no output folder set (getOutputFolder returned null)")
             return null
+        }
+        Log.i(TAG, "savePhoto: treeUri=$treeUri")
+
+        // Verify we still have permission to write to this folder
+        val perms = resolver.persistedUriPermissions
+        val hasWrite = perms.any { it.uri == treeUri && it.isWritePermission }
+        if (!hasWrite) {
+            Log.w(TAG, "savePhoto: no persisted write permission for $treeUri — trying anyway")
         }
 
         val pureBase64 = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
+        Log.i(TAG, "savePhoto: pureBase64 length=${pureBase64.length}")
+
         val bytes = try {
             Base64.decode(pureBase64, Base64.DEFAULT)
         } catch (e: Exception) {
-            Log.e(TAG, "savePhoto: base64 decode failed — ${e.message}")
+            Log.e(TAG, "savePhoto FAILED: base64 decode error — ${e.message}")
             return null
         }
+        Log.i(TAG, "savePhoto: decoded ${bytes.size} bytes")
+
         if (bytes.isEmpty()) {
-            Log.w(TAG, "savePhoto: decoded bytes are empty for $filename")
+            Log.e(TAG, "savePhoto FAILED: decoded bytes are empty")
             return null
         }
 
         return try {
+            Log.i(TAG, "savePhoto: calling DocumentsContract.createDocument(treeUri=$treeUri, mime=$MIME_JPEG, name=$filename)")
             val docUri = DocumentsContract.createDocument(
                 resolver,
                 treeUri,
                 MIME_JPEG,
                 filename
             ) ?: run {
-                Log.w(TAG, "savePhoto: createDocument returned null for $filename")
+                Log.e(TAG, "savePhoto FAILED: createDocument returned null for '$filename'")
+                // Try listing what's in the folder to verify access
+                try {
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, null)
+                    val cursor = resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
+                    val count = cursor?.count ?: -1
+                    cursor?.close()
+                    Log.i(TAG, "savePhoto: folder contains $count existing documents")
+                } catch (e2: Exception) {
+                    Log.e(TAG, "savePhoto: cannot list folder contents — ${e2.message}")
+                }
                 return null
             }
+            Log.i(TAG, "savePhoto: createDocument returned $docUri")
 
-            resolver.openOutputStream(docUri)?.use { out ->
-                out.write(bytes)
-                out.flush()
-            } ?: run {
-                Log.w(TAG, "savePhoto: could not open output stream for $docUri")
+            val stream = resolver.openOutputStream(docUri)
+            if (stream == null) {
+                Log.e(TAG, "savePhoto FAILED: openOutputStream returned null for $docUri")
                 try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
                 return null
             }
-
-            Log.i(TAG, "Photo saved: $filename (${bytes.size} bytes) → $docUri")
+            stream.use { out ->
+                out.write(bytes)
+                out.flush()
+                Log.i(TAG, "savePhoto: wrote ${bytes.size} bytes to output stream")
+            }
+            Log.i(TAG, "savePhoto SUCCESS: $filename (${bytes.size} bytes) → $docUri")
             docUri
         } catch (e: Exception) {
-            Log.e(TAG, "savePhoto failed for $filename — ${e.message}")
+            Log.e(TAG, "savePhoto EXCEPTION for $filename — ${e.javaClass.simpleName}: ${e.message}", e)
             null
         }
     }

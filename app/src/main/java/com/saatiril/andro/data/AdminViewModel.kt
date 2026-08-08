@@ -658,15 +658,36 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Save each photo to the SAF output folder (on IO dispatcher)
+        // CRITICAL: This must complete BEFORE we broadcast PHOTOS_SAVED.
+        // The save is synchronous within the coroutine to ensure photos are
+        // actually written to disk before the app reports success.
         viewModelScope.launch(Dispatchers.IO) {
+            // First verify the output folder is accessible
+            val folderUri = photoSaver.getOutputFolder()
+            if (folderUri == null) {
+                Log.e(TAG, "=== SAVE FAILED: No output folder set! ===")
+                Log.e(TAG, "PhotoSaver.getOutputFolder() returned null. " +
+                    "Check if pickOutputFolder() was called and persisted URI permission was granted.")
+                return@launch
+            }
+            Log.i(TAG, "=== Saving ${photos.size} photo(s) to folder: $folderUri ===")
+
             for ((i, photo) in photos.withIndex()) {
                 try {
-                    photoSaver.savePhoto(photo, filenames[i])
-                    Log.i(TAG, "Local capture saved: ${filenames[i]}")
+                    Log.i(TAG, "Saving photo ${i+1}/${photos.size}: ${filenames[i]} " +
+                        "(base64 length: ${photo.length})")
+                    val savedUri = photoSaver.savePhoto(photo, filenames[i])
+                    if (savedUri != null) {
+                        Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
+                    } else {
+                        Log.e(TAG, "❌ Photo save returned null: ${filenames[i]} " +
+                            "(savePhoto returned null — check PhotoSaver logs)")
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save ${filenames[i]}: ${e.message}", e)
+                    Log.e(TAG, "❌ Failed to save ${filenames[i]}: ${e.message}", e)
                 }
             }
+            Log.i(TAG, "=== Save complete: ${photos.size} photo(s) processed ===")
         }
 
         // Update project DB
