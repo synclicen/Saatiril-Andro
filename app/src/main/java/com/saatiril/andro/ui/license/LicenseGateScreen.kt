@@ -164,21 +164,34 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp), textAlign = TextAlign.Center
             )
 
-            // ── Operator entry point — no license needed ──
-            // Operators connect to an admin's server; they don't need their own license.
-            OutlinedButton(
-                onClick = { viewModel.selectOperatorRole() },
-                modifier = Modifier.fillMaxWidth().height(46.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = CYAN),
-                border = androidx.compose.foundation.BorderStroke(1.dp, CYAN.copy(alpha = 0.6f))
-            ) {
-                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = CYAN)
-                Spacer(Modifier.width(8.dp))
-                Text("Saya Operator Kamera", color = CYAN, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            // ── MC + Operator entry points — no license needed ──
+            // MC and operators connect to an admin's server; they don't need their own license.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { viewModel.selectMcRole() },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GREEN),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GREEN.copy(alpha = 0.6f))
+                ) {
+                    Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(18.dp), tint = GREEN)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Saya MC", color = GREEN, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { viewModel.selectOperatorRole() },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CYAN),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CYAN.copy(alpha = 0.6f))
+                ) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = CYAN)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Saya Operator", color = CYAN, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
             }
             Text(
-                "Operator tidak perlu lisensi — connect ke server admin",
+                "MC & Operator tidak perlu lisensi — connect ke server admin",
                 style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp), textAlign = TextAlign.Center
             )
 

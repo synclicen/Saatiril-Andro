@@ -17,6 +17,8 @@ import com.saatiril.andro.ui.generator.LicenseGeneratorScreen
 import com.saatiril.andro.ui.hub.ProjectHubScreen
 import com.saatiril.andro.ui.license.LicenseGateScreen
 import com.saatiril.andro.ui.main.MainScaffold
+import com.saatiril.andro.ui.mc.MCConnectScreen
+import com.saatiril.andro.ui.mc.MCPanelScreen
 import com.saatiril.andro.ui.operator.OperatorCameraScreen
 import com.saatiril.andro.ui.operator.OperatorConnectScreen
 import com.saatiril.andro.ui.role.RoleSelectionScreen
@@ -79,5 +81,7 @@ private fun SaatirilAppRoot(viewModel: AdminViewModel) {
         AdminViewModel.Screen.GENERATOR -> LicenseGeneratorScreen(viewModel)
         AdminViewModel.Screen.OPERATOR_CONNECT -> OperatorConnectScreen(viewModel)
         AdminViewModel.Screen.OPERATOR_CAMERA -> OperatorCameraScreen(viewModel)
+        AdminViewModel.Screen.MC_CONNECT -> MCConnectScreen(viewModel)
+        AdminViewModel.Screen.MC_PANEL -> MCPanelScreen(viewModel)
     }
 }

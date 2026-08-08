@@ -78,6 +78,18 @@ fun RoleSelectionScreen(viewModel: AdminViewModel) {
         )
         Spacer(Modifier.height(16.dp))
 
+        // MC card
+        RoleCard(
+            icon = Icons.Default.Campaign,
+            title = "MC PANGGILAN",
+            subtitle = "Connect ke Server Admin",
+            description = "Panggil mahasiswa ke panggung,\nlihat antrean dan status operator",
+            colors = listOf(GREEN, Color(0xFF16a34a)),
+            borderColor = GREEN,
+            onClick = { viewModel.selectMcRole() }
+        )
+        Spacer(Modifier.height(16.dp))
+
         // Operator card
         RoleCard(
             icon = Icons.Default.PhotoCamera,

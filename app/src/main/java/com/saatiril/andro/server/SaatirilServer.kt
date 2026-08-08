@@ -154,6 +154,14 @@ object SaatirilServer {
                                 ContentType.Application.Json
                             )
                         }
+                        // MC web page — served at /mc?channel=1
+                        // MC scans QR code → browser opens this page → connects via WebSocket
+                        get("/mc") {
+                            call.respondText(
+                                com.saatiril.andro.server.web.MC_HTML,
+                                ContentType.Text.Html
+                            )
+                        }
                     }
                 }.also { it.start(wait = false) }
                 boundPort = tryPort

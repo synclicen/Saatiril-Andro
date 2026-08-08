@@ -161,7 +161,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA }
+    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL }
 
     private val _screen = MutableStateFlow(
         if (licenseManager.getStatus().active) Screen.ROLE_SELECT else Screen.LICENSE
@@ -178,7 +178,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = Screen.OPERATOR_CONNECT
     }
 
-    /** Go back to role selection from operator screens. */
+    /** User chose MC role — go to MC_CONNECT (no license needed). */
+    fun selectMcRole() {
+        _screen.value = Screen.MC_CONNECT
+    }
+
+    /** Go back to role selection from operator/MC screens. */
     fun backToRoleSelect() {
         _screen.value = Screen.ROLE_SELECT
     }
@@ -191,6 +196,16 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     /** Operator disconnected — go back to OPERATOR_CONNECT. */
     fun operatorDisconnected() {
         _screen.value = Screen.OPERATOR_CONNECT
+    }
+
+    /** MC connected — go to MC_PANEL. */
+    fun mcConnected() {
+        _screen.value = Screen.MC_PANEL
+    }
+
+    /** MC disconnected — go back to MC_CONNECT. */
+    fun mcDisconnected() {
+        _screen.value = Screen.MC_CONNECT
     }
 
     /** Open the developer license-code generator screen. */

@@ -342,18 +342,18 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (isDual && !isPhotoshoot) {
                         // dual: 4 QRs — MC1, MC2, Op1, Op2
-                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
-                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=2", label = "MC Ch.2", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/mc?channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/mc?channel=2", label = "MC Ch.2", modifier = Modifier.weight(1f))
                         QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
                         QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=2", label = "Op Ch.2", modifier = Modifier.weight(1f))
                     } else if (isDual && isPhotoshoot) {
                         // dual-photoshoot: 3 QRs — MC1, Op1, Op2
-                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/mc?channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
                         QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
                         QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=2", label = "Op Ch.2", modifier = Modifier.weight(1f))
                     } else {
                         // single / single-photoshoot: 2 QRs — MC1, Op1
-                        QrCodeWithLabel(url = "$baseUrl/?role=mc&channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
+                        QrCodeWithLabel(url = "$baseUrl/mc?channel=1", label = "MC Ch.1", modifier = Modifier.weight(1f))
                         QrCodeWithLabel(url = "$baseUrl/?role=operator&channel=1", label = "Op Ch.1", modifier = Modifier.weight(1f))
                     }
                 }
