@@ -323,10 +323,18 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var showQueuePanel by remember { mutableStateOf(false) }
     var showSettingsPanel by remember { mutableStateOf(false) }
 
-    Column(
+    // ── RESTRUCTURED: wrap entire screen in a Box so floating popups can be
+    // positioned as overlays that NEVER cover the shutter button. The popups
+    // float over the camera area (above the bottom bar), with a scrim to
+    // dismiss on tap-outside. This fixes the issue where the queue popup
+    // was covering the shutter button.
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(BG),
+            .background(BG)
+    ) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         // ─── Compact target info bar (single line, ~4% of screen) ───
@@ -595,100 +603,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             }
         } // end camera preview Box
 
-        // ─── COMPACT BOTTOM BAR + FLOATING POPUPS (camera preview stays full) ───
-        // Popups float ABOVE the bottom bar (zIndex) — they don't push camera up.
-        Box(modifier = Modifier.fillMaxWidth()) {
-            // Floating queue popup (above bottom bar, doesn't affect layout)
-            if (showQueuePanel) {
-                Card(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 6.dp, bottom = 70.dp)
-                        .width(180.dp)
-                        .heightIn(max = 140.dp)
-                        .zIndex(10f),
-                    colors = CardDefaults.cardColors(containerColor = PANEL),
-                    shape = RoundedCornerShape(6.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
-                ) {
-                    Column(Modifier.padding(4.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        if (isPhotoshoot) {
-                            Text("Dikirim (${opSentQueue.size})", style = TextStyle(color = CYAN, fontSize = 9.sp, fontWeight = FontWeight.Bold))
-                            opSentQueue.take(10).forEach { s ->
-                                val isSelected = activeStudent?.id == s.id
-                                Row(Modifier.fillMaxWidth().clickable { opSelectedStudent = s }.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(10.dp))
-                                    Text(s.nama.take(20).ifBlank { s.nim.take(20) }, style = TextStyle(color = if (isSelected) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
-                                    if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 8.sp))
-                                }
-                            }
-                        } else {
-                            // Sorted: active #1, then pending
-                            val opQueue = db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
-                                .sortedWith(compareBy { s -> if (isActiveStatus(s.status)) 0 else 1 })
-                            Text("Ch.$myChannel (${opQueue.size})", style = TextStyle(color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold))
-                            opQueue.take(10).forEachIndexed { i, s ->
-                                val a = isActiveStatus(s.status)
-                                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp), modifier = Modifier.width(10.dp))
-                                    Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(if (a) GOLD else MUTED.copy(alpha = 0.3f)))
-                                    Text(s.nama.take(20).ifBlank { s.nim.take(20) }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
-                                    if (a) Text("◆", style = TextStyle(color = GOLD, fontSize = 7.sp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Floating settings popup
-            if (showSettingsPanel) {
-                Card(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 6.dp, bottom = 70.dp)
-                        .width(160.dp)
-                        .zIndex(10f),
-                    colors = CardDefaults.cardColors(containerColor = PANEL),
-                    shape = RoundedCornerShape(6.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
-                ) {
-                    Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        val phaseLabel = when (capturePhase) { CapturePhase.STANDBY -> "Standby"; CapturePhase.READY_1 -> "Pose 1 — Toga"; CapturePhase.READY_2 -> "Pose 2 — Ijazah"; CapturePhase.SENDING -> "Mengirim..." }
-                        Text("Fase: $phaseLabel", style = TextStyle(color = GOLD, fontSize = 9.sp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Card(modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { gridlineEnabled = !gridlineEnabled }.border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(4.dp)),
-                                colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
-                                Text("Grid", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 8.sp))
-                            }
-                            if (gridlineEnabled) {
-                                listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (t, l) ->
-                                    Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineType = t }.border(1.dp, if (gridlineType == t) GOLD else BORDER, RoundedCornerShape(3.dp)),
-                                        colors = CardDefaults.cardColors(containerColor = if (gridlineType == t) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineType == t) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
-                                }
-                                listOf(1 to "T", 2 to "M", 3 to "K").forEach { (th, l) ->
-                                    Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineThickness = th }.border(1.dp, if (gridlineThickness == th) GOLD else BORDER, RoundedCornerShape(3.dp)),
-                                        colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == th) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineThickness == th) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
-                                }
-                            }
-                        }
-                        if (gridlineEnabled) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (n, c) ->
-                                    Card(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).clickable { gridlineColor = n }.border(2.dp, if (gridlineColor == n) GOLD else Color.Transparent, RoundedCornerShape(6.dp)),
-                                        colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(6.dp)) {}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Bottom bar (always visible, fixed height — camera preview not affected)
+        // ─── COMPACT BOTTOM BAR (no floating popups inside — they're siblings now) ───
+        // Bottom bar is always visible and NEVER covered by popups.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(PANEL.copy(alpha = 0.8f))
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                    .zIndex(1f),
+                    .background(PANEL.copy(alpha = 0.95f))
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
             // Row 1: Shutter modes (compact)
@@ -766,9 +687,129 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     colors = ButtonDefaults.buttonColors(containerColor = RED), shape = RoundedCornerShape(4.dp),
                     contentPadding = PaddingValues(horizontal = 4.dp)) { Text("BATAL", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
             }
+            } // end bottom bar Column
+        } // end main Column
+
+        // ── FLOATING POPUPS (siblings of the Column, overlay the camera area) ──
+        // These float ABOVE the bottom bar (never covering the shutter) with a
+        // scrim backdrop. Tapping the scrim dismisses the popup.
+        if (showQueuePanel || showSettingsPanel) {
+            // Scrim — dims the camera, taps to dismiss
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f))
+                    .zIndex(5f)
+                    .clickable {
+                        showQueuePanel = false
+                        showSettingsPanel = false
+                    }
+            )
+        }
+
+        // Queue popup — anchored bottom-end (above the queue toggle button area),
+        // floats UPWARD over the camera. NEVER touches the bottom bar.
+        if (showQueuePanel) {
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 54.dp, bottom = 96.dp)
+                    .width(190.dp)
+                    .heightIn(max = 220.dp)
+                    .zIndex(10f),
+                colors = CardDefaults.cardColors(containerColor = PANEL),
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.6f))
+            ) {
+                Column(Modifier.padding(6.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.List, contentDescription = null, tint = GOLD, modifier = Modifier.size(12.dp))
+                        Text(if (isPhotoshoot) "Dikirim (${opSentQueue.size})" else "Antrean Ch.$myChannel", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                    }
+                    HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 2.dp))
+                    if (isPhotoshoot) {
+                        if (opSentQueue.isEmpty()) {
+                            Text("Belum ada peserta dikirim", style = TextStyle(color = MUTED, fontSize = 9.sp), modifier = Modifier.padding(4.dp))
+                        } else {
+                            opSentQueue.take(15).forEach { s ->
+                                val isSelected = activeStudent?.id == s.id
+                                Row(Modifier.fillMaxWidth().clickable { opSelectedStudent = s; showQueuePanel = false }.padding(horizontal = 4.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(11.dp))
+                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (isSelected) GOLD else Color.White, fontSize = 9.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                                    if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 8.sp))
+                                }
+                            }
+                        }
+                    } else {
+                        val opQueue = db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
+                            .sortedWith(compareBy { s -> if (isActiveStatus(s.status)) 0 else 1 })
+                        if (opQueue.isEmpty()) {
+                            Text("Antrean kosong", style = TextStyle(color = MUTED, fontSize = 9.sp), modifier = Modifier.padding(4.dp))
+                        } else {
+                            opQueue.take(15).forEachIndexed { i, s ->
+                                val a = isActiveStatus(s.status)
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp), modifier = Modifier.width(12.dp))
+                                    Box(Modifier.size(5.dp).clip(RoundedCornerShape(2.dp)).background(if (a) GOLD else MUTED.copy(alpha = 0.3f)))
+                                    Text(s.nama.take(22).ifBlank { s.nim.take(22) }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 9.sp, modifier = Modifier.weight(1f), maxLines = 1))
+                                    if (a) Text("◆", style = TextStyle(color = GOLD, fontSize = 7.sp))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-    }
+
+        // Settings popup — anchored bottom-end (above the settings toggle),
+        // floats UPWARD over the camera. NEVER touches the bottom bar.
+        if (showSettingsPanel) {
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 6.dp, bottom = 96.dp)
+                    .width(175.dp)
+                    .zIndex(10f),
+                colors = CardDefaults.cardColors(containerColor = PANEL),
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.6f))
+            ) {
+                Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Tune, contentDescription = null, tint = GOLD, modifier = Modifier.size(12.dp))
+                        Text("Pengaturan", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                    }
+                    HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp)
+                    val phaseLabel = when (capturePhase) { CapturePhase.STANDBY -> "Standby"; CapturePhase.READY_1 -> "Pose 1 — Toga"; CapturePhase.READY_2 -> "Pose 2 — Ijazah"; CapturePhase.SENDING -> "Mengirim..." }
+                    Text("Fase: $phaseLabel", style = TextStyle(color = CYAN, fontSize = 9.sp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Card(modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { gridlineEnabled = !gridlineEnabled }.border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                            colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                            Text("Grid", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 8.sp))
+                        }
+                        if (gridlineEnabled) {
+                            listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (t, l) ->
+                                Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineType = t }.border(1.dp, if (gridlineType == t) GOLD else BORDER, RoundedCornerShape(3.dp)),
+                                    colors = CardDefaults.cardColors(containerColor = if (gridlineType == t) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineType == t) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
+                            }
+                            listOf(1 to "T", 2 to "M", 3 to "K").forEach { (th, l) ->
+                                Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineThickness = th }.border(1.dp, if (gridlineThickness == th) GOLD else BORDER, RoundedCornerShape(3.dp)),
+                                    colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == th) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp), style = TextStyle(color = if (gridlineThickness == th) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
+                            }
+                        }
+                    }
+                    if (gridlineEnabled) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (n, c) ->
+                                Card(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).clickable { gridlineColor = n }.border(2.dp, if (gridlineColor == n) GOLD else Color.Transparent, RoundedCornerShape(6.dp)),
+                                    colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(6.dp)) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } // end screen Box
 }
 
 // ─── Gridline Canvas (matches Electron SVG gridlines) ────────

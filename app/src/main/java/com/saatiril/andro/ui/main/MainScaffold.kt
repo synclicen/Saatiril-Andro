@@ -115,11 +115,11 @@ private fun ProsesiScreen(viewModel: AdminViewModel) {
     Column(
         modifier = Modifier.fillMaxSize().background(BG)
     ) {
-        // MC panel (top, 20% — locked, compact)
+        // MC panel (top, 26% — room for dominant name card + PANGGIL button)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.20f)
+                .weight(0.26f)
         ) {
             McScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
@@ -130,11 +130,11 @@ private fun ProsesiScreen(viewModel: AdminViewModel) {
                 .height(1.dp)
                 .background(BORDER)
         )
-        // Operator camera (bottom, 80% — locked, camera gets most space)
+        // Operator camera (bottom, 74% — camera gets most space)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.80f)
+                .weight(0.74f)
         ) {
             AdminOperatorScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         }
