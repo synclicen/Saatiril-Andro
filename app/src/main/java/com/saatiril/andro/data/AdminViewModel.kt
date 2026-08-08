@@ -60,7 +60,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // Start the Google Drive upload worker (processes queue in background)
-        com.saatiril.andro.backup.DriveUploadWorker.getInstance(application)
+        try {
+            com.saatiril.andro.backup.DriveUploadWorker.getInstance(application)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to start DriveUploadWorker: ${e.message}")
+        }
     }
 
     // ─── Camera managers (3-camera support: USB UVC + back + front) ───

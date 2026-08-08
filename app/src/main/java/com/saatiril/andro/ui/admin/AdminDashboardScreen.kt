@@ -93,8 +93,12 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
     var driveConnected by remember { mutableStateOf(viewModel.driveBackupManager.hasBackupFolder()) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
-            driveStats = viewModel.driveBackupManager.getStats()
-            driveConnected = viewModel.driveBackupManager.hasBackupFolder()
+            try {
+                driveStats = viewModel.driveBackupManager.getStats()
+                driveConnected = viewModel.driveBackupManager.hasBackupFolder()
+            } catch (e: Exception) {
+                // Silently ignore stats errors — don't crash the dashboard
+            }
             kotlinx.coroutines.delay(3000)
         }
     }

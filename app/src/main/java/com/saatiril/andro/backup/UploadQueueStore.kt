@@ -158,13 +158,18 @@ class UploadQueueStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         }
     }
 
-    /** Get queue statistics for UI display. */
+    /** Get queue statistics for UI display. Never throws — returns zeros on error. */
     fun getStats(): UploadStats {
-        val pending = countByStatus(STATUS_PENDING)
-        val uploading = countByStatus(STATUS_UPLOADING)
-        val failed = countByStatus(STATUS_FAILED)
-        val totalUploaded = getTotalUploaded()
-        return UploadStats(pending = pending, uploading = uploading, failed = failed, totalUploaded = totalUploaded)
+        return try {
+            val pending = countByStatus(STATUS_PENDING)
+            val uploading = countByStatus(STATUS_UPLOADING)
+            val failed = countByStatus(STATUS_FAILED)
+            val totalUploaded = getTotalUploaded()
+            UploadStats(pending = pending, uploading = uploading, failed = failed, totalUploaded = totalUploaded)
+        } catch (e: Exception) {
+            Log.w(TAG, "getStats error: ${e.message}")
+            UploadStats(pending = 0, uploading = 0, failed = 0, totalUploaded = 0)
+        }
     }
 
     private fun countByStatus(status: String): Int {
@@ -176,11 +181,17 @@ class UploadQueueStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
     }
 
     private fun getTotalUploaded(): Int {
-        // Track in a separate counter table for simplicity
-        val cursor = readableDatabase.rawQuery(
-            "SELECT COUNT(*) FROM upload_counter WHERE type = 'uploaded'", null
-        )
-        return cursor.use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        // The upload_counter table is created lazily in incrementUploaded().
+        // If it doesn't exist yet (no uploads have happened), return 0.
+        return try {
+            val cursor = readableDatabase.rawQuery(
+                "SELECT COUNT(*) FROM upload_counter WHERE type = 'uploaded'", null
+            )
+            cursor.use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        } catch (e: Exception) {
+            // Table doesn't exist yet — no uploads done
+            0
+        }
     }
 
     /** Increment the uploaded counter (called when an item is marked done). */
