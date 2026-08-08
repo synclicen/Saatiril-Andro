@@ -84,22 +84,13 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
 
     val scrollState = rememberScrollState()
 
-    // #3: Auto-scroll to position of active student (not sort to top — keep original order)
-    // Highlight the active student in-place, scroll to show them.
+    // Auto-scroll to TOP when active student changes — active student is sorted
+    // to position #1 so MC sees: active (being photographed) + next pending students below.
     val activeStudentId = active.firstOrNull()?.id
     val doneCount = done.size
     LaunchedEffect(activeStudentId, doneCount) {
         kotlinx.coroutines.delay(100)
-        // Find the index of the active student in the original (unsorted) channelStudents list
-        val activeIdx = channelStudents.indexOfFirst { it.id == activeStudentId }
-        if (activeIdx >= 0) {
-            // Scroll to show the active student (each row ~35dp)
-            scrollState.animateScrollTo((activeIdx * 35).coerceAtLeast(0))
-        } else {
-            // No active student — scroll to first pending
-            val pendingIdx = channelStudents.indexOfFirst { it.status == "pending" }
-            if (pendingIdx >= 0) scrollState.animateScrollTo((pendingIdx * 35).coerceAtLeast(0))
-        }
+        scrollState.animateScrollTo(0)
     }
 
     // ── STICKY HEADER — 2 sections side by side: LEFT=PANGGIL, RIGHT=Operator Status ──
@@ -239,7 +230,7 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        // ── SCROLLABLE QUEUE LIST — ORIGINAL ORDER, highlight active (#3) ──
+        // ── SCROLLABLE QUEUE LIST — sorted: active #1, then pending, then done ──
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -269,11 +260,20 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                     if (channelStudents.size > 50) Text("… dan ${channelStudents.size - 50} lainnya", style = TextStyle(color = MUTED, fontSize = 8.sp), modifier = Modifier.padding(2.dp))
                 }
             } else {
-                // #3: Non-photoshoot: queue list in ORIGINAL ORDER (no sorting).
-                // Active student is HIGHLIGHTED in-place, auto-scrolled to show them.
-                val queueFilter = if (q.isEmpty()) channelStudents else channelStudents.filter {
+                // Non-photoshoot: queue SORTED — active student at #1, then pending, then done
+                // so MC sees: active (being photographed) + next students below.
+                val rawFilter = if (q.isEmpty()) channelStudents else channelStudents.filter {
                     it.nama.contains(q, ignoreCase = true) || it.nim.contains(q, ignoreCase = true)
                 }
+                val queueFilter = rawFilter.sortedWith(compareBy { s ->
+                    when {
+                        isActiveStatus(s.status) -> 0
+                        s.status == "pending" -> 1
+                        s.status == "sent" -> 2
+                        s.status == "done" -> 3
+                        else -> 4
+                    }
+                })
                 if (q.isNotEmpty()) {
                     OutlinedTextField(
                         value = searchQuery, onValueChange = { searchQuery = it },
