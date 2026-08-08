@@ -352,10 +352,10 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
 
         // ─── Camera preview — aspect-ratio-locked to project ratio ───
-        // The outer Box fills available space (black background for letterbox bars).
-        // The inner Box is aspect-ratio-locked to the project's selected ratio.
-        // TextureView + gridline + frame overlay go INSIDE the inner box.
-        // Camera switch button + status overlay go in the OUTER box (always visible).
+        // Camera preview — aspect-ratio-locked to project ratio.
+        // For portrait ratios (3:4, 9:16, 2:3, 4:6): use fillMaxHeight so the
+        // preview is constrained by HEIGHT (not width) → portrait orientation.
+        // For landscape/square ratios (4:3, 16:9, 1:1): use fillMaxWidth.
         val ratio = project?.config?.ratio ?: "4:3"
         val aspectRatio = when (ratio) {
             "4:3" -> 4f / 3f
@@ -367,6 +367,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             "1:1" -> 1f
             else -> 4f / 3f
         }
+        val isPortrait = aspectRatio < 1f  // height > width
 
         Box(
             modifier = Modifier
@@ -378,10 +379,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             contentAlignment = Alignment.Center
         ) {
             // Inner Box: aspect-ratio-locked container for camera + overlays
+            // Portrait: fillMaxHeight + aspectRatio → constrains width
+            // Landscape: fillMaxWidth + aspectRatio → constrains height
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(aspectRatio)
+                    .then(
+                        if (isPortrait) Modifier.fillMaxHeight().aspectRatio(aspectRatio)
+                        else Modifier.fillMaxWidth().aspectRatio(aspectRatio)
+                    )
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color.Black)
             ) {

@@ -346,32 +346,26 @@ private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onCa
         isDone -> PANEL.copy(alpha = 0.3f)
         else -> PANEL
     }
+    // No per-row call button — matches Electron mc-panel.tsx which uses a single
+    // PANGGIL SEKARANG button at the top. Queue rows are display-only with status dots.
     Card(colors = CardDefaults.cardColors(containerColor = rowBg), shape = RoundedCornerShape(6.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.4f) else BORDER.copy(alpha = 0.3f))) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("$number", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(16.dp))
-            // Status dot
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("$number", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
+            // Status dot (matches Electron green/purple dots)
             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(statusColor))
             Column(Modifier.weight(1f)) {
-                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.5f) else Color.White, fontSize = 11.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
-                Text(student.nim.ifBlank { "-" }, style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 9.sp, fontFamily = FontFamily.Monospace))
+                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.5f) else Color.White, fontSize = 10.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium), maxLines = 1)
             }
-            // Status badge
+            // Status badge text only (no button)
             val statusLabel = when {
-                isActive -> "Ch.${getActiveChannel(student.status) ?: channel}"
+                isActive -> "◆"
                 isSent -> "Dikirim"
                 isDone -> "✓"
                 else -> ""
             }
             if (statusLabel.isNotEmpty()) {
                 Text(statusLabel, style = TextStyle(color = statusColor, fontSize = 8.sp, fontWeight = FontWeight.Bold))
-            }
-            // Call button (only for pending)
-            if (student.status == "pending") {
-                Button(onClick = onCall, colors = ButtonDefaults.buttonColors(containerColor = GOLD), shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
-                    Text("Panggil", color = BG, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                }
             }
         }
     }
