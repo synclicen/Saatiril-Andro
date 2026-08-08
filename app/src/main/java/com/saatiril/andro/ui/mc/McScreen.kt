@@ -87,6 +87,7 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
     // #3: Auto-scroll to position of active student (not sort to top — keep original order)
     // Highlight the active student in-place, scroll to show them.
     val activeStudentId = active.firstOrNull()?.id
+    val doneCount = done.size
     LaunchedEffect(activeStudentId, doneCount) {
         kotlinx.coroutines.delay(100)
         // Find the index of the active student in the original (unsorted) channelStudents list
