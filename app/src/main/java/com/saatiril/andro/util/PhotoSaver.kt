@@ -64,6 +64,37 @@ class PhotoSaver(private val context: Context) {
     }
 
     /**
+     * Normalize a stored URI to a **document URI** suitable for use as the
+     * `parentDocumentUri` argument of [DocumentsContract.createDocument].
+     *
+     * A tree URI returned by `ACTION_OPEN_DOCUMENT_TREE` looks like:
+     *   `content://...documents/tree/primary%3AFoo`
+     * It does **not** have a `/document/` segment, so `createDocument`
+     * silently returns `null` when passed this URI directly.
+     *
+     * We convert it to the root document URI:
+     *   `content://...documents/tree/primary%3AFoo/document/primary%3AFoo`
+     *
+     * If the URI already has a `/document/` segment (e.g. a subfolder URI
+     * built by `buildDocumentUriUsingTree`), it is returned unchanged.
+     */
+    private fun normalizeToDocumentUri(uri: Uri): Uri {
+        val path = uri.path ?: return uri
+        return if (path.contains("/document/")) {
+            uri  // already a document URI
+        } else {
+            // Tree URI without /document/ — convert to root document URI
+            try {
+                val rootDocId = DocumentsContract.getTreeDocumentId(uri)
+                DocumentsContract.buildDocumentUriUsingTree(uri, rootDocId)
+            } catch (e: Exception) {
+                Log.e(TAG, "normalizeToDocumentUri failed for $uri — ${e.message}")
+                uri
+            }
+        }
+    }
+
+    /**
      * Save a photo (base64 data URL **or** raw base64) to the output folder
      * with the given [filename] (e.g. `"2024001_Budi_1_Toga.jpg"`).
      *
@@ -75,17 +106,24 @@ class PhotoSaver(private val context: Context) {
     fun savePhoto(base64Data: String, filename: String): Uri? {
         Log.i(TAG, "savePhoto START: filename=$filename, base64Length=${base64Data.length}")
 
-        val treeUri = getOutputFolder() ?: run {
+        val storedUri = getOutputFolder() ?: run {
             Log.e(TAG, "savePhoto FAILED: no output folder set (getOutputFolder returned null)")
             return null
         }
-        Log.i(TAG, "savePhoto: treeUri=$treeUri")
+        Log.i(TAG, "savePhoto: storedUri=$storedUri")
+
+        // CRITICAL FIX: createDocument requires a DOCUMENT URI (with /document/ segment),
+        // not a tree URI. The tree URI from ACTION_OPEN_DOCUMENT_TREE lacks this segment
+        // and causes createDocument to return null on internal storage providers.
+        val parentDocUri = normalizeToDocumentUri(storedUri)
+        Log.i(TAG, "savePhoto: parentDocUri=$parentDocUri (normalized from $storedUri)")
 
         // Verify we still have permission to write to this folder
         val perms = resolver.persistedUriPermissions
-        val hasWrite = perms.any { it.uri == treeUri && it.isWritePermission }
+        val treeRootUri = extractTreeRoot(storedUri)
+        val hasWrite = perms.any { it.uri == treeRootUri && it.isWritePermission }
         if (!hasWrite) {
-            Log.w(TAG, "savePhoto: no persisted write permission for $treeUri — trying anyway")
+            Log.w(TAG, "savePhoto: no persisted write permission for $treeRootUri — trying anyway")
         }
 
         val pureBase64 = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
@@ -105,17 +143,23 @@ class PhotoSaver(private val context: Context) {
         }
 
         return try {
-            Log.i(TAG, "savePhoto: calling DocumentsContract.createDocument(treeUri=$treeUri, mime=$MIME_JPEG, name=$filename)")
+            Log.i(TAG, "savePhoto: calling DocumentsContract.createDocument(parent=$parentDocUri, mime=$MIME_JPEG, name=$filename)")
             val docUri = DocumentsContract.createDocument(
                 resolver,
-                treeUri,
+                parentDocUri,
                 MIME_JPEG,
                 filename
             ) ?: run {
                 Log.e(TAG, "savePhoto FAILED: createDocument returned null for '$filename'")
+                Log.e(TAG, "savePhoto: parentDocUri was: $parentDocUri")
+                Log.e(TAG, "savePhoto: storedUri was: $storedUri")
                 // Try listing what's in the folder to verify access
                 try {
-                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, null)
+                    val listDocUri = normalizeToDocumentUri(storedUri)
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(
+                        listDocUri,
+                        DocumentsContract.getDocumentId(listDocUri)
+                    )
                     val cursor = resolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
                     val count = cursor?.count ?: -1
                     cursor?.close()
@@ -147,15 +191,32 @@ class PhotoSaver(private val context: Context) {
     }
 
     /**
+     * Extract the tree-root URI from any SAF URI (tree or document).
+     * Used to match against persisted URI permissions, which are always
+     * stored against the tree-root URI.
+     */
+    private fun extractTreeRoot(uri: Uri): Uri {
+        val path = uri.path ?: return uri
+        return if (path.contains("/document/")) {
+            // Strip the /document/... segment to get the tree-root URI
+            val treePart = path.substringBefore("/document/")
+            uri.buildUpon().path(treePart).build()
+        } else {
+            uri
+        }
+    }
+
+    /**
      * List the filenames of all `.jpg` files in the output folder.
      * Returns an empty list if no folder is set or the folder is empty.
      */
     fun listPhotos(): List<String> {
-        val treeUri = getOutputFolder() ?: return emptyList()
+        val storedUri = getOutputFolder() ?: return emptyList()
         val out = mutableListOf<String>()
         try {
-            val parentDocId = DocumentsContract.getTreeDocumentId(treeUri)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+            val parentDocUri = normalizeToDocumentUri(storedUri)
+            val parentDocId = DocumentsContract.getDocumentId(parentDocUri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentDocUri, parentDocId)
             resolver.query(
                 childrenUri,
                 arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
@@ -187,9 +248,10 @@ class PhotoSaver(private val context: Context) {
      * @return the Uri of the created file, or null on failure
      */
     fun saveTextFile(content: String, filename: String, mimeType: String = "text/csv"): Uri? {
-        val treeUri = getOutputFolder() ?: return null
+        val storedUri = getOutputFolder() ?: return null
+        val parentDocUri = normalizeToDocumentUri(storedUri)
         return try {
-            val docUri = DocumentsContract.createDocument(context.contentResolver, treeUri, mimeType, filename) ?: return null
+            val docUri = DocumentsContract.createDocument(context.contentResolver, parentDocUri, mimeType, filename) ?: return null
             context.contentResolver.openOutputStream(docUri)?.use { os ->
                 os.write(content.toByteArray(Charsets.UTF_8))
             }
@@ -214,8 +276,14 @@ class PhotoSaver(private val context: Context) {
     fun createSubfolder(treeUri: Uri, folderName: String): Uri? {
         Log.i(TAG, "createSubfolder: parent=$treeUri, name=$folderName")
         return try {
+            // CRITICAL FIX: createDocument needs a DOCUMENT URI, not a tree URI.
+            // Normalize the tree URI to its root document URI.
+            val parentDocUri = normalizeToDocumentUri(treeUri)
+            Log.i(TAG, "createSubfolder: parentDocUri=$parentDocUri (normalized from $treeUri)")
+
             // Check if folder already exists (e.g. resuming a project)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, null)
+            val docIdOfParent = DocumentsContract.getDocumentId(parentDocUri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentDocUri, docIdOfParent)
             val cursor = resolver.query(
                 childrenUri,
                 arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
@@ -234,20 +302,25 @@ class PhotoSaver(private val context: Context) {
                 }
             }
 
-            // Create new folder
+            // Create new folder using the DOCUMENT URI as parent (not the tree URI)
+            Log.i(TAG, "createSubfolder: calling createDocument(parent=$parentDocUri, mime=DIR, name=$folderName)")
             val docUri = DocumentsContract.createDocument(
                 resolver,
-                treeUri,
+                parentDocUri,
                 DocumentsContract.Document.MIME_TYPE_DIR,  // "vnd.android.document/directory"
                 folderName
             )
 
             if (docUri == null) {
                 Log.e(TAG, "createSubfolder FAILED: createDocument returned null for '$folderName'")
+                Log.e(TAG, "createSubfolder: parentDocUri was: $parentDocUri")
+                Log.e(TAG, "createSubfolder: treeUri was: $treeUri")
                 return null
             }
+            Log.i(TAG, "createSubfolder: createDocument returned $docUri")
 
-            // Convert the document URI to a tree URI so we can use it as a new output folder
+            // Convert the document URI to a tree-based document URI so we can use
+            // it as a new output folder (with createDocument) and list its children.
             val docId = DocumentsContract.getDocumentId(docUri)
             val subTreeUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
@@ -267,9 +340,10 @@ class PhotoSaver(private val context: Context) {
      * @return the Uri of the created file, or null on failure
      */
     fun saveBinaryFile(bytes: ByteArray, filename: String, mimeType: String): Uri? {
-        val treeUri = getOutputFolder() ?: return null
+        val storedUri = getOutputFolder() ?: return null
+        val parentDocUri = normalizeToDocumentUri(storedUri)
         return try {
-            val docUri = DocumentsContract.createDocument(context.contentResolver, treeUri, mimeType, filename) ?: return null
+            val docUri = DocumentsContract.createDocument(context.contentResolver, parentDocUri, mimeType, filename) ?: return null
             context.contentResolver.openOutputStream(docUri)?.use { os ->
                 os.write(bytes)
             }
