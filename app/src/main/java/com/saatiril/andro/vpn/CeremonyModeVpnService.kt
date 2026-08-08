@@ -76,13 +76,22 @@ class CeremonyModeVpnService : VpnService() {
         Log.i(TAG, "onStartCommand — starting Ceremony Mode VPN")
 
         // Start as foreground service (required for VPN services)
-        startForeground(NOTIF_ID, buildNotification())
+        // Must be called within 5 seconds of startForegroundService()
+        try {
+            startForeground(NOTIF_ID, buildNotification())
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground FAILED: ${e.message}", e)
+            CeremonyModeManager.isActive.postValue(false)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Set up the VPN interface
         try {
             setupVpn()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to setup VPN: ${e.message}", e)
+            CeremonyModeManager.isActive.postValue(false)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -121,9 +130,14 @@ class CeremonyModeVpnService : VpnService() {
         builder.addDisallowedApplication("com.saatiril.andro")
 
         // EXCLUDE Google Drive app: allows admin to manually upload files
-        // via Google Drive app if needed (Saatiril's built-in upload uses SAF
-        // which goes through Saatiril app and is already exempt)
-        builder.addDisallowedApplication("com.google.android.apps.docs")
+        // via Google Drive app if needed. Wrapped in try-catch because
+        // addDisallowedApplication throws NameNotFoundException if the app
+        // is not installed on this device.
+        try {
+            builder.addDisallowedApplication("com.google.android.apps.docs")
+        } catch (e: Exception) {
+            Log.i(TAG, "Google Drive app not installed — skipping exception (ok)")
+        }
 
         builder.setMtu(1500)
 
@@ -134,6 +148,7 @@ class CeremonyModeVpnService : VpnService() {
 
         if (vpnInterface == null) {
             Log.e(TAG, "Failed to establish VPN interface — establish() returned null")
+            CeremonyModeManager.isActive.postValue(false)
             stopSelf()
             return
         }
