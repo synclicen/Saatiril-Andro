@@ -246,8 +246,8 @@ fun OperatorConnectScreen(
         Text("Jalur Kamera", style = TextStyle(color = MUTED, fontSize = 12.sp, fontWeight = FontWeight.Bold))
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChannelOption(1, "Ch.1", selectedChannel == 1) { selectedChannel = 1 }
-            ChannelOption(2, "Ch.2", selectedChannel == 2) { selectedChannel = 2 }
+            ChannelOption(1, "Ch.1", selectedChannel == 1, Modifier.weight(1f)) { selectedChannel = 1 }
+            ChannelOption(2, "Ch.2", selectedChannel == 2, Modifier.weight(1f)) { selectedChannel = 2 }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -320,10 +320,9 @@ fun OperatorConnectScreen(
 }
 
 @Composable
-private fun ChannelOption(channel: Int, label: String, isSelected: Boolean, onClick: () -> Unit) {
+private fun ChannelOption(channel: Int, label: String, isSelected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .weight(1f)
+        modifier = modifier
             .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
