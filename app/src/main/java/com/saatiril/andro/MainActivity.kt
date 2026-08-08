@@ -17,6 +17,9 @@ import com.saatiril.andro.ui.generator.LicenseGeneratorScreen
 import com.saatiril.andro.ui.hub.ProjectHubScreen
 import com.saatiril.andro.ui.license.LicenseGateScreen
 import com.saatiril.andro.ui.main.MainScaffold
+import com.saatiril.andro.ui.operator.OperatorCameraScreen
+import com.saatiril.andro.ui.operator.OperatorConnectScreen
+import com.saatiril.andro.ui.role.RoleSelectionScreen
 import com.saatiril.andro.ui.setup.ProjectSetupScreen
 
 /**
@@ -69,9 +72,12 @@ private fun SaatirilAppRoot(viewModel: AdminViewModel) {
     val screen by viewModel.screen.collectAsState()
     when (screen) {
         AdminViewModel.Screen.LICENSE -> LicenseGateScreen(viewModel)
+        AdminViewModel.Screen.ROLE_SELECT -> RoleSelectionScreen(viewModel)
         AdminViewModel.Screen.HUB -> ProjectHubScreen(viewModel)
         AdminViewModel.Screen.SETUP -> ProjectSetupScreen(viewModel)
         AdminViewModel.Screen.MAIN -> MainScaffold(viewModel)
         AdminViewModel.Screen.GENERATOR -> LicenseGeneratorScreen(viewModel)
+        AdminViewModel.Screen.OPERATOR_CONNECT -> OperatorConnectScreen(viewModel)
+        AdminViewModel.Screen.OPERATOR_CAMERA -> OperatorCameraScreen(viewModel)
     }
 }

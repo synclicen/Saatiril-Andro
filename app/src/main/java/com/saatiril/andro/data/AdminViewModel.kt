@@ -143,7 +143,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val ok = licenseManager.activate(code.trim())
         if (ok) {
             _licenseStatus.value = licenseManager.getStatus()
-            _screen.value = Screen.HUB
+            _screen.value = Screen.ROLE_SELECT
         }
         return ok
     }
@@ -151,23 +151,48 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     fun deactivateLicense() {
         licenseManager.deactivate()
         _licenseStatus.value = licenseManager.getStatus()
-        _screen.value = Screen.LICENSE
+        _screen.value = Screen.ROLE_SELECT
     }
 
     // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LICENSE, HUB, SETUP, MAIN, GENERATOR }
+    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA }
 
     private val _screen = MutableStateFlow(
-        if (licenseManager.getStatus().active) Screen.HUB else Screen.LICENSE
+        if (licenseManager.getStatus().active) Screen.ROLE_SELECT else Screen.LICENSE
     )
     val screen: StateFlow<Screen> = _screen.asStateFlow()
+
+    /** User chose Admin role — go to HUB (or LICENSE if no license). */
+    fun selectAdminRole() {
+        _screen.value = if (licenseManager.getStatus().active) Screen.HUB else Screen.LICENSE
+    }
+
+    /** User chose Operator role — go to OPERATOR_CONNECT (no license needed). */
+    fun selectOperatorRole() {
+        _screen.value = Screen.OPERATOR_CONNECT
+    }
+
+    /** Go back to role selection from operator screens. */
+    fun backToRoleSelect() {
+        _screen.value = Screen.ROLE_SELECT
+    }
+
+    /** Operator connected — go to OPERATOR_CAMERA. */
+    fun operatorConnected() {
+        _screen.value = Screen.OPERATOR_CAMERA
+    }
+
+    /** Operator disconnected — go back to OPERATOR_CONNECT. */
+    fun operatorDisconnected() {
+        _screen.value = Screen.OPERATOR_CONNECT
+    }
 
     /** Open the developer license-code generator screen. */
     fun openGenerator() { _screen.value = Screen.GENERATOR }
 
-    /** Close the generator — return to the previous sensible screen. */
+    /** Close the generator — return to role selection. */
     fun closeGenerator() {
-        _screen.value = if (licenseManager.getStatus().active) Screen.HUB else Screen.LICENSE
+        _screen.value = Screen.ROLE_SELECT
     }
 
     /**

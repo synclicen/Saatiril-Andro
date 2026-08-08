@@ -37,6 +37,7 @@ private val CARD = Color(0xFF3b2263)
 private val BORDER = Color(0xFF533485)
 private val GOLD = Color(0xFFd4af37)
 private val MUTED = Color(0xFFc4b5fd)
+private val CYAN = Color(0xFF06b6d4)
 private val RED = Color(0xFFef4444)
 private val GREEN = Color(0xFF4ade80)
 
@@ -161,6 +162,24 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
             Text(
                 "Lisensi terikat perangkat ini, berlaku 30 hari, tanpa grace period.",
                 style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp), textAlign = TextAlign.Center
+            )
+
+            // ── Operator entry point — no license needed ──
+            // Operators connect to an admin's server; they don't need their own license.
+            OutlinedButton(
+                onClick = { viewModel.selectOperatorRole() },
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = CYAN),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CYAN.copy(alpha = 0.6f))
+            ) {
+                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = CYAN)
+                Spacer(Modifier.width(8.dp))
+                Text("Saya Operator Kamera", color = CYAN, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+            Text(
+                "Operator tidak perlu lisensi — connect ke server admin",
+                style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp), textAlign = TextAlign.Center
             )
 
             // ── Developer entry point — discrete link to the code generator ──

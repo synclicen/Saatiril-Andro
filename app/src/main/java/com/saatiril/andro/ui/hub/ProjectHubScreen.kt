@@ -55,6 +55,18 @@ fun ProjectHubScreen(viewModel: AdminViewModel) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Proyek Wisuda", style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White))
             }
+            // Switch role button — go back to role selection
+            Card(
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                    .clickable { viewModel.backToRoleSelect() },
+                colors = CardDefaults.cardColors(containerColor = PANEL),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BORDER)
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.SwapHoriz, contentDescription = "Ganti Peran", tint = GOLD, modifier = Modifier.size(20.dp))
+                }
+            }
         }
 
         // New project button (big, primary)
