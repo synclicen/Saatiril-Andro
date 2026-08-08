@@ -597,6 +597,149 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             if (showFlash) {
                 Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.6f)))
             }
+
+            // ── COMPACT QUEUE OVERLAY (inside camera, bottom-left) ──
+            // Does NOT affect camera size or aspect ratio — it floats on top.
+            // Shows 4-5 items max, auto-scrolls to active student, highlights gold.
+            if (showQueuePanel) {
+                Card(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp)
+                        .width(150.dp)
+                        .zIndex(10f),
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.75f)),
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
+                ) {
+                    Column(Modifier.padding(4.dp)) {
+                        // Header
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.List, contentDescription = null, tint = GOLD, modifier = Modifier.size(10.dp))
+                            Text(
+                                if (isPhotoshoot) "Dikirim" else "Ch.$myChannel",
+                                style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Card(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).clickable { showQueuePanel = false },
+                                colors = CardDefaults.cardColors(containerColor = BORDER)) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup", tint = MUTED, modifier = Modifier.size(8.dp))
+                                }
+                            }
+                        }
+                        HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 1.dp))
+                        // Queue list — max 4 items visible, auto-scroll to active
+                        val opQueueList = if (isPhotoshoot) {
+                            opSentQueue
+                        } else {
+                            db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
+                                .sortedWith(compareBy { s -> if (isActiveStatus(s.status)) 0 else 1 })
+                        }
+                        if (opQueueList.isEmpty()) {
+                            Text("Kosong", style = TextStyle(color = MUTED, fontSize = 8.sp), modifier = Modifier.padding(4.dp))
+                        } else {
+                            // Find active index for auto-scroll
+                            val activeIdx = opQueueList.indexOfFirst { isActiveStatus(it.status) || (isPhotoshoot && it.id == activeStudent?.id) }
+                            val scrollQ = rememberScrollState()
+                            LaunchedEffect(activeIdx, opQueueList.size) {
+                                kotlinx.coroutines.delay(50)
+                                if (activeIdx >= 0) scrollQ.animateScrollTo(activeIdx * 28) // ~28dp per row
+                            }
+                            Column(
+                                modifier = Modifier.heightIn(max = 112.dp).verticalScroll(scrollQ), // 4 items × 28dp
+                                verticalArrangement = Arrangement.spacedBy(0.dp)
+                            ) {
+                                opQueueList.forEachIndexed { i, s ->
+                                    val isActive = isActiveStatus(s.status) || (isPhotoshoot && s.id == activeStudent?.id)
+                                    val isSelected = s.id == activeStudent?.id
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(if (isPhotoshoot) Modifier.clickable { opSelectedStudent = s } else Modifier)
+                                            .padding(horizontal = 3.dp, vertical = 2.dp)
+                                            .then(if (isActive) Modifier.background(GOLD.copy(alpha = 0.15f), RoundedCornerShape(3.dp)) else Modifier),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 7.sp), modifier = Modifier.width(10.dp))
+                                        Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(if (isActive) GOLD else MUTED.copy(alpha = 0.3f)))
+                                        Text(
+                                            s.nama.take(18).ifBlank { s.nim.take(18) },
+                                            style = TextStyle(
+                                                color = if (isActive) GOLD else Color.White,
+                                                fontSize = 8.sp,
+                                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                                            ),
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1
+                                        )
+                                        if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 6.sp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── COMPACT SETTINGS OVERLAY (inside camera, top-right below camera picker) ──
+            // Does NOT affect camera size — floats on top.
+            if (showSettingsPanel) {
+                Card(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 44.dp, end = 4.dp)
+                        .width(160.dp)
+                        .zIndex(10f),
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
+                ) {
+                    Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Icon(Icons.Default.Tune, contentDescription = null, tint = GOLD, modifier = Modifier.size(10.dp))
+                            Text("Pengaturan", style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                            Card(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).clickable { showSettingsPanel = false },
+                                colors = CardDefaults.cardColors(containerColor = BORDER)) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup", tint = MUTED, modifier = Modifier.size(8.dp))
+                                }
+                            }
+                        }
+                        HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp)
+                        // Phase
+                        val phaseLabel = when (capturePhase) { CapturePhase.STANDBY -> "Standby"; CapturePhase.READY_1 -> "Pose 1 — Toga"; CapturePhase.READY_2 -> "Pose 2 — Ijazah"; CapturePhase.SENDING -> "Mengirim..." }
+                        Text(phaseLabel, style = TextStyle(color = CYAN, fontSize = 7.sp, fontWeight = FontWeight.Bold))
+                        // Grid toggle row
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineEnabled = !gridlineEnabled }.border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(3.dp)),
+                                colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else Color.Transparent), shape = RoundedCornerShape(3.dp)) {
+                                Text("Grid", modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp), style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 7.sp, fontWeight = FontWeight.Bold))
+                            }
+                            if (gridlineEnabled) {
+                                listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (t, l) ->
+                                    Card(modifier = Modifier.clip(RoundedCornerShape(2.dp)).clickable { gridlineType = t }.border(1.dp, if (gridlineType == t) GOLD else BORDER, RoundedCornerShape(2.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = if (gridlineType == t) CARD else Color.Transparent), shape = RoundedCornerShape(2.dp)) { Text(l, modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp), style = TextStyle(color = if (gridlineType == t) GOLD else MUTED, fontSize = 7.sp, fontWeight = FontWeight.Bold)) }
+                                }
+                            }
+                        }
+                        if (gridlineEnabled) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                listOf(1 to "T", 2 to "M", 3 to "K").forEach { (th, l) ->
+                                    Card(modifier = Modifier.clip(RoundedCornerShape(2.dp)).clickable { gridlineThickness = th }.border(1.dp, if (gridlineThickness == th) GOLD else BORDER, RoundedCornerShape(2.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == th) CARD else Color.Transparent), shape = RoundedCornerShape(2.dp)) { Text(l, modifier = Modifier.padding(horizontal = 2.dp, vertical = 1.dp), style = TextStyle(color = if (gridlineThickness == th) GOLD else MUTED, fontSize = 7.sp, fontWeight = FontWeight.Bold)) }
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (n, c) ->
+                                    Card(modifier = Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).clickable { gridlineColor = n }.border(2.dp, if (gridlineColor == n) GOLD else Color.Transparent, RoundedCornerShape(5.dp)),
+                                        colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(5.dp)) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         } // end camera preview Box
 
         // ─── SHUTTER CONTROLS BAR (always visible, never covered) ───
@@ -683,135 +826,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     contentPadding = PaddingValues(horizontal = 4.dp)) { Text("BATAL", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
             }
         } // end shutter controls bar
-
-        // ── INLINE QUEUE PANEL (show/hide, BELOW shutter, spans full width) ──
-        // This is NOT a popup — it takes space from the camera preview.
-        // When shown, camera shrinks (capped at 180dp for queue); when hidden, camera expands.
-        if (showQueuePanel) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 180.dp)
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                colors = CardDefaults.cardColors(containerColor = PANEL),
-                shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
-            ) {
-                Column(Modifier.fillMaxSize().padding(6.dp)) {
-                    // Header row — title + close button
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(Icons.Default.List, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
-                        Text(
-                            if (isPhotoshoot) "Dikirim ke Operator (${opSentQueue.size})" else "Antrean Ch.$myChannel",
-                            style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Card(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(4.dp)).clickable { showQueuePanel = false },
-                            colors = CardDefaults.cardColors(containerColor = BORDER)) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Close, contentDescription = "Tutup", tint = MUTED, modifier = Modifier.size(12.dp))
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 3.dp))
-                    // Scrollable list
-                    Column(
-                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        if (isPhotoshoot) {
-                            if (opSentQueue.isEmpty()) {
-                                Text("Belum ada peserta dikirim ke operator", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(8.dp))
-                            } else {
-                                opSentQueue.forEach { s ->
-                                    val isSelected = activeStudent?.id == s.id
-                                    Row(Modifier.fillMaxWidth().clickable { opSelectedStudent = s }.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Person, contentDescription = null, tint = if (isSelected) GOLD else MUTED, modifier = Modifier.size(12.dp))
-                                        Text(s.nama.ifBlank { s.nim }, style = TextStyle(color = if (isSelected) GOLD else Color.White, fontSize = 10.sp), modifier = Modifier.weight(1f), maxLines = 1)
-                                        if (isSelected) Text("✓", style = TextStyle(color = GOLD, fontSize = 9.sp))
-                                    }
-                                }
-                            }
-                        } else {
-                            val opQueue = db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
-                                .sortedWith(compareBy { s -> if (isActiveStatus(s.status)) 0 else 1 })
-                            if (opQueue.isEmpty()) {
-                                Text("Antrean kosong", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.padding(8.dp))
-                            } else {
-                                opQueue.forEachIndexed { i, s ->
-                                    val a = isActiveStatus(s.status)
-                                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 9.sp), modifier = Modifier.width(14.dp))
-                                        Box(Modifier.size(5.dp).clip(RoundedCornerShape(2.dp)).background(if (a) GOLD else MUTED.copy(alpha = 0.3f)))
-                                        Text(s.nama.ifBlank { s.nim }, style = TextStyle(color = if (a) GOLD else Color.White, fontSize = 10.sp, fontWeight = if (a) FontWeight.Bold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1)
-                                        if (a) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── INLINE SETTINGS PANEL (show/hide, BELOW shutter, spans full width) ──
-        if (showSettingsPanel) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                colors = CardDefaults.cardColors(containerColor = PANEL),
-                shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, GOLD.copy(alpha = 0.5f))
-            ) {
-                Column(Modifier.fillMaxWidth().padding(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(Icons.Default.Tune, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
-                        Text("Pengaturan", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
-                        Card(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(4.dp)).clickable { showSettingsPanel = false },
-                            colors = CardDefaults.cardColors(containerColor = BORDER)) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Close, contentDescription = "Tutup", tint = MUTED, modifier = Modifier.size(12.dp))
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp)
-                    // Capture phase indicator
-                    val phaseLabel = when (capturePhase) { CapturePhase.STANDBY -> "Standby"; CapturePhase.READY_1 -> "Pose 1 — Toga"; CapturePhase.READY_2 -> "Pose 2 — Ijazah"; CapturePhase.SENDING -> "Mengirim..." }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Fase:", style = TextStyle(color = MUTED, fontSize = 9.sp))
-                        Text(phaseLabel, style = TextStyle(color = CYAN, fontSize = 9.sp, fontWeight = FontWeight.Bold))
-                    }
-                    // Gridline toggle
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Card(modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { gridlineEnabled = !gridlineEnabled }.border(1.dp, if (gridlineEnabled) GOLD else BORDER, RoundedCornerShape(4.dp)),
-                            colors = CardDefaults.cardColors(containerColor = if (gridlineEnabled) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
-                            Text("Grid", modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp), style = TextStyle(color = if (gridlineEnabled) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
-                        }
-                        if (gridlineEnabled) {
-                            listOf("thirds" to "⅓", "quarters" to "¼", "crosshair" to "+", "diagonal" to "╳").forEach { (t, l) ->
-                                Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineType = t }.border(1.dp, if (gridlineType == t) GOLD else BORDER, RoundedCornerShape(3.dp)),
-                                    colors = CardDefaults.cardColors(containerColor = if (gridlineType == t) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp), style = TextStyle(color = if (gridlineType == t) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold)) }
-                            }
-                            listOf(1 to "Tipis", 2 to "Sedang", 3 to "Tebal").forEach { (th, l) ->
-                                Card(modifier = Modifier.clip(RoundedCornerShape(3.dp)).clickable { gridlineThickness = th }.border(1.dp, if (gridlineThickness == th) GOLD else BORDER, RoundedCornerShape(3.dp)),
-                                    colors = CardDefaults.cardColors(containerColor = if (gridlineThickness == th) CARD else PANEL), shape = RoundedCornerShape(3.dp)) { Text(l, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp), style = TextStyle(color = if (gridlineThickness == th) GOLD else MUTED, fontSize = 8.sp, fontWeight = FontWeight.Bold)) }
-                            }
-                        }
-                    }
-                    // Gridline color
-                    if (gridlineEnabled) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Warna:", style = TextStyle(color = MUTED, fontSize = 8.sp))
-                            listOf("white" to Color.White, "yellow" to Color(0xFFfacc15), "red" to Color(0xFFef4444), "cyan" to Color(0xFF06b6d4), "green" to Color(0xFF22c55e)).forEach { (n, c) ->
-                                Card(modifier = Modifier.size(16.dp).clip(RoundedCornerShape(8.dp)).clickable { gridlineColor = n }.border(2.dp, if (gridlineColor == n) GOLD else Color.Transparent, RoundedCornerShape(8.dp)),
-                                    colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(8.dp)) {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
     } // end main Column
 }
 
