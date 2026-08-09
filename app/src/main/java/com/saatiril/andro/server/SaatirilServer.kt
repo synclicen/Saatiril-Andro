@@ -162,6 +162,15 @@ object SaatirilServer {
                                 ContentType.Text.Html
                             )
                         }
+                        // Operator web page — served at /operator?channel=1
+                        // Operator scans QR code → browser opens this page → camera + shutter
+                        // Supports: front/back camera, USB capture card, hand trigger (MediaPipe)
+                        get("/operator") {
+                            call.respondText(
+                                com.saatiril.andro.server.web.OPERATOR_HTML,
+                                ContentType.Text.Html
+                            )
+                        }
                     }
                 }.also { it.start(wait = false) }
                 boundPort = tryPort
