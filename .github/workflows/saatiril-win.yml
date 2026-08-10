@@ -1,0 +1,216 @@
+name: Saatiril Win
+
+# Builds the Saatiril Windows Portable (Electron) app.
+# Source code is checked out from the Saatiril-Fullset repo,
+# but the build is controlled from THIS repo (Saatiril-Andro) so
+# the user has both APK + Windows builds in one place.
+#
+# Output: saatiril-portable.exe published to Saatiril-Andro releases.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/saatiril-win.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── Checkout the Electron source from Saatiril-Fullset repo ──
+      # This gives us the Next.js + Electron source code to build.
+      - name: Checkout Saatiril-Fullset (Electron source)
+        uses: actions/checkout@v4
+        with:
+          repository: synclicen/Saatiril-Fullset
+          path: electron-source
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: electron-source/package-lock.json
+
+      - name: Install dependencies
+        working-directory: electron-source
+        run: npm install --legacy-peer-deps
+        env:
+          PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
+
+      - name: Generate Prisma Client
+        working-directory: electron-source
+        run: npx prisma generate
+        env:
+          PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
+
+      - name: Enable Next.js static export
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          $configPath = "next.config.ts"
+          $content = Get-Content $configPath -Raw
+          $content = $content -replace '// output: "export",', 'output: "export",'
+          Set-Content $configPath $content -NoNewline
+          Write-Host "Enabled static export in next.config.ts"
+
+      - name: Remove API route (incompatible with static export)
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          $apiDir = "src/app/api"
+          if (Test-Path $apiDir) {
+            Remove-Item -Recurse -Force $apiDir
+            Write-Host "Removed $apiDir"
+          }
+
+      - name: Build Next.js (static export)
+        working-directory: electron-source
+        run: npx next build
+        env:
+          PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Verify static export output
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          if (Test-Path "out/index.html") {
+            $fileCount = (Get-ChildItem "out" -Recurse -File).Count
+            Write-Host "Static export OK ($fileCount files)"
+          } else {
+            Write-Error "out/index.html NOT found!"
+            exit 1
+          }
+
+      - name: Compile Electron preload (TypeScript)
+        working-directory: electron-source
+        run: npx tsc -p electron/tsconfig.json
+
+      - name: Bundle Electron main process with esbuild
+        working-directory: electron-source
+        run: |
+          npx esbuild electron/main.ts --bundle --platform=node --outfile=electron/main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
+          Write-Host "Main process bundled with esbuild (socket.io inlined)"
+
+      - name: Verify bundled main.js
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          $mainJs = "electron/main.js"
+          if (Test-Path $mainJs) {
+            $size = (Get-Item $mainJs).Length / 1KB
+            Write-Host "electron/main.js : $([math]::Round($size, 1)) KB - OK"
+            $content = Get-Content $mainJs -Raw
+            if ($content -match "SocketIOServer" -or $content -match "socket\.io") {
+              Write-Host "socket.io is bundled inside main.js - OK"
+            } else {
+              Write-Warning "socket.io may not be bundled in main.js"
+            }
+          } else {
+            Write-Error "electron/main.js NOT found!"
+            exit 1
+          }
+
+      - name: Verify source directories for packaging
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          foreach ($d in @("out", "public")) {
+            if (Test-Path $d) {
+              $count = (Get-ChildItem $d -Recurse -File).Count
+              Write-Host "$d : $count files - OK"
+            } else {
+              Write-Error "$d : NOT FOUND!"
+              exit 1
+            }
+          }
+
+      - name: Build Electron app (Windows - NSIS + Portable)
+        working-directory: electron-source
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List build artifacts
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          Write-Host "=== Build Artifacts ==="
+          if (Test-Path "dist-electron") {
+            Get-ChildItem "dist-electron" -File | ForEach-Object {
+              $sizeMB = [math]::Round($_.Length / 1MB, 2)
+              Write-Host "  $($_.Name) - $sizeMB MB"
+            }
+          }
+
+      - name: Upload build artifacts (CI artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: saatiril-portable-windows
+          path: electron-source/dist-electron/*-Portable.exe
+          if-no-files-found: warn
+
+      # ── Publish Portable to Saatiril-Andro GitHub Releases ──
+      # Uploads to THIS repo's releases (Saatiril-Andro), not Saatiril-Fullset.
+      - name: Rename Portable exe for release
+        working-directory: electron-source
+        shell: pwsh
+        run: |
+          $portable = Get-ChildItem "dist-electron\SAATIRIL-Fullset-*-Portable.exe" | Select-Object -First 1
+          if ($portable) {
+            Copy-Item $portable.FullName "dist-electron\saatiril-portable.exe"
+            $size = [math]::Round($portable.Length / 1MB, 1)
+            Write-Host "Portable renamed: saatiril-portable.exe ($size MB)"
+          } else {
+            Write-Error "Portable exe not found!"
+            exit 1
+          }
+
+      - name: Upload Portable to Saatiril-Andro releases
+        working-directory: electron-source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          # Upload to THIS repo (Saatiril-Andro) — the workflow's own repo
+          $repo = "${{ github.repository }}"
+          Write-Host "Publishing to repo: $repo"
+
+          # Check if 'latest' release exists in this repo
+          $releaseExists = $false
+          try {
+            gh release view latest --repo $repo 2>$null
+            if ($LASTEXITCODE -eq 0) { $releaseExists = $true }
+          } catch {}
+
+          if ($releaseExists) {
+            # Delete old portable asset if exists, then upload new one
+            gh release delete-asset latest saatiril-portable.exe --yes --repo $repo 2>$null || true
+            gh release upload latest dist-electron/saatiril-portable.exe --clobber --repo $repo
+            Write-Host "Portable uploaded to existing 'latest' release in $repo"
+          } else {
+            # Create new release with portable
+            gh release create latest dist-electron/saatiril-portable.exe --title "Saatiril Andro - Latest" --notes "Saatiril Windows Portable (Electron) - Build #${{ github.run_number }}" --prerelease --repo $repo
+            Write-Host "Created 'latest' release with Portable in $repo"
+          }
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          Write-Host "═══════════════════════════════════════════════════"
+          Write-Host "  Saatiril Win Build Complete!"
+          Write-Host "═══════════════════════════════════════════════════"
+          Write-Host "  Build #: ${{ github.run_number }}"
+          Write-Host "  Repo: ${{ github.repository }}"
+          Write-Host "  Source: synclicen/Saatiril-Fullset"
+          Write-Host "  Output: saatiril-portable.exe"
+          Write-Host "  Release: https://github.com/${{ github.repository }}/releases/tag/latest"
+          Write-Host "═══════════════════════════════════════════════════"
