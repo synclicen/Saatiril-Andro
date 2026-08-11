@@ -417,6 +417,125 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
             }
         }
 
+        // ─── Panduan Penggunaan Lengkap ───
+        Card(colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(12.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BORDER)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Default.MenuBook, contentDescription = null, tint = GOLD, modifier = Modifier.size(16.dp))
+                    Text("Panduan Penggunaan", style = TextStyle(color = GOLD, fontSize = 13.sp, fontWeight = FontWeight.Bold))
+                }
+
+                // Mode 1: Admin + MC + Operator (1 HP)
+                Text("📱 MODE 1: 1 HP untuk Semua (Admin+MC+Operator)", style = TextStyle(color = GREEN, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                val mode1Steps = listOf(
+                    "Buat proyek → pilih mode → import Excel → pilih folder → MULAI",
+                    "Tab Prosesi: MC panggil + Operator foto dalam 1 layar",
+                    "Foto tersimpan otomatis ke folder yang dipilih",
+                    "Cocok untuk wisuda kecil (<100 mahasiswa)"
+                )
+                mode1Steps.forEachIndexed { i, step ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("•", style = TextStyle(color = GREEN, fontSize = 10.sp))
+                        Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp))
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                // Mode 2: Admin + Operator via WiFi
+                Text("📶 MODE 2: Admin HP + Operator via WiFi (LAN)", style = TextStyle(color = CYAN, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                val mode2Steps = listOf(
+                    "Admin HP: buat proyek → start server → aktifkan hotspot/router",
+                    "Operator HP/Tablet: install APK → pilih Operator → input IP admin",
+                    "MC: scan QR MC → browser → /mc → connect via WiFi",
+                    "Operator: scan QR Op → browser → /operator → kamera + shutter",
+                    "Cocok untuk wisuda sedang (100-500 mahasiswa, <500 orang)"
+                )
+                mode2Steps.forEachIndexed { i, step ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("•", style = TextStyle(color = CYAN, fontSize = 10.sp))
+                        Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp))
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                // Mode 3: BLE MC Remote (No WiFi)
+                Text("🔵 MODE 3: MC Remote via Bluetooth (BLE) — No WiFi", style = TextStyle(color = Color(0xFF3b82f6), fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                val mode3Steps = listOf(
+                    "Admin HP/Laptop: buat proyek → BLE server otomatis aktif",
+                    "MC HP: install APK → pilih 'MC REMOTE (BLE)' → scan → connect",
+                    "MC tekan PANGGIL → Bluetooth trigger → Admin foto",
+                    "100% immune interferensi WiFi — cocok untuk 3000+ orang",
+                    "Atau via browser: buka /mc-ble di Chrome/Edge (Web Bluetooth)"
+                )
+                mode3Steps.forEachIndexed { i, step ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("•", style = TextStyle(color = Color(0xFF3b82f6), fontSize = 10.sp))
+                        Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp))
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                // Mode 4: Electron + Wired LAN
+                Text("🖥️ MODE 4: Laptop Electron + Wired LAN (Kabel)", style = TextStyle(color = AMBER, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                val mode4Steps = listOf(
+                    "Laptop Admin: run saatiril-portable.exe → buat proyek",
+                    "Colok semua laptop via Ethernet Switch (kabel LAN)",
+                    "MC/Operator: buka browser → /mc atau /operator → connect",
+                    "100% immune WiFi — cocok untuk wisuda besar (3000+ orang)",
+                    "Google Drive backup: pilih folder G:\\My Drive\\ di tab Admin"
+                )
+                mode4Steps.forEachIndexed { i, step ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("•", style = TextStyle(color = AMBER, fontSize = 10.sp))
+                        Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp))
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Tips
+                Text("💡 Tips Penting:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                val tips = listOf(
+                    "Mode Prosesi: aktifkan untuk blokir WhatsApp/Instagram di HP ini",
+                    "Google Drive: foto tersimpan lokal dulu, upload async ke cloud",
+                    "Folder foto: otomatis dibuat subfolder dengan nama proyek",
+                    "Hand Trigger (✋): gunakan MediaPipe untuk foto hands-free",
+                    "Frame Overlay: tambahkan frame PNG dengan logo wisuda",
+                    "Export Excel: download daftar peserta dengan status"
+                )
+                tips.forEach { tip ->
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("•", style = TextStyle(color = GOLD, fontSize = 10.sp))
+                        Text(tip, style = TextStyle(color = MUTED, fontSize = 10.sp))
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Shutter modes
+                Text("📸 Mode Shutter:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                Text("M=Manual | 3s/5s/10s=Timer | ✋=Hand Trigger (MediaPipe)", style = TextStyle(color = MUTED, fontSize = 10.sp))
+
+                Spacer(Modifier.height(4.dp))
+
+                // Camera modes
+                Text("📷 Sumber Kamera (3 pilihan):", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                Text("Kamera Belakang HP | Kamera Depan HP | USB Capture Card (DSLR+HDMI)", style = TextStyle(color = MUTED, fontSize = 10.sp))
+
+                Spacer(Modifier.height(4.dp))
+
+                // Filename convention
+                Text("📁 Format Nama File:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                Text("Standar: NIM_Nama_1_Toga.jpg + NIM_Nama_2_Ijazah.jpg", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                Text("Photoshoot: NIM_Nama.jpg (atau NIM_Nama_Ch2.jpg untuk dual)", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                Text("Retake: NIM_Nama_1_Toga_v2.jpg (otomatis versi)", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            }
+        }
+
         // ─── Stats grid ───
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile("Total", total, Color.White, Icons.Default.Group, Modifier.weight(1f))
