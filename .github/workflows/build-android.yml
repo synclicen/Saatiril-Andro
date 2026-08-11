@@ -79,17 +79,25 @@ jobs:
           echo "Keystore decoded:"
           ls -l saatiril-release.keystore
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Build Full Debug APK
+        run: ./gradlew assembleFullDebug --no-daemon --stacktrace
 
-      - name: Build Release APK (signed)
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Build Full Release APK (signed)
+        run: ./gradlew assembleFullRelease --no-daemon --stacktrace
 
       - name: Rename APKs
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/saatiril-andro-debug.apk
-          RELEASE_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          # Product flavors: APKs are in flavor-scoped subdirectories
+          DEBUG_APK=$(find app/build/outputs/apk/full/debug -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$DEBUG_APK" ]; then
+            DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
+          fi
+          cp "$DEBUG_APK" artifacts/saatiril-andro-debug.apk
+          RELEASE_APK=$(find app/build/outputs/apk/full/release -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$RELEASE_APK" ]; then
+            RELEASE_APK=$(find app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
+          fi
           if [ -n "$RELEASE_APK" ]; then
             cp "$RELEASE_APK" artifacts/saatiril-andro.apk
           else
