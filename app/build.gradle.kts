@@ -26,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 50
-        versionName = "1.9.3-saatiril-andro"
+        versionCode = 51
+        versionName = "1.9.4-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

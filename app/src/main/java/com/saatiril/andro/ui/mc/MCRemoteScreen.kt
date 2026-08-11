@@ -62,6 +62,11 @@ private val AMBER = Color(0xFFfbbf24)
 fun MCRemoteScreen(adminViewModel: AdminViewModel) {
     val context = LocalContext.current
 
+    // Lock screen — prevent accidental exit via back button
+    com.saatiril.andro.ui.util.LockScreenHandler {
+        adminViewModel.backToRoleSelect()
+    }
+
     // BLE client state
     val bleClient = remember { BLEClientManager(context) }
     var isScanning by remember { mutableStateOf(false) }

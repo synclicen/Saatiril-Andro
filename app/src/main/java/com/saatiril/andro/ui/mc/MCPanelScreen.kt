@@ -70,6 +70,12 @@ fun MCPanelScreen(
     val currentTarget by opViewModel.currentTarget.collectAsState()
     val scrollState = rememberScrollState()
 
+    // Lock screen — prevent accidental exit via back button
+    com.saatiril.andro.ui.util.LockScreenHandler {
+        opViewModel.disconnect()
+        adminViewModel.backToRoleSelect()
+    }
+
     // Auto-disconnect handling
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.DISCONNECTED) {

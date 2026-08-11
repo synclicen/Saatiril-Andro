@@ -53,6 +53,11 @@ fun OperatorConnectScreen(
     adminViewModel: AdminViewModel,
     opViewModel: OperatorViewModel = viewModel()
 ) {
+    // Lock screen — prevent accidental exit via back button
+    com.saatiril.andro.ui.util.LockScreenHandler {
+        adminViewModel.backToRoleSelect()
+    }
+
     val connectionState by opViewModel.connectionState.collectAsState()
     val authError by opViewModel.authError.collectAsState()
     val connectionError by opViewModel.connectionError.collectAsState()

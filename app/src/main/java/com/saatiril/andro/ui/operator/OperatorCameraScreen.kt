@@ -77,6 +77,15 @@ fun OperatorCameraScreen(
     opViewModel: OperatorViewModel = viewModel()
 ) {
     val context = LocalContext.current
+
+    // Lock screen — prevent accidental exit via back button
+    com.saatiril.andro.ui.util.LockScreenHandler {
+        if (ceremonyActive) {
+            com.saatiril.andro.vpn.CeremonyModeManager.disable(context)
+        }
+        opViewModel.disconnect()
+        adminViewModel.backToRoleSelect()
+    }
     val project by opViewModel.project.collectAsState()
     val connectionState by opViewModel.connectionState.collectAsState()
     val currentTarget by opViewModel.currentTarget.collectAsState()
