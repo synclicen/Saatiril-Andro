@@ -166,7 +166,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT }
+    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
 
     private val _screen = MutableStateFlow(
         if (com.saatiril.andro.BuildConfig.MC_ONLY) {
@@ -198,6 +198,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     /** User chose MC Remote (BLE) role — go to MC_REMOTE (no license needed). */
     fun selectMcRemoteRole() {
         _screen.value = Screen.MC_REMOTE
+    }
+
+    /** User chose MC Remote Server (BLE Server for Electron) — go to MC_REMOTE_SERVER. */
+    fun selectMcRemoteServerRole() {
+        _screen.value = Screen.MC_REMOTE_SERVER
     }
 
     /** Go back to role selection from operator/MC screens. */

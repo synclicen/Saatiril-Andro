@@ -21,6 +21,7 @@ import com.saatiril.andro.ui.mc.MCConnectScreen
 import com.saatiril.andro.ui.mc.MCModeSelectScreen
 import com.saatiril.andro.ui.mc.MCPanelScreen
 import com.saatiril.andro.ui.mc.MCRemoteScreen
+import com.saatiril.andro.ui.mc.MCRemoteServerScreen
 import com.saatiril.andro.ui.operator.OperatorCameraScreen
 import com.saatiril.andro.ui.operator.OperatorConnectScreen
 import com.saatiril.andro.ui.role.RoleSelectionScreen
@@ -87,5 +88,6 @@ private fun SaatirilAppRoot(viewModel: AdminViewModel) {
         AdminViewModel.Screen.MC_PANEL -> MCPanelScreen(viewModel)
         AdminViewModel.Screen.MC_REMOTE -> MCRemoteScreen(viewModel)
         AdminViewModel.Screen.MC_MODE_SELECT -> MCModeSelectScreen(viewModel)
+        AdminViewModel.Screen.MC_REMOTE_SERVER -> MCRemoteServerScreen(viewModel)
     }
 }

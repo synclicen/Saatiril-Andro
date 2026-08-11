@@ -179,6 +179,13 @@ object SaatirilServer {
                                 ContentType.Text.Html
                             )
                         }
+                        // Admin BLE Client web page — Electron connects to MC-Only APK (BLE Server)
+                        get("/admin-ble") {
+                            call.respondText(
+                                com.saatiril.andro.server.web.ADMIN_BLE_HTML,
+                                ContentType.Text.Html
+                            )
+                        }
                     }
                 }.also { it.start(wait = false) }
                 boundPort = tryPort

@@ -69,23 +69,35 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
         )
         Spacer(Modifier.height(32.dp))
 
-        // BLE Remote card
+        // BLE Remote (Client) card — for Admin APK (HP)
         ModeCard(
             icon = Icons.Default.Bluetooth,
             title = "BLE REMOTE",
-            subtitle = "Via Bluetooth — No WiFi",
-            description = "Untuk Admin HP Android\n100% immune interferensi WiFi\nCocok untuk 3000+ orang",
+            subtitle = "Bluetooth — Untuk Admin HP",
+            description = "MC = Client, Admin HP = Server\n100% immune interferensi WiFi\nCocok untuk 3000+ orang",
             colors = listOf(Color(0xFF3b82f6), Color(0xFF1d4ed8)),
             borderColor = Color(0xFF3b82f6),
             onClick = { viewModel.selectMcRemoteRole() }
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // WiFi card
+        // BLE Server card — for Admin Electron (Laptop)
+        ModeCard(
+            icon = Icons.Default.BluetoothConnected,
+            title = "BLE SERVER",
+            subtitle = "Bluetooth — Untuk Admin Laptop",
+            description = "MC = Server, Electron = Client\n100% immune interferensi WiFi\nCocok untuk Laptop Electron",
+            colors = listOf(Color(0xFF8b5cf6), Color(0xFF6d28d9)),
+            borderColor = Color(0xFF8b5cf6),
+            onClick = { viewModel.selectMcRemoteServerRole() }
+        )
+        Spacer(Modifier.height(12.dp))
+
+        // WiFi card — for Admin Electron (Laptop) via wired LAN
         ModeCard(
             icon = Icons.Default.Wifi,
-            title = "WIFI",
-            subtitle = "Via WiFi/LAN Socket.io",
+            title = "WIFI / LAN",
+            subtitle = "WiFi atau Kabel LAN",
             description = "Untuk Admin Electron (Laptop)\nConnect via WiFi atau wired LAN\nCocok untuk wired LAN setup",
             colors = listOf(Color(0xFF06b6d4), Color(0xFF0891b2)),
             borderColor = Color(0xFF06b6d4),
