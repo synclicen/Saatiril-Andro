@@ -82,11 +82,23 @@ fun RoleSelectionScreen(viewModel: AdminViewModel) {
         RoleCard(
             icon = Icons.Default.Campaign,
             title = "MC PANGGILAN",
-            subtitle = "Connect ke Server Admin",
+            subtitle = "Connect ke Server Admin via WiFi",
             description = "Panggil mahasiswa ke panggung,\nlihat antrean dan status operator",
             colors = listOf(GREEN, Color(0xFF16a34a)),
             borderColor = GREEN,
             onClick = { viewModel.selectMcRole() }
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // MC Remote (BLE) card
+        RoleCard(
+            icon = Icons.Default.Bluetooth,
+            title = "MC REMOTE (BLE)",
+            subtitle = "Trigger via Bluetooth — No WiFi",
+            description = "Panggil mahasiswa via Bluetooth,\n100% immune dari interferensi WiFi",
+            colors = listOf(Color(0xFF3b82f6), Color(0xFF1d4ed8)),
+            borderColor = Color(0xFF3b82f6),
+            onClick = { viewModel.selectMcRemoteRole() }
         )
         Spacer(Modifier.height(16.dp))
 

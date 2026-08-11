@@ -164,8 +164,7 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp), textAlign = TextAlign.Center
             )
 
-            // ── MC + Operator entry points — no license needed ──
-            // MC and operators connect to an admin's server; they don't need their own license.
+            // ── MC + MC Remote + Operator entry points — no license needed ──
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { viewModel.selectMcRole() },
@@ -176,7 +175,18 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 ) {
                     Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(18.dp), tint = GREEN)
                     Spacer(Modifier.width(6.dp))
-                    Text("Saya MC", color = GREEN, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("MC (WiFi)", color = GREEN, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+                OutlinedButton(
+                    onClick = { viewModel.selectMcRemoteRole() },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF3b82f6)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3b82f6).copy(alpha = 0.6f))
+                ) {
+                    Icon(Icons.Default.Bluetooth, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF3b82f6))
+                    Spacer(Modifier.width(6.dp))
+                    Text("MC (BLE)", color = Color(0xFF3b82f6), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
                 OutlinedButton(
                     onClick = { viewModel.selectOperatorRole() },
@@ -187,7 +197,7 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 ) {
                     Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = CYAN)
                     Spacer(Modifier.width(6.dp))
-                    Text("Saya Operator", color = CYAN, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Operator", color = CYAN, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
             }
             Text(
