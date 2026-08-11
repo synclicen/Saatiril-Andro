@@ -169,7 +169,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE }
 
     private val _screen = MutableStateFlow(
-        if (licenseManager.getStatus().active) Screen.ROLE_SELECT else Screen.LICENSE
+        if (com.saatiril.andro.BuildConfig.MC_ONLY) {
+            // MC-only APK: skip everything, go straight to MC Remote (BLE)
+            Screen.MC_REMOTE
+        } else if (licenseManager.getStatus().active) {
+            Screen.ROLE_SELECT
+        } else {
+            Screen.LICENSE
+        }
     )
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
@@ -195,7 +202,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Go back to role selection from operator/MC screens. */
     fun backToRoleSelect() {
-        _screen.value = Screen.ROLE_SELECT
+        // MC-only APK: always return to MC Remote (no role selection)
+        _screen.value = if (com.saatiril.andro.BuildConfig.MC_ONLY) Screen.MC_REMOTE else Screen.ROLE_SELECT
     }
 
     /** Operator connected — go to OPERATOR_CAMERA. */

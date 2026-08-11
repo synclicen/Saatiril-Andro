@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Saatiril Andro</string>
+    <!-- app_name is provided by product flavor resValue, not here -->
     <string name="connection_title">Koneksi ke Server</string>
     <string name="server_ip_hint">IP Server (contoh: 192.168.1.100)</string>
     <string name="password_hint">Password Sesi (jika ada)</string>

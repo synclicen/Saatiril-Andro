@@ -26,8 +26,8 @@ android {
         applicationId = "com.saatiril.andro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 51
-        versionName = "1.9.4-saatiril-andro"
+        versionCode = 52
+        versionName = "2.0.0-saatiril-andro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -49,12 +49,28 @@ android {
             if (keystoreProperties.isNotEmpty()) {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                // `storeFile` in keystore.properties is a relative path — resolve
-                // it against the PROJECT ROOT (where the file is decoded by CI),
-                // not against the `app/` module dir (where this build.gradle.kts lives).
                 storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
             }
+        }
+    }
+
+    // ── Product Flavors ──
+    // 'full' = Admin + MC + Operator (all roles, license required)
+    // 'mc'   = MC-only (BLE Remote only, no license, no Admin/Operator access)
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") {
+            dimension = "distribution"
+            buildConfigField("boolean", "MC_ONLY", "false")
+            resValue("string", "app_name", "Saatiril Andro")
+        }
+        create("mc") {
+            dimension = "distribution"
+            applicationIdSuffix = ".mc"
+            versionNameSuffix = "-mc"
+            buildConfigField("boolean", "MC_ONLY", "true")
+            resValue("string", "app_name", "Saatiril MC")
         }
     }
 

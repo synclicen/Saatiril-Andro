@@ -348,13 +348,31 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 }
             }
         } ?: run {
-            // Compact "waiting" text
+            // Plan B: Manual mode when MC is disconnected/unavailable
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Icon(Icons.Default.Info, contentDescription = null, tint = MUTED, modifier = Modifier.size(12.dp))
-                Text(" Menunggu panggilan MC…", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                Text(" Menunggu MC…", style = TextStyle(color = MUTED, fontSize = 10.sp))
+                Spacer(Modifier.weight(1f))
+                // Plan B: Manual PANGGIL button — operator can call next student directly
+                val db = project?.database ?: emptyList()
+                val nextPending = db.firstOrNull { it.status == "pending" }
+                if (nextPending != null) {
+                    Button(
+                        onClick = { viewModel.callStudent(nextPending, 1) },
+                        modifier = Modifier.height(28.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AMBER),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp), tint = BG)
+                        Spacer(Modifier.width(4.dp))
+                        Text("PANGGIL MANUAL", color = BG, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
 
