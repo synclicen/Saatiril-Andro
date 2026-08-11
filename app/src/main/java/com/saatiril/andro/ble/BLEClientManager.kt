@@ -136,7 +136,7 @@ class BLEClientManager(private val context: Context) {
 
         stopScan()
 
-        bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothGatt.TRANSPORT_LE)
+        bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         Log.i(TAG, "Connecting to ${device.address}...")
         return true
     }

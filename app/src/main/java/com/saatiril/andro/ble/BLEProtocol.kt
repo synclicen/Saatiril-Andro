@@ -46,8 +46,8 @@ object BLEProtocol {
     /** Descriptor UUID for enabling notifications (standard CCCD). */
     const val DESC_CCCD = "00002902-0000-1000-8000-00805f9b34fb"
 
-    /** BLE advertisement timeout (ms). */
-    const val ADVERTISE_TIMEOUT_MS = 0L // 0 = advertise forever
+    /** BLE advertisement timeout (ms). 0 = advertise forever. */
+    const val ADVERTISE_TIMEOUT_MS = 0 // Int — AdvertiseSettings.setTimeout() requires int
 
     /** Maximum BLE characteristic value size (bytes). */
     const val MAX_CHAR_SIZE = 512
