@@ -171,6 +171,14 @@ object SaatirilServer {
                                 ContentType.Text.Html
                             )
                         }
+                        // MC BLE Remote web page — uses Web Bluetooth API
+                        // MC opens this in Chrome/Edge → connects via BLE to Admin
+                        get("/mc-ble") {
+                            call.respondText(
+                                com.saatiril.andro.server.web.MC_BLE_HTML,
+                                ContentType.Text.Html
+                            )
+                        }
                     }
                 }.also { it.start(wait = false) }
                 boundPort = tryPort
