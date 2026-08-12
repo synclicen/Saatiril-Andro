@@ -647,12 +647,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             }
                         }
                         HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 1.dp))
-                        // Queue list — max 4 items visible, auto-scroll to active
+                        // Queue list — original order, NO sorting
+                        // Active student stays at original position with gold highlight
                         val opQueueList = if (isPhotoshoot) {
                             opSentQueue
                         } else {
                             db.filter { it.assignedChannel == myChannel && (it.status == "pending" || isActiveStatus(it.status)) }
-                                .sortedWith(compareBy { s -> if (isActiveStatus(s.status)) 0 else 1 })
                         }
                         if (opQueueList.isEmpty()) {
                             Text("Kosong", style = TextStyle(color = MUTED, fontSize = 8.sp), modifier = Modifier.padding(4.dp))
