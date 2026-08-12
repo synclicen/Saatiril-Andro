@@ -12,7 +12,11 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/saatiril-win.yml'
+      - 'app/build.gradle.kts'
   workflow_dispatch:
+  schedule:
+    # Rebuild daily at 00:00 UTC to pick up Electron changes from Fullset repo
+    - cron: '0 0 * * *'
 
 permissions:
   contents: write
@@ -159,58 +163,49 @@ jobs:
           if-no-files-found: warn
 
       # ── Publish Portable to Saatiril-Andro GitHub Releases ──
-      # Uploads to THIS repo's releases (Saatiril-Andro), not Saatiril-Fullset.
       - name: Rename Portable exe for release
         working-directory: electron-source
-        shell: pwsh
         run: |
-          $portable = Get-ChildItem "dist-electron\SAATIRIL-Fullset-*-Portable.exe" | Select-Object -First 1
-          if ($portable) {
-            Copy-Item $portable.FullName "dist-electron\saatiril-portable.exe"
-            $size = [math]::Round($portable.Length / 1MB, 1)
-            Write-Host "Portable renamed: saatiril-portable.exe ($size MB)"
-          } else {
-            Write-Error "Portable exe not found!"
+          PORTABLE=$(find dist-electron -name "SAATIRIL-Fullset-*-Portable.exe" 2>/dev/null | head -1)
+          if [ -n "$PORTABLE" ]; then
+            cp "$PORTABLE" dist-electron/saatiril-portable.exe
+            SIZE=$(ls -lh dist-electron/saatiril-portable.exe | awk '{print $5}')
+            echo "Portable renamed: saatiril-portable.exe ($SIZE)"
+          else
+            echo "ERROR: Portable exe not found!"
+            ls -la dist-electron/ || true
             exit 1
-          }
+          fi
 
       - name: Upload Portable to Saatiril-Andro releases
         working-directory: electron-source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
         run: |
-          # Upload to THIS repo (Saatiril-Andro) — the workflow's own repo
-          $repo = "${{ github.repository }}"
-          Write-Host "Publishing to repo: $repo"
+          REPO="${{ github.repository }}"
+          echo "Publishing to repo: $REPO"
 
-          # Check if 'latest' release exists in this repo
-          $releaseExists = $false
-          try {
-            gh release view latest --repo $repo 2>$null
-            if ($LASTEXITCODE -eq 0) { $releaseExists = $true }
-          } catch {}
-
-          if ($releaseExists) {
-            # Delete old portable asset if exists, then upload new one
-            gh release delete-asset latest saatiril-portable.exe --yes --repo $repo 2>$null || true
-            gh release upload latest dist-electron/saatiril-portable.exe --clobber --repo $repo
-            Write-Host "Portable uploaded to existing 'latest' release in $repo"
-          } else {
-            # Create new release with portable
-            gh release create latest dist-electron/saatiril-portable.exe --title "Saatiril Andro - Latest" --notes "Saatiril Windows Portable (Electron) - Build #${{ github.run_number }}" --prerelease --repo $repo
-            Write-Host "Created 'latest' release with Portable in $repo"
-          }
+          if gh release view latest --repo "$REPO" 2>/dev/null; then
+            echo "Release 'latest' exists — uploading portable.exe"
+            gh release delete-asset latest saatiril-portable.exe --yes --repo "$REPO" 2>/dev/null || true
+            gh release upload latest dist-electron/saatiril-portable.exe --clobber --repo "$REPO"
+          else
+            echo "Creating 'latest' release with portable.exe"
+            gh release create latest dist-electron/saatiril-portable.exe \
+              --title "Saatiril Andro - Latest Build" \
+              --notes "Saatiril Windows Portable (Electron) - Build #${{ github.run_number }}" \
+              --prerelease --repo "$REPO"
+          fi
+          echo "=== Portable.exe published to releases ==="
 
       - name: Build summary
-        shell: pwsh
         run: |
-          Write-Host "═══════════════════════════════════════════════════"
-          Write-Host "  Saatiril Win Build Complete!"
-          Write-Host "═══════════════════════════════════════════════════"
-          Write-Host "  Build #: ${{ github.run_number }}"
-          Write-Host "  Repo: ${{ github.repository }}"
-          Write-Host "  Source: synclicen/Saatiril-Fullset"
-          Write-Host "  Output: saatiril-portable.exe"
-          Write-Host "  Release: https://github.com/${{ github.repository }}/releases/tag/latest"
-          Write-Host "═══════════════════════════════════════════════════"
+          echo "═══════════════════════════════════════════════════"
+          echo "  Saatiril Win Build Complete!"
+          echo "═══════════════════════════════════════════════════"
+          echo "  Build #: ${{ github.run_number }}"
+          echo "  Repo: ${{ github.repository }}"
+          echo "  Source: synclicen/Saatiril-Fullset"
+          echo "  Output: saatiril-portable.exe"
+          echo "  Release: https://github.com/${{ github.repository }}/releases/tag/latest"
+          echo "═══════════════════════════════════════════════════"
