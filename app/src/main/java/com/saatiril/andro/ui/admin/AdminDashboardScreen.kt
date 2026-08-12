@@ -161,21 +161,27 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("•", style = TextStyle(color = CYAN, fontSize = 10.sp)); Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp)) }
                     }
                     Spacer(Modifier.height(4.dp))
-                    // Mode 3
-                    Text("🔵 MODE 3: MC Remote via Bluetooth (BLE) — No WiFi", style = TextStyle(color = Color(0xFF3b82f6), fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                    listOf("Admin HP/Laptop: buat proyek → BLE server otomatis aktif", "MC HP: install APK → pilih 'MC REMOTE (BLE)' → scan → connect", "MC tekan PANGGIL → Bluetooth trigger → Admin foto", "100% immune interferensi WiFi — cocok untuk 3000+ orang", "Atau via browser: buka /mc-ble di Chrome/Edge (Web Bluetooth)").forEach { step ->
+                    // Mode 3A: BLE Remote (MC=Client, Admin APK=Server)
+                    Text("🔵 MODE 3A: MC BLE Remote — Admin HP (MC=Client)", style = TextStyle(color = Color(0xFF3b82f6), fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    listOf("Admin HP: buat proyek → BLE server otomatis aktif", "MC HP: install saatiril-mc.apk → pilih 'BLE REMOTE' → scan → connect", "MC tekan PANGGIL → Bluetooth trigger → Admin foto", "100% immune WiFi — cocok untuk 3000+ orang").forEach { step ->
                         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("•", style = TextStyle(color = Color(0xFF3b82f6), fontSize = 10.sp)); Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp)) }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    // Mode 3B: BLE Server (MC=Server, Electron=Client)
+                    Text("🟣 MODE 3B: MC BLE Server — Admin Laptop (MC=Server)", style = TextStyle(color = Color(0xFF8b5cf6), fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    listOf("MC HP: install saatiril-mc.apk → pilih 'BLE SERVER' → advertise", "Laptop Electron: buka /admin-ble → klik Connect → scan Bluetooth", "MC tekan PANGGIL → Bluetooth notify → Laptop foto", "100% immune WiFi — 1 laptop + 1 HP, no WiFi needed").forEach { step ->
+                        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("•", style = TextStyle(color = Color(0xFF8b5cf6), fontSize = 10.sp)); Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp)) }
                     }
                     Spacer(Modifier.height(4.dp))
                     // Mode 4
                     Text("🖥️ MODE 4: Laptop Electron + Wired LAN (Kabel)", style = TextStyle(color = AMBER, fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                    listOf("Laptop Admin: run saatiril-portable.exe → buat proyek", "Colok semua laptop via Ethernet Switch (kabel LAN)", "MC/Operator: buka browser → /mc atau /operator → connect", "100% immune WiFi — cocok untuk wisuda besar (3000+ orang)", "Google Drive backup: pilih folder G:\\My Drive\\ di tab Admin").forEach { step ->
+                    listOf("Laptop Admin: run saatiril-portable.exe → buat proyek", "Colok semua laptop via Ethernet Switch (kabel LAN)", "MC: install saatiril-mc.apk → pilih 'WIFI/LAN' → input IP laptop", "Operator: buka browser → /operator → connect", "100% immune WiFi — cocok untuk wisuda besar (3000+ orang)", "Google Drive backup: pilih folder G:\\My Drive\\ di tab Admin").forEach { step ->
                         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("•", style = TextStyle(color = AMBER, fontSize = 10.sp)); Text(step, style = TextStyle(color = MUTED, fontSize = 10.sp)) }
                     }
                     Spacer(Modifier.height(8.dp))
                     // Tips
                     Text("💡 Tips Penting:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
-                    listOf("Mode Prosesi: aktifkan untuk blokir WhatsApp/Instagram di HP ini", "Google Drive: foto tersimpan lokal dulu, upload async ke cloud", "Folder foto: otomatis dibuat subfolder dengan nama proyek", "Hand Trigger (✋): gunakan MediaPipe untuk foto hands-free", "Frame Overlay: tambahkan frame PNG dengan logo wisuda", "Export Excel: download daftar peserta dengan status").forEach { tip ->
+                    listOf("Mode Prosesi: aktifkan untuk blokir WhatsApp/Instagram di HP ini", "Google Drive: foto tersimpan lokal dulu, upload async ke cloud", "Folder foto: otomatis dibuat subfolder dengan nama proyek", "Hand Trigger (✋): gunakan MediaPipe untuk foto hands-free", "Frame Overlay: tambahkan frame PNG dengan logo wisuda", "Export Excel: download daftar peserta dengan status", "MC-Only APK (saatiril-mc.apk): APK terpisah untuk MC, terkunci penuh", "Operator Plan B: tombol 'PANGGIL MANUAL' jika MC terputus", "3 APK tersedia: saatiril-andro.apk (full) + saatiril-mc.apk (MC) + saatiril-portable.exe (Electron)").forEach { tip ->
                         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("•", style = TextStyle(color = GOLD, fontSize = 10.sp)); Text(tip, style = TextStyle(color = MUTED, fontSize = 10.sp)) }
                     }
                     Spacer(Modifier.height(8.dp))
