@@ -165,6 +165,7 @@ jobs:
       # ── Publish Portable to Saatiril-Andro GitHub Releases ──
       - name: Rename Portable exe for release
         working-directory: electron-source
+        shell: bash
         run: |
           PORTABLE=$(find dist-electron -name "SAATIRIL-Fullset-*-Portable.exe" 2>/dev/null | head -1)
           if [ -n "$PORTABLE" ]; then
@@ -179,6 +180,7 @@ jobs:
 
       - name: Upload Portable to Saatiril-Andro releases
         working-directory: electron-source
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -199,13 +201,14 @@ jobs:
           echo "=== Portable.exe published to releases ==="
 
       - name: Build summary
+        shell: bash
         run: |
-          echo "═══════════════════════════════════════════════════"
+          echo "=========================================="
           echo "  Saatiril Win Build Complete!"
-          echo "═══════════════════════════════════════════════════"
+          echo "=========================================="
           echo "  Build #: ${{ github.run_number }}"
           echo "  Repo: ${{ github.repository }}"
           echo "  Source: synclicen/Saatiril-Fullset"
           echo "  Output: saatiril-portable.exe"
           echo "  Release: https://github.com/${{ github.repository }}/releases/tag/latest"
-          echo "═══════════════════════════════════════════════════"
+          echo "=========================================="
