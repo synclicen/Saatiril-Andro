@@ -9,7 +9,16 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.saatiril.andro.data.AdminViewModel
@@ -78,16 +87,16 @@ private fun SaatirilAppRoot(viewModel: AdminViewModel) {
     when (screen) {
         AdminViewModel.Screen.LOADING -> {
             // Splash/loading screen — prevents license flash
-            androidx.compose.foundation.layout.Box(
-                modifier = androidx.compose.ui.Modifier
+            Box(
+                modifier = Modifier
                     .fillMaxSize()
-                    .background(BG),
-                contentAlignment = androidx.compose.ui.Alignment.Center
+                    .background(Color(0xFF1a0b2e)),
+                contentAlignment = Alignment.Center
             ) {
-                androidx.compose.material3.CircularProgressIndicator(
-                    color = androidx.compose.ui.graphics.Color(0xFFd4af37),
+                CircularProgressIndicator(
+                    color = Color(0xFFd4af37),
                     strokeWidth = 3.dp,
-                    modifier = androidx.compose.ui.Modifier.size(32.dp)
+                    modifier = Modifier.size(32.dp)
                 )
             }
         }

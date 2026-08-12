@@ -59,6 +59,13 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val driveBackupManager = com.saatiril.andro.backup.DriveBackupManager(application)
     val bleServerManager = com.saatiril.andro.ble.BLEServerManager(application)
 
+    // ─── Navigation ─────────────────────────────────────────────
+    enum class Screen { LOADING, LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
+
+    // Start with LOADING to prevent license screen flash
+    private val _screen = MutableStateFlow(Screen.LOADING)
+    val screen: StateFlow<Screen> = _screen.asStateFlow()
+
     init {
         // Start the Google Drive upload worker (processes queue in background)
         try {
@@ -174,14 +181,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _licenseStatus.value = licenseManager.getStatus()
         _screen.value = Screen.ROLE_SELECT
     }
-
-    // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LOADING, LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
-
-    // Start with LOADING to prevent license screen flash
-    // The actual screen is set in init {} after ViewModel is fully constructed
-    private val _screen = MutableStateFlow(Screen.LOADING)
-    val screen: StateFlow<Screen> = _screen.asStateFlow()
 
     /** User chose Admin role — go to HUB (or LICENSE if no license). */
     fun selectAdminRole() {
