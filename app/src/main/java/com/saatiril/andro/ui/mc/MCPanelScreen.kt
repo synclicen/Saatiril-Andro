@@ -96,14 +96,15 @@ fun MCPanelScreen(
     val hasActive = active.isNotEmpty()
     val nextPending = if (!isPhotoshoot) channelStudents.firstOrNull { it.status == "pending" } else null
 
-    // Auto-scroll to active student position (original order, NO sorting)
+    // Auto-scroll to active student position — bring to TOP of visible area
     val activeStudentId = active.firstOrNull()?.id
     LaunchedEffect(activeStudentId, done.size) {
-        delay(100)
+        delay(150)
         val activeIdx = channelStudents.indexOfFirst { it.id == activeStudentId }
         if (activeIdx >= 0) {
-            val targetScroll = (activeIdx * 38).coerceAtMost(scrollState.maxValue)
-            scrollState.animateScrollTo(targetScroll)
+            // Scroll so active student is at TOP of visible area
+            val targetScroll = (activeIdx * 38 - 38).coerceAtLeast(0)
+            scrollState.animateScrollTo(targetScroll.coerceAtMost(scrollState.maxValue))
         } else {
             scrollState.animateScrollTo(0)
         }

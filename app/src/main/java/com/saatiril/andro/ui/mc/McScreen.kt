@@ -84,20 +84,19 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
 
     val scrollState = rememberScrollState()
 
-    // Auto-scroll to active student's position in the ORIGINAL queue order.
-    // Do NOT sort — keep original queue numbers so MC knows "peserta no berapa".
-    // The active student is highlighted in-place and auto-scrolled into view.
+    // Auto-scroll to active student's position — bring to TOP of visible area.
+    // Keep original queue order (no sorting) so MC knows "peserta no berapa".
     val activeStudentId = active.firstOrNull()?.id
     val doneCount = done.size
     LaunchedEffect(activeStudentId, doneCount) {
-        kotlinx.coroutines.delay(100)
-        // Find index of active student in the original (unsorted) list
+        kotlinx.coroutines.delay(150)
         val channelStudentsList = if (isPhotoshoot) db else db.filter { it.assignedChannel == myChannel }
         val activeIdx = channelStudentsList.indexOfFirst { it.id == activeStudentId }
-        if (activeIdx >= 0 && activeIdx < channelStudentsList.size) {
-            // Scroll to active student position (~28dp per row, but use maxScroll)
-            val targetScroll = (activeIdx * 38).coerceAtMost(scrollState.maxValue)
-            scrollState.animateScrollTo(targetScroll)
+        if (activeIdx >= 0) {
+            // Scroll so active student is at the TOP of visible area
+            // Subtract a small offset so the row above is also slightly visible
+            val targetScroll = (activeIdx * 38 - 38).coerceAtLeast(0)
+            scrollState.animateScrollTo(targetScroll.coerceAtMost(scrollState.maxValue))
         } else {
             scrollState.animateScrollTo(0)
         }
