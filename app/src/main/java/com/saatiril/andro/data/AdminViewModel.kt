@@ -66,6 +66,16 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "Failed to start DriveUploadWorker: ${e.message}")
         }
+
+        // Set initial screen AFTER ViewModel is fully constructed
+        // This prevents the license screen flash on app launch
+        _screen.value = if (com.saatiril.andro.BuildConfig.MC_ONLY) {
+            Screen.MC_MODE_SELECT
+        } else if (licenseManager.getStatus().active) {
+            Screen.ROLE_SELECT
+        } else {
+            Screen.LICENSE
+        }
     }
 
     // ─── Camera managers (3-camera support: USB UVC + back + front) ───
@@ -166,18 +176,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ─── Navigation ─────────────────────────────────────────────
-    enum class Screen { LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
+    enum class Screen { LOADING, LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
 
-    private val _screen = MutableStateFlow(
-        if (com.saatiril.andro.BuildConfig.MC_ONLY) {
-            // MC-only APK: go to mode selector (BLE or WiFi)
-            Screen.MC_MODE_SELECT
-        } else if (licenseManager.getStatus().active) {
-            Screen.ROLE_SELECT
-        } else {
-            Screen.LICENSE
-        }
-    )
+    // Start with LOADING to prevent license screen flash
+    // The actual screen is set in init {} after ViewModel is fully constructed
+    private val _screen = MutableStateFlow(Screen.LOADING)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
     /** User chose Admin role — go to HUB (or LICENSE if no license). */

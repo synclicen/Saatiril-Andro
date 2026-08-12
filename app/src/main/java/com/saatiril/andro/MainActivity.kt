@@ -76,6 +76,21 @@ class MainActivity : ComponentActivity() {
 private fun SaatirilAppRoot(viewModel: AdminViewModel) {
     val screen by viewModel.screen.collectAsState()
     when (screen) {
+        AdminViewModel.Screen.LOADING -> {
+            // Splash/loading screen — prevents license flash
+            androidx.compose.foundation.layout.Box(
+                modifier = androidx.compose.ui.Modifier
+                    .fillMaxSize()
+                    .background(BG),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    color = androidx.compose.ui.graphics.Color(0xFFd4af37),
+                    strokeWidth = 3.dp,
+                    modifier = androidx.compose.ui.Modifier.size(32.dp)
+                )
+            }
+        }
         AdminViewModel.Screen.LICENSE -> LicenseGateScreen(viewModel)
         AdminViewModel.Screen.ROLE_SELECT -> RoleSelectionScreen(viewModel)
         AdminViewModel.Screen.HUB -> ProjectHubScreen(viewModel)
