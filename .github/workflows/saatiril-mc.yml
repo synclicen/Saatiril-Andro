@@ -1,7 +1,6 @@
 name: Saatiril MC
 
 # Builds the MC-only APK (no Admin, no Operator — BLE Remote only).
-# This is a locked-down app that MC installs on their phone.
 # MC can ONLY do: scan BLE → connect → PANGGIL/NEXT/RESET.
 # No access to Admin panel, Operator camera, or license.
 
@@ -57,14 +56,14 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-          echo "KEYSTORE_FILE=keystore.jks" >> $GITHUB_ENV
+          echo "$KEYSTORE_BASE64" | base64 -d > saatiril-release.keystore
+          echo "KEYSTORE_FILE=saatiril-release.keystore" >> $GITHUB_ENV
 
       - name: Create keystore.properties
         if: env.KEYSTORE_FILE != ''
         run: |
-          cat > keystore.properties << 'EOF'
-          storeFile=keystore.jks
+          cat > keystore.properties << EOF
+          storeFile=saatiril-release.keystore
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
@@ -76,15 +75,31 @@ jobs:
       - name: Build MC Debug APK
         run: ./gradlew assembleMcDebug --no-daemon --stacktrace
 
-      - name: Build MC Release APK
+      - name: Build MC Release APK (signed)
         if: env.KEYSTORE_FILE != ''
         run: ./gradlew assembleMcRelease --no-daemon --stacktrace
 
       - name: Rename APKs
         run: |
-          find . -name "*.apk" -path "*/mc/debug/*" -exec cp {} saatiril-mc-debug.apk \;
-          find . -name "*.apk" -path "*/mc/release/*" -exec cp {} saatiril-mc.apk \;
-          ls -la saatiril-mc*.apk
+          # Find MC debug APK
+          MC_DEBUG=$(find app/build/outputs/apk/mc/debug -name "*.apk" 2>/dev/null | head -1)
+          if [ -n "$MC_DEBUG" ]; then
+            cp "$MC_DEBUG" saatiril-mc-debug.apk
+            echo "Debug APK: $(ls -lh saatiril-mc-debug.apk)"
+          fi
+
+          # Find MC release APK (if signed)
+          MC_RELEASE=$(find app/build/outputs/apk/mc/release -name "*.apk" 2>/dev/null | head -1)
+          if [ -n "$MC_RELEASE" ]; then
+            cp "$MC_RELEASE" saatiril-mc.apk
+            echo "Release APK: $(ls -lh saatiril-mc.apk)"
+          else
+            # No release APK (no keystore) — use debug as the main APK
+            cp saatiril-mc-debug.apk saatiril-mc.apk
+            echo "Using debug APK as release (no keystore)"
+          fi
+
+          ls -lh saatiril-mc*.apk
 
       - name: Upload MC Debug APK
         uses: actions/upload-artifact@v4
@@ -101,17 +116,20 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish to GitHub Releases
-        if: env.KEYSTORE_FILE != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $releaseExists = $false
-          try { gh release view latest 2>$null; if ($LASTEXITCODE -eq 0) { $releaseExists = $true } } catch {}
-          if ($releaseExists) {
-            gh release delete-asset latest saatiril-mc.apk --yes 2>$null || true
-            gh release delete-asset latest saatiril-mc-debug.apk --yes 2>$null || true
+          # Check if 'latest' release exists
+          if gh release view latest 2>/dev/null; then
+            echo "Release 'latest' exists — uploading MC APKs"
+            gh release delete-asset latest saatiril-mc.apk --yes 2>/dev/null || true
+            gh release delete-asset latest saatiril-mc-debug.apk --yes 2>/dev/null || true
             gh release upload latest saatiril-mc.apk saatiril-mc-debug.apk --clobber
-          } else {
-            gh release create latest saatiril-mc.apk saatiril-mc-debug.apk --title "Saatiril Andro - Latest Build" --notes "MC-Only APK (BLE Remote)" --prerelease
-          }
-        shell: pwsh
+          else
+            echo "Creating 'latest' release with MC APKs"
+            gh release create latest saatiril-mc.apk saatiril-mc-debug.apk \
+              --title "Saatiril Andro - Latest Build" \
+              --notes "MC-Only APK (BLE Remote) - Build #${{ github.run_number }}" \
+              --prerelease
+          fi
+          echo "=== MC APKs published to releases ==="
