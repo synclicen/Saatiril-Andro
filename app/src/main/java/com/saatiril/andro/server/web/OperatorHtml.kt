@@ -1276,7 +1276,7 @@ async function enumerateCameras() {
     
     console.log('[OP] Found', videoDevices.length, 'video devices')
     videoDevices.forEach((d, i) => {
-      console.log(`[OP]   Camera ${i}: id=${d.deviceId?.slice(0,8)} label="${d.label}" groupId=${d.groupId?.slice(0,8)}`)
+      console.log(`[OP]   Camera ${'$'}{i}: id=${'$'}{d.deviceId?.slice(0,8)} label="${'$'}{d.label}" groupId=${'$'}{d.groupId?.slice(0,8)}`)
     })
     
     // Build probe info WITHOUT opening cameras
@@ -1286,7 +1286,7 @@ async function enumerateCameras() {
       const device = videoDevices[i]
       const probeInfo = {
         deviceId: device.deviceId,
-        label: device.label || `Kamera ${i+1}`,
+        label: device.label || `Kamera ${'$'}{i+1}`,
         groupId: device.groupId || '',
         isLikelyUsb: false,
         usbScore: 0,
@@ -1367,7 +1367,7 @@ private val OPERATOR_HTML_PART_2 = """        for (let i = 0; i < data.length; i
     const avgBrightness = totalBrightness / sampleCount
     const isBlack = avgBrightness < 5 // threshold: average brightness < 5 out of 255
     
-    console.log(`[OP] Frame analysis: avg brightness=${avgBrightness.toFixed(1)}, samples=${sampleCount}, isBlack=${isBlack}`)
+    console.log(`[OP] Frame analysis: avg brightness=${'$'}{avgBrightness.toFixed(1)}, samples=${'$'}{sampleCount}, isBlack=${'$'}{isBlack}`)
     return isBlack
   } catch(err) {
     console.warn('[OP] Frame analysis failed:', err)
@@ -1432,9 +1432,9 @@ async function autoDetectBestCamera() {
     const device = videoDevices[camIdx]
     if (!device) continue
     
-    const label = device.label || `Kamera ${camIdx + 1}`
-    showAutoDetectStatus(`🔍 Mencoba ${label}...`, 'pending')
-    console.log(`[OP] Auto-detect: trying camera ${camIdx} "${label}" (id: ${device.deviceId?.slice(0,8)})`)
+    const label = device.label || `Kamera ${'$'}{camIdx + 1}`
+    showAutoDetectStatus(`🔍 Mencoba ${'$'}{label}...`, 'pending')
+    console.log(`[OP] Auto-detect: trying camera ${'$'}{camIdx} "${'$'}{label}" (id: ${'$'}{device.deviceId?.slice(0,8)})`)
     
     // Try to open this camera
     let stream = null
@@ -1451,7 +1451,7 @@ async function autoDetectBestCamera() {
       if (autoDetectAborted) break
       try {
         stream = await navigator.mediaDevices.getUserMedia(strategy.c)
-        console.log(`[OP]   Opened with strategy: ${strategy.name}`)
+        console.log(`[OP]   Opened with strategy: ${'$'}{strategy.name}`)
         break
       } catch(e) {
         // try next strategy
@@ -1459,7 +1459,7 @@ async function autoDetectBestCamera() {
     }
     
     if (!stream) {
-      console.log(`[OP]   Failed to open camera ${camIdx} "${label}"`)
+      console.log(`[OP]   Failed to open camera ${'$'}{camIdx} "${'$'}{label}"`)
       // Update probedCameras
       const probed = probedCameras.find(c => c.deviceId === device.deviceId)
       if (probed) { probed.probed = true; probed.isBlack = true }
@@ -1484,7 +1484,7 @@ async function autoDetectBestCamera() {
         video.onplaying = () => { clearTimeout(timeout); resolve() }
       })
     } catch(e) {
-      console.warn(`[OP]   Video play timeout for camera ${camIdx}`)
+      console.warn(`[OP]   Video play timeout for camera ${'$'}{camIdx}`)
     }
     
     // Wait a bit more for the camera to stabilize (important for USB capture cards)
@@ -1499,7 +1499,7 @@ async function autoDetectBestCamera() {
     const track = stream.getVideoTracks()[0]
     const settings = track?.getSettings()
     const trackLabel = track?.label || ''
-    console.log(`[OP]   Track: "${trackLabel}" ${settings?.width}x${settings?.height} facing=${settings?.facingMode}`)
+    console.log(`[OP]   Track: "${'$'}{trackLabel}" ${'$'}{settings?.width}x${'$'}{settings?.height} facing=${'$'}{settings?.facingMode}`)
     
     // Check if frame is black
     const black = isFrameBlack(video)
@@ -1517,7 +1517,7 @@ async function autoDetectBestCamera() {
     
     if (!black) {
       // This camera has actual content!
-      console.log(`[OP]   ✅ Camera ${camIdx} "${label}" has VIDEO CONTENT!`)
+      console.log(`[OP]   ✅ Camera ${'$'}{camIdx} "${'$'}{label}" has VIDEO CONTENT!`)
       workingCameras.push({
         deviceId: device.deviceId,
         label: trackLabel || label,
@@ -1535,7 +1535,7 @@ async function autoDetectBestCamera() {
         currentCameraIndex = camIdx
         cameraAvailable = true
         
-        showAutoDetectStatus(`✅ Kamera aktif: ${trackLabel || label}`, 'ok')
+        showAutoDetectStatus(`✅ Kamera aktif: ${'$'}{trackLabel || label}`, 'ok')
         
         // Don't stop this stream — it's our active camera!
         // But continue checking other cameras in background
@@ -1543,7 +1543,7 @@ async function autoDetectBestCamera() {
         break
       }
     } else {
-      console.log(`[OP]   ⬛ Camera ${camIdx} "${label}" shows BLACK frame — skipping`)
+      console.log(`[OP]   ⬛ Camera ${'$'}{camIdx} "${'$'}{label}" shows BLACK frame — skipping`)
       stream.getTracks().forEach(t => t.stop())
     }
     
@@ -1570,7 +1570,7 @@ async function autoDetectBestCamera() {
     
     const track = bestCamera.getVideoTracks()[0]
     const label = track?.label || 'Kamera'
-    console.log(`[OP] ═══ AUTO-DETECT COMPLETE: Using "${label}" ═══`)
+    console.log(`[OP] ═══ AUTO-DETECT COMPLETE: Using "${'$'}{label}" ═══`)
     
     return bestDeviceId
   }
@@ -1635,7 +1635,7 @@ async function switchToNextCamera() {
   currentCameraIndex = (currentCameraIndex + 1) % videoDevices.length
   const nextDevice = videoDevices[currentCameraIndex]
   
-  console.log(`[OP] Switching to camera ${currentCameraIndex}: "${nextDevice.label || 'Kamera ' + (currentCameraIndex+1)}"`)
+  console.log(`[OP] Switching to camera ${'$'}{currentCameraIndex}: "${'$'}{nextDevice.label || 'Kamera ' + (currentCameraIndex+1)}"`)
   
   selectedDeviceId = nextDevice.deviceId
   
@@ -1668,11 +1668,11 @@ async function switchToNextCamera() {
     setTimeout(() => {
       const black = isFrameBlack(video)
       const track = stream.getVideoTracks()[0]
-      const label = track?.label || nextDevice.label || `Kamera ${currentCameraIndex+1}`
+      const label = track?.label || nextDevice.label || `Kamera ${'$'}{currentCameraIndex+1}`
       if (black) {
-        showAutoDetectStatus(`⬛ ${label} — layar hitam, coba ganti`, 'warn')
+        showAutoDetectStatus(`⬛ ${'$'}{label} — layar hitam, coba ganti`, 'warn')
       } else {
-        showAutoDetectStatus(`✅ ${label} — kamera aktif`, 'ok')
+        showAutoDetectStatus(`✅ ${'$'}{label} — kamera aktif`, 'ok')
       }
     }, 2000)
   } else {
@@ -1706,7 +1706,7 @@ async function deepProbeCameras() {
       const device = videoDevices[i]
       const probeInfo = {
         deviceId: device.deviceId,
-        label: device.label || `Kamera ${i+1}`,
+        label: device.label || `Kamera ${'$'}{i+1}`,
         groupId: device.groupId || '',
         isLikelyUsb: false,
         usbScore: 0,
@@ -1762,11 +1762,11 @@ async function deepProbeCameras() {
           // USB capture cards often have NO facingMode
           if (!settings.facingMode) probeInfo.usbScore += 4
           
-          console.log(`[OP] Deep probed camera ${i}: "${device.label}" → ${settings.width}x${settings.height} facing=${settings.facingMode} score=${probeInfo.usbScore}`)
+          console.log(`[OP] Deep probed camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height} facing=${'$'}{settings.facingMode} score=${'$'}{probeInfo.usbScore}`)
         }
         probeStream.getTracks().forEach(t => t.stop())
       } catch(e1) {
-        console.warn(`[OP] Deep probe strategy 1 failed for camera ${i}: ${e1.message}`)
+        console.warn(`[OP] Deep probe strategy 1 failed for camera ${'$'}{i}: ${'$'}{e1.message}`)
       }
       
       // Strategy 2: exact deviceId with lower resolution (some USB cards only support lower res)
@@ -1787,11 +1787,11 @@ async function deepProbeCameras() {
             probeSuccess = true
             
             if (!settings.facingMode) probeInfo.usbScore += 4
-            console.log(`[OP] Deep probe strategy 2 for camera ${i}: "${device.label}" → ${settings.width}x${settings.height}`)
+            console.log(`[OP] Deep probe strategy 2 for camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height}`)
           }
           probeStream.getTracks().forEach(t => t.stop())
         } catch(e2) {
-          console.warn(`[OP] Deep probe strategy 2 failed for camera ${i}: ${e2.message}`)
+          console.warn(`[OP] Deep probe strategy 2 failed for camera ${'$'}{i}: ${'$'}{e2.message}`)
         }
       }
       
@@ -1813,16 +1813,16 @@ async function deepProbeCameras() {
             probeSuccess = true
             
             if (!settings.facingMode) probeInfo.usbScore += 4
-            console.log(`[OP] Deep probe strategy 3 for camera ${i}: "${device.label}" → ${settings.width}x${settings.height}`)
+            console.log(`[OP] Deep probe strategy 3 for camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height}`)
           }
           probeStream.getTracks().forEach(t => t.stop())
         } catch(e3) {
-          console.warn(`[OP] Deep probe strategy 3 failed for camera ${i}: ${e3.message}`)
+          console.warn(`[OP] Deep probe strategy 3 failed for camera ${'$'}{i}: ${'$'}{e3.message}`)
         }
       }
       
       if (!probeSuccess) {
-        console.warn(`[OP] All probe strategies failed for camera ${i} "${device.label}" — may be inaccessible`)
+        console.warn(`[OP] All probe strategies failed for camera ${'$'}{i} "${'$'}{device.label}" — may be inaccessible`)
       }
       
       // IMPORTANT: Add delay between probes to let Android release the camera
@@ -1840,7 +1840,7 @@ async function deepProbeCameras() {
     if (probedCameras.length >= 2 && usbCount === 0) {
       const lastCam = probedCameras[probedCameras.length - 1]
       lastCam.isLikelyUsb = true
-      console.log(`[OP] No USB detected — marking last camera "${lastCam.label}" as potential USB`)
+      console.log(`[OP] No USB detected — marking last camera "${'$'}{lastCam.label}" as potential USB`)
     }
     
     // Update USB detection status
@@ -1907,7 +1907,7 @@ async function cycleAllCameras() {
     if (!isCyclingCameras || signal.aborted) break
     
     const device = videoDevices[i]
-    const label = device.label || `Kamera ${i+1}`
+    const label = device.label || `Kamera ${'$'}{i+1}`
     
     updateCycleUI(i + 1, videoDevices.length, label, device.deviceId)
     
@@ -1942,7 +1942,7 @@ async function cycleAllCameras() {
               audio: false
             })
           } catch(e4) {
-            console.warn(`[OP] Cannot open camera ${i} "${label}": all strategies failed`)
+            console.warn(`[OP] Cannot open camera ${'$'}{i} "${'$'}{label}": all strategies failed`)
             updateCycleUI(i + 1, videoDevices.length, label + ' (GAGAL)', device.deviceId)
             await new Promise(resolve => setTimeout(resolve, 1500))
             continue
@@ -1962,7 +1962,7 @@ async function cycleAllCameras() {
       // Log camera info
       const track = stream.getVideoTracks()[0]
       const settings = track?.getSettings()
-      console.log(`[OP] Cycling camera ${i}: "${track?.label || label}" → ${settings?.width}x${settings?.height} facing=${settings?.facingMode}`)
+      console.log(`[OP] Cycling camera ${'$'}{i}: "${'$'}{track?.label || label}" → ${'$'}{settings?.width}x${'$'}{settings?.height} facing=${'$'}{settings?.facingMode}`)
       
       // Wait 4 seconds for user to see the feed (or until they select)
       await new Promise(resolve => setTimeout(resolve, 4000))
@@ -2033,7 +2033,7 @@ function showCycleUI(show) {
 function updateCycleUI(current, total, cameraName, deviceId) {
   const progress = document.getElementById('cycleProgress')
   const nameEl = document.getElementById('cycleCameraName')
-  if (progress) progress.textContent = `Kamera ${current} dari ${total}`
+  if (progress) progress.textContent = `Kamera ${'$'}{current} dari ${'$'}{total}`
   if (nameEl) {
     nameEl.textContent = cameraName
     nameEl.dataset.deviceId = deviceId || ''
@@ -2092,8 +2092,8 @@ function renderProbeResults() {
     
     let detail = ''
     if (cam.probed) {
-      detail = `${cam.width || '?'}×${cam.height || '?'}`
-      if (cam.frameRate) detail += ` @${Math.round(cam.frameRate)}fps`
+      detail = `${'$'}{cam.width || '?'}×${'$'}{cam.height || '?'}`
+      if (cam.frameRate) detail += ` @${'$'}{Math.round(cam.frameRate)}fps`
       if (cam.isBlack === true) detail += ' ⬛ HITAM'
       if (cam.isBlack === false) detail += ' ✅'
     } else {
@@ -2101,12 +2101,12 @@ function renderProbeResults() {
     }
     
     item.innerHTML = `
-      <span class="pi-icon">${icon}</span>
+      <span class="pi-icon">${'$'}{icon}</span>
       <div class="pi-info">
-        <div class="pi-label">${cam.label}</div>
-        <div class="pi-detail">${detail}${cam.deviceId === selectedDeviceId ? ' ✅ Dipilih' : ''}</div>
+        <div class="pi-label">${'$'}{cam.label}</div>
+        <div class="pi-detail">${'$'}{detail}${'$'}{cam.deviceId === selectedDeviceId ? ' ✅ Dipilih' : ''}</div>
       </div>
-      <span class="pi-badge ${badgeClass}">${badgeText}</span>
+      <span class="pi-badge ${'$'}{badgeClass}">${'$'}{badgeText}</span>
     `
     
     item.onclick = () => {
@@ -2133,14 +2133,14 @@ function updateUsbStatus() {
   const untestedCount = probedCameras.filter(c => c.isBlack === null).length
   
   if (workingCount > 0) {
-    usbVal.textContent = `✅ ${workingCount} kamera aktif, ${blackCount} hitam`
+    usbVal.textContent = `✅ ${'$'}{workingCount} kamera aktif, ${'$'}{blackCount} hitam`
     usbVal.className = 'usb-value ok'
   } else if (usbCameraDetected) {
     const usbCams = probedCameras.filter(c => c.isLikelyUsb)
-    usbVal.textContent = `🔌 ${usbCams.length} USB (belum diperiksa)`
+    usbVal.textContent = `🔌 ${'$'}{usbCams.length} USB (belum diperiksa)`
     usbVal.className = 'usb-value ok'
   } else {
-    usbVal.textContent = `${probedCameras.length} kamera — gunakan "🔄 Cari" untuk mencari`
+    usbVal.textContent = `${'$'}{probedCameras.length} kamera — gunakan "🔄 Cari" untuk mencari`
     usbVal.className = 'usb-value warn'
   }
 }
@@ -2190,7 +2190,7 @@ async function startCamera(deviceId) {
   // Try each strategy until one works
   for (const strategy of strategies) {
     try {
-      console.log(`[OP] Trying camera strategy: ${strategy.name}`)
+      console.log(`[OP] Trying camera strategy: ${'$'}{strategy.name}`)
       const stream = await navigator.mediaDevices.getUserMedia(strategy.constraints)
       currentStream = stream
       selectedDeviceId = deviceId || stream.getVideoTracks()[0]?.getSettings()?.deviceId
@@ -2231,9 +2231,9 @@ async function startCamera(deviceId) {
         const black = isFrameBlack(video)
         const label = track?.label || 'Kamera'
         if (black) {
-          showAutoDetectStatus(`⬛ ${label} — layar hitam, coba "▶ Ganti"`, 'warn')
+          showAutoDetectStatus(`⬛ ${'$'}{label} — layar hitam, coba "▶ Ganti"`, 'warn')
         } else {
-          showAutoDetectStatus(`✅ ${label}`, 'ok')
+          showAutoDetectStatus(`✅ ${'$'}{label}`, 'ok')
           // Auto-hide after 3 seconds
           setTimeout(() => {
             const el = document.getElementById('autoDetectStatus')
@@ -2256,7 +2256,7 @@ async function startCamera(deviceId) {
       return
       
     } catch(err) {
-      console.warn(`[OP] Strategy "${strategy.name}" failed: ${err.message}`)
+      console.warn(`[OP] Strategy "${'$'}{strategy.name}" failed: ${'$'}{err.message}`)
     }
   }
   
@@ -2279,7 +2279,7 @@ function updateCameraSelector() {
   videoDevices.forEach((d, i) => {
     const opt = document.createElement('option')
     opt.value = d.deviceId
-    const label = d.label || `Kamera ${i+1}`
+    const label = d.label || `Kamera ${'$'}{i+1}`
     
     // Check probed info
     const probed = probedCameras.find(c => c.deviceId === d.deviceId)
@@ -2298,9 +2298,9 @@ function updateCameraSelector() {
       prefix = '🔌'
     }
     
-    let displayLabel = `${prefix} ${label}${suffix}`
+    let displayLabel = `${'$'}{prefix} ${'$'}{label}${'$'}{suffix}`
     if (probed?.probed && probed?.width) {
-      displayLabel += ` (${probed.width}×${probed.height})`
+      displayLabel += ` (${'$'}{probed.width}×${'$'}{probed.height})`
     }
     
     opt.textContent = displayLabel
@@ -2414,7 +2414,7 @@ async function testConnection() {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 8000)
     
-    const testUrl = `http://${ip}:${SOCKET_PORT}/`
+    const testUrl = `http://${'$'}{ip}:${'$'}{SOCKET_PORT}/`
     
         results.push('📡 Menguji HTTP ke: ' + testUrl)
     
@@ -2504,7 +2504,7 @@ function connectToServer(ip) {
   // The ip parameter is kept for error messages and diagnostics.
   const serverUrl = (window.location.origin && window.location.origin !== 'null')
     ? window.location.origin
-    : `http://${ip}:${SOCKET_PORT}`
+    : `http://${'$'}{ip}:${'$'}{SOCKET_PORT}`
 
   const socketOptions = {
     path: '/',
@@ -2906,7 +2906,7 @@ function updateTopBarDisplay() {
                      (capturePhase === 'ready-1' ? 'Toga' : 
                       capturePhase === 'ready-2' ? 'Ijazah' : 
                       capturePhase === 'sending' ? 'Kirim' : '')
-    targetEl.textContent = `${currentTarget.nama || ''} ${phaseText}`
+    targetEl.textContent = `${'$'}{currentTarget.nama || ''} ${'$'}{phaseText}`
   } else {
     targetEl.textContent = ''
   }
@@ -3116,10 +3116,10 @@ async function sendPhotos() {
   const photos = capturedPhotos.map((p, i) => {
     let filename
     if (isPsSend) {
-      filename = channel === 1 ? `${nim}_${nama}.jpg` : `${nim}_${nama}_Ch${channel}.jpg`
+      filename = channel === 1 ? `${'$'}{nim}_${'$'}{nama}.jpg` : `${'$'}{nim}_${'$'}{nama}_Ch${'$'}{channel}.jpg`
     } else {
       const suffix = p.label === 'toga' ? '1_Toga' : '2_Ijazah'
-      filename = `${nim}_${nama}_${suffix}.jpg`
+      filename = `${'$'}{nim}_${'$'}{nama}_${'$'}{suffix}.jpg`
     }
     return { filename, data: p.dataUrl, label: p.label }
   })
@@ -3219,16 +3219,16 @@ function toggleGridline() {
 function renderGridline() {
   const svg = document.getElementById('gridlineOverlay')
   const color = 'rgba(212,175,55,0.6)'
-  const props = `stroke="${color}" stroke-width="0.3"`
-  const propsSub = `stroke="${color}" stroke-width="0.15" opacity="0.4"`
+  const props = `stroke="${'$'}{color}" stroke-width="0.3"`
+  const propsSub = `stroke="${'$'}{color}" stroke-width="0.15" opacity="0.4"`
   
   svg.innerHTML = `
-    <line x1="33.333" y1="0" x2="33.333" y2="100" ${props} />
-    <line x1="66.666" y1="0" x2="66.666" y2="100" ${props} />
-    <line x1="0" y1="33.333" x2="100" y2="33.333" ${props} />
-    <line x1="0" y1="66.666" x2="100" y2="66.666" ${props} />
-    <line x1="0" y1="0" x2="100" y2="100" ${propsSub} />
-    <line x1="100" y1="0" x2="0" y2="100" ${propsSub} />
+    <line x1="33.333" y1="0" x2="33.333" y2="100" ${'$'}{props} />
+    <line x1="66.666" y1="0" x2="66.666" y2="100" ${'$'}{props} />
+    <line x1="0" y1="33.333" x2="100" y2="33.333" ${'$'}{props} />
+    <line x1="0" y1="66.666" x2="100" y2="66.666" ${'$'}{props} />
+    <line x1="0" y1="0" x2="100" y2="100" ${'$'}{propsSub} />
+    <line x1="100" y1="0" x2="0" y2="100" ${'$'}{propsSub} />
   `
 }
 
@@ -3258,7 +3258,7 @@ function updateQueueList() {
   } else {
     // Non-photoshoot mode: just show channel students
     relevant = currentProject.database.filter(s => 
-      s.assignedChannel === myChannel || s.status === `active_${myChannel}`
+      s.assignedChannel === myChannel || s.status === `active_${'$'}{myChannel}`
     )
   }
   
@@ -3270,9 +3270,9 @@ function updateQueueList() {
   if (titleEl) {
     const remaining = relevant.filter(s => s.status !== 'done').length
     if (isPs) {
-      titleEl.textContent = `Antre dari MC (${mcCallBuffer.length + relevant.filter(s => s.status === 'sent').length})`
+      titleEl.textContent = `Antre dari MC (${'$'}{mcCallBuffer.length + relevant.filter(s => s.status === 'sent').length})`
     } else {
-      titleEl.textContent = `Cari Antrean (${remaining}) • Ch.${myChannel}`
+      titleEl.textContent = `Cari Antrean (${'$'}{remaining}) • Ch.${'$'}{myChannel}`
     }
   }
   
@@ -3302,11 +3302,11 @@ function updateQueueList() {
         else if (isDone) { statusLabel = 'Selesai'; statusColor = 'var(--muted)' }
         else { statusLabel = 'Tunggu'; statusColor = 'var(--border)' }
         
-        return `<div class="queue-row ${rowClass}" onclick="selectQueueItem('${s.id}')">
-          <span class="q-idx">${idx + 1}</span>
-          <span class="q-nim-col">${s.nim || '-'}</span>
-          <span class="${nameClass}">${s.nama || '-'}</span>
-          <span class="q-status-col" style="color:${statusColor}">${statusLabel}</span>
+        return `<div class="queue-row ${'$'}{rowClass}" onclick="selectQueueItem('${'$'}{s.id}')">
+          <span class="q-idx">${'$'}{idx + 1}</span>
+          <span class="q-nim-col">${'$'}{s.nim || '-'}</span>
+          <span class="${'$'}{nameClass}">${'$'}{s.nama || '-'}</span>
+          <span class="q-status-col" style="color:${'$'}{statusColor}">${'$'}{statusLabel}</span>
         </div>`
       }).join('')
     }
@@ -3443,7 +3443,7 @@ function renderOpSearchResults() {
       if (photoHistory.some(ph => ph.studentId === s.id)) return false
       return true
     }
-    return s.assignedChannel === myChannel || s.status === `active_${myChannel}`
+    return s.assignedChannel === myChannel || s.status === `active_${'$'}{myChannel}`
   })
   
   // Filter by search query
@@ -3473,11 +3473,11 @@ function renderOpSearchResults() {
       else if (isDone) { statusLabel = 'OK'; statusColor = 'var(--success)' }
     }
     
-    return `<div class="opsearch-item" onclick="selectOpSearchItem('${s.id}')">
-      <span class="os-nim">${s.nim || '-'}</span>
-      <span class="os-nama ${isCurrent ? 'active' : ''}">${s.nama || '-'}</span>
-      ${statusLabel ? `<span class="os-status" style="color:${statusColor}">${statusLabel}</span>` : ''}
-      ${isCurrent ? '📷' : ''}
+    return `<div class="opsearch-item" onclick="selectOpSearchItem('${'$'}{s.id}')">
+      <span class="os-nim">${'$'}{s.nim || '-'}</span>
+      <span class="os-nama ${'$'}{isCurrent ? 'active' : ''}">${'$'}{s.nama || '-'}</span>
+      ${'$'}{statusLabel ? `<span class="os-status" style="color:${'$'}{statusColor}">${'$'}{statusLabel}</span>` : ''}
+      ${'$'}{isCurrent ? '📷' : ''}
     </div>`
   }).join('')
 }
@@ -3595,11 +3595,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const currentPort = window.location.port || '3000'
   const flagUrlEl = document.getElementById('flagUrl')
   if (flagUrlEl) {
-    flagUrlEl.textContent = `http://${currentHost}:${currentPort}`
+    flagUrlEl.textContent = `http://${'$'}{currentHost}:${'$'}{currentPort}`
   }
   const flagUrlPcEl = document.getElementById('flagUrlPc')
   if (flagUrlPcEl) {
-    flagUrlPcEl.textContent = `http://${currentHost}:${currentPort}`
+    flagUrlPcEl.textContent = `http://${'$'}{currentHost}:${'$'}{currentPort}`
   }
   
   // Mirror toggle default (new switch)
