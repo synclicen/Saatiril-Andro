@@ -80,6 +80,7 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
   var params = new URLSearchParams(window.location.search);
   var channel = parseInt(params.get('channel') || '1');
   var password = params.get('password') || '';
+  var socketPort = params.get('socketPort') || '';
   var ws = null;
   var connected = false;
   var authenticated = false;
@@ -89,8 +90,65 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 
   document.getElementById('ch-label').textContent = 'Ch.' + channel;
 
-  // ── SHA-256 implementation (sync, for password hashing) ──
-  // Uses Web Crypto API (async) with fallback to manual SHA-256.
+  // ── SHA-256 implementation (async, crypto.subtle + correct fallback) ──
+  // IMPORTANT: crypto.subtle is ONLY available in secure contexts (HTTPS / localhost).
+  // On HTTP LAN (e.g. http://192.168.100.61:3003/mc) crypto.subtle is UNDEFINED,
+  // so we MUST have a correct pure-JS fallback. The previous "prime-sieve" fallback
+  // here was BROKEN — it returned wrong hashes for every input, so MC could never
+  // auth when a session password was set. This correct implementation uses the
+  // standard SHA-256 K constants and matches java.security.MessageDigest exactly.
+  function rotR(x, n) { return (x >>> n) | (x << (32 - n)); }
+
+  function sha256Fallback(data) {
+    var K = new Uint32Array([
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ]);
+    var msgLen = data.length;
+    var bitLen = msgLen * 8;
+    var paddedLen = msgLen + 1;
+    while (paddedLen % 64 !== 56) paddedLen++;
+    paddedLen += 8;
+    var padded = new Uint8Array(paddedLen);
+    padded.set(data);
+    padded[msgLen] = 0x80;
+    var view = new DataView(padded.buffer);
+    view.setUint32(paddedLen - 8, 0, false);
+    view.setUint32(paddedLen - 4, bitLen, false);
+    var h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+    var h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+    for (var offset = 0; offset < paddedLen; offset += 64) {
+      var w = new Uint32Array(64);
+      for (var i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false);
+      for (var i2 = 16; i2 < 64; i2++) {
+        var s0 = rotR(w[i2 - 15], 7) ^ rotR(w[i2 - 15], 18) ^ (w[i2 - 15] >>> 3);
+        var s1 = rotR(w[i2 - 2], 17) ^ rotR(w[i2 - 2], 19) ^ (w[i2 - 2] >>> 10);
+        w[i2] = (w[i2 - 16] + s0 + w[i2 - 7] + s1) | 0;
+      }
+      var a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+      for (var j = 0; j < 64; j++) {
+        var S1 = rotR(e, 6) ^ rotR(e, 11) ^ rotR(e, 25);
+        var ch = (e & f) ^ (~e & g);
+        var temp1 = (h + S1 + ch + K[j] + w[j]) | 0;
+        var S0 = rotR(a, 2) ^ rotR(a, 13) ^ rotR(a, 22);
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var temp2 = (S0 + maj) | 0;
+        h = g; g = f; f = e; e = (d + temp1) | 0;
+        d = c; c = b; b = a; a = (temp1 + temp2) | 0;
+      }
+      h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+      h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+    }
+    function hex(x) { return (x >>> 0).toString(16).padStart(8, '0'); }
+    return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4) + hex(h5) + hex(h6) + hex(h7);
+  }
+
   async function sha256(message) {
     if (window.crypto && window.crypto.subtle) {
       try {
@@ -98,63 +156,9 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
         var hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
         var hashArray = Array.from(new Uint8Array(hashBuffer));
         return hashArray.map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-      } catch(e) {
-        return sha256Manual(message);
-      }
+      } catch(e) { /* fall through to pure-JS */ }
     }
-    return sha256Manual(message);
-  }
-
-  // Manual SHA-256 fallback (for older browsers without SubtleCrypto)
-  function sha256Manual(ascii) {
-    function rightRotate(value, amount) { return (value>>>amount) | (value<<(32-amount)); }
-    var mathPow = Math.pow, maxWord = mathPow(2, 32), lengthProperty = 'length', result = '';
-    var words = [], asciiBitLength = ascii[lengthProperty]*8, hash = sha256Manual.h = sha256Manual.h || [], k = sha256Manual.k = sha256Manual.k || [], primeCounter = k[lengthProperty];
-    var isComposite = {}, simpleCounter = 0, hashValue = 2;
-    for (; simpleCounter < 64; simpleCounter++) {
-      var candidate = hashValue;
-      do {
-        for (var i = 0; i < simpleCounter; i++) { if (candidate % k[i] === 0) { candidate = candidate / k[i]; isComposite = true; } }
-        if (isComposite) { isComposite = false; hashValue += 2; } else { break; }
-      } while (true);
-      if (primeCounter < 64) { k[primeCounter++] = (mathPow(candidate, .5)*maxWord)|0; }
-      hashValue += 2;
-    }
-    ascii += '\x80';
-    while (ascii[lengthProperty]%64 - 56) ascii += '\x00';
-    for (i = 0; i < ascii[lengthProperty]; i++) {
-      j = ascii.charCodeAt(i);
-      if (j>>8) return;
-      words[i>>2] |= j << ((3 - i)%4)*8;
-    }
-    words[words[lengthProperty]] = ((asciiBitLength/maxWord)|0);
-    words[words[lengthProperty]] = (asciiBitLength);
-    for (j = 0; j < words[lengthProperty];) {
-      var w = words.slice(j, j += 16), w2 = [];
-      for (i = 0; i < 16; i++) w2[i] = w[i];
-      for (i = 16; i < 64; i++) {
-        var w15 = w2[i-15], w2_ = w2[i-2];
-        var a = rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15>>>3);
-        var b = rightRotate(w2_, 17) ^ rightRotate(w2_, 19) ^ (w2_>>>10);
-        w2[i] = w2[i-16] + a + w2[i-7] + b;
-      }
-      var wHash = hash.slice(0);
-      var a2 = wHash[0], b2 = wHash[1], c2 = wHash[2], d2 = wHash[3], e2 = wHash[4], f2 = wHash[5], g2 = wHash[6], h2 = wHash[7];
-      for (i = 0; i < 64; i++) {
-        var a3 = rightRotate(e2, 6) ^ rightRotate(e2, 11) ^ rightRotate(e2, 25);
-        var b3 = rightRotate(a2, 2) ^ rightRotate(a2, 13) ^ rightRotate(a2, 22);
-        var c3 = (e2 & f2) ^ (~e2 & g2);
-        var d3 = (a2 & b2) ^ (a2 & c2) ^ (b2 & c2);
-        var temp1 = h2 + a3 + c3 + k[i] + w2[i];
-        var temp2 = b3 + d3;
-        h2 = g2; g2 = f2; f2 = e2; e2 = (d2 + temp1)|0;
-        d2 = c2; c2 = b2; b2 = a2; a2 = (temp1 + temp2)|0;
-      }
-      hash[0] = (hash[0] + a2)|0; hash[1] = (hash[1] + b2)|0; hash[2] = (hash[2] + c2)|0; hash[3] = (hash[3] + d2)|0;
-      hash[4] = (hash[4] + e2)|0; hash[5] = (hash[5] + f2)|0; hash[6] = (hash[6] + g2)|0; hash[7] = (hash[7] + h2)|0;
-    }
-    for (i = 0; i < 8; i++) { for (j = 28; j >= 0; j -= 4) result += ((hash[i]>>>(j))&0xF).toString(16); }
-    return result;
+    return sha256Fallback(new TextEncoder().encode(message));
   }
 
   async function connect() {
@@ -163,7 +167,13 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
       passwordHash = await sha256(password);
     }
 
-    var wsUrl = 'ws://' + location.host + '/?EIO=3&transport=websocket';
+    // Respect ?socketPort= if provided (so the page can be served from any HTTP
+    // server while the WebSocket connects to the actual saatiril server).
+    // Default: same host:port as the page (Android ktor serves both on one port).
+    var wsHost = location.hostname;
+    var wsPort = socketPort || location.port;
+    var wsUrl = 'ws://' + wsHost + ':' + wsPort + '/?EIO=3&transport=websocket';
+    console.log('[MC] connecting to ' + wsUrl);
     try {
       ws = new WebSocket(wsUrl);
     } catch(e) {
@@ -223,7 +233,16 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
       // Request initial state — this triggers the server to send SYNC_DB
       sendLanMessage('REQUEST_STATE', {role:'mc', channel:channel});
     } else if(name === 'auth-failed' || name === 'auth-fail') {
-      showError('Password salah atau ditolak server. Periksa password sesi di admin.');
+      console.warn('[MC] auth-failed', data);
+      // Clear the bad hash so the user can re-enter the password
+      var hadHash = !!passwordHash;
+      passwordHash = null;
+      password = '';
+      showPasswordPrompt(hadHash ? (data && data.reason) : null);
+    } else if(name === 'auth-requirement') {
+      if(data && data.passwordRequired && !passwordHash) {
+        showPasswordPrompt(null);
+      }
     } else if(name === 'lan-message') {
       // lan-message wraps: {event: 'SYNC_DB', data: {...}}
       if(data && data.event) {
@@ -426,6 +445,61 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
   function showError(msg) {
     var app = document.getElementById('app');
     app.innerHTML = '<div class="error-box">' + escapeHtml(msg) + '</div><div class="loading">Mencoba menghubungkan ulang\u2026</div>';
+  }
+
+  // Password prompt — shown when the server requires a session password and
+  // we don't have a valid hash yet. Lets the user type the password and retry
+  // without reloading the page.
+  function showPasswordPrompt(reason) {
+    var errLine = '';
+    if (reason === 'session_password_required') {
+      errLine = '<div style="color:#fbbf24;font-size:12px;margin-bottom:8px">Password salah, coba lagi.</div>';
+    }
+    var app = document.getElementById('app');
+    app.innerHTML =
+      '<div style="text-align:center;padding:40px 20px">' +
+      '<div style="font-size:48px;margin-bottom:16px">\uD83D\uDD11</div>' +
+      '<div style="color:#fff;font-size:18px;margin-bottom:8px">Password Sesi Diperlukan</div>' +
+      '<div style="color:#c4b5fd;font-size:13px;margin-bottom:16px">Masukkan password sesi dari admin</div>' +
+      errLine +
+      '<input type="password" id="pwd-input" style="width:100%;max-width:300px;padding:12px;border-radius:8px;border:1px solid #533485;background:#2a164a;color:#fff;font-size:16px;text-align:center;margin-bottom:12px" placeholder="Password" autocomplete="current-password" />' +
+      '<button id="pwd-btn" style="width:100%;max-width:300px;height:44px;border:none;border-radius:8px;background:#d4af37;color:#1a0b2e;font-size:14px;font-weight:900;cursor:pointer">CONNECT</button>' +
+      '</div>';
+    var input = document.getElementById('pwd-input');
+    var btn = document.getElementById('pwd-btn');
+    if (input) {
+      input.focus();
+      input.addEventListener('keypress', function(e){ if(e.key === 'Enter') submitPwd(); });
+    }
+    if (btn) btn.addEventListener('click', submitPwd);
+  }
+
+  async function submitPwd() {
+    var input = document.getElementById('pwd-input');
+    var btn = document.getElementById('pwd-btn');
+    if (!input || !input.value) return;
+    password = input.value;
+    if (btn) { btn.disabled = true; btn.textContent = 'Memverifikasi...'; }
+    try {
+      passwordHash = await sha256(password);
+      console.log('[MC] submitPwd hashed: ' + (passwordHash || '').slice(0, 8) + '...');
+    } catch(e) {
+      console.error('[MC] submitPwd sha256 failed:', e);
+      if (btn) { btn.disabled = false; btn.textContent = 'CONNECT'; }
+      return;
+    }
+    // Re-send identify on the existing WS connection (no need to tear down).
+    if (ws && ws.readyState === 1) {
+      document.getElementById('app').innerHTML = '<div class="loading">Memverifikasi password\u2026</div>';
+      var identifyData = {role:'mc', channel:channel};
+      if (passwordHash) identifyData.sessionPasswordHash = passwordHash;
+      sendEvent('identify', identifyData);
+      setTimeout(function(){ if(btn){ btn.disabled = false; btn.textContent = 'CONNECT'; } }, 3000);
+    } else {
+      // WS not connected — start fresh
+      document.getElementById('app').innerHTML = '<div class="loading">Menghubungkan dengan password\u2026</div>';
+      connect();
+    }
   }
 
   window.__call = function() {
