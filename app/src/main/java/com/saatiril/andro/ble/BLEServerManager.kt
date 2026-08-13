@@ -15,6 +15,10 @@ import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
@@ -40,6 +44,7 @@ class BLEServerManager(private val context: Context) {
         private const val TAG = "BLEServer"
     }
 
+    private val scope = CoroutineScope(Dispatchers.Main)
     private val bluetoothManager: BluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
@@ -248,34 +253,70 @@ class BLEServerManager(private val context: Context) {
     private fun startAdvertising() {
         val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         if (advertiser == null) {
-            Log.e(TAG, "BluetoothLeAdvertiser not available")
+            Log.e(TAG, "BluetoothLeAdvertiser not available — this device does not support BLE peripheral mode")
             return
         }
 
+        // CRITICAL FIX: Use ADVERTISE_MODE_BALANCED instead of LOW_LATENCY.
+        // LOW_LATENCY + setTimeout(0) fails on many Android devices with
+        // onStartFailure error code 1 (FEATURE_UNSUPPORTED).
+        // BALANCED mode is reliable and still discoverable within 1-2 seconds.
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setConnectable(true)
-            .setTimeout(BLEProtocol.ADVERTISE_TIMEOUT_MS)
+            .setTimeout(0) // 0 = advertise indefinitely (works with BALANCED/LOW_POWER)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
+        // CRITICAL FIX: Primary advertisement must NOT include the device name.
+        // A 128-bit service UUID takes 16 bytes. The device name can be 20+ bytes.
+        // Together they exceed the 31-byte advertisement packet limit, causing
+        // the service UUID to be DROPPED. Web Bluetooth filters by service UUID,
+        // so if it's not in the advertisement, the device is invisible to Chrome/Edge.
+        // Solution: put ONLY the service UUID in the primary advertisement,
+        // and put the device name in the scan response (another 31 bytes).
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeDeviceName(false)  // ← FIX: was true, caused UUID to be dropped
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(java.util.UUID.fromString(BLEProtocol.SERVICE_UUID)))
             .build()
 
+        // Scan response: includes the device name so the user can identify the MC HP
+        // in the Web Bluetooth picker. This is sent in response to scan requests.
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .setIncludeTxPowerLevel(false)
+            .build()
+
         advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                Log.i(TAG, "BLE advertising started successfully")
+                Log.i(TAG, "BLE advertising started — service UUID in advertisement, device name in scan response")
             }
 
             override fun onStartFailure(errorCode: Int) {
-                Log.e(TAG, "BLE advertising failed: errorCode=$errorCode")
+                val reason = when (errorCode) {
+                    AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
+                    AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
+                    AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED (device lacks BLE peripheral support)"
+                    AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
+                    AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
+                    else -> "UNKNOWN($errorCode)"
+                }
+                Log.e(TAG, "BLE advertising FAILED: $reason")
+                // Auto-retry after 2 seconds — sometimes the Bluetooth stack needs a moment
+                // to release the previous advertising session
+                scope.launch {
+                    delay(2000)
+                    if (isRunning && advertiseCallback == null) {
+                        Log.i(TAG, "Retrying BLE advertising...")
+                        startAdvertising()
+                    }
+                }
             }
         }
 
-        advertiser.startAdvertising(settings, data, advertiseCallback)
+        // Use the 3-arg version with scan response so the device name shows in the picker
+        advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
     }
 
     private fun stopAdvertising() {
