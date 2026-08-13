@@ -76,6 +76,20 @@ class BLEServerManager(private val context: Context) {
     /** Check if the GATT server is running. */
     fun isRunning(): Boolean = isRunning
 
+    /** Check if this device supports BLE peripheral (advertising) mode. */
+    fun isAdvertisingSupported(): Boolean {
+        return bluetoothAdapter?.bluetoothLeAdvertiser != null
+    }
+
+    // ── Diagnostics state (exposed to UI) ──
+    @Volatile var advertisingStatus: String = "idle" // idle | advertising | failed
+        private set
+    @Volatile var advertisingError: String = ""
+        private set
+    @Volatile var gattServerStatus: String = "idle" // idle | running | failed
+        private set
+    private var restartJob: kotlinx.coroutines.Job? = null
+
     /**
      * Start the BLE GATT server + advertising.
      * @return true if started successfully, false otherwise.
@@ -88,24 +102,62 @@ class BLEServerManager(private val context: Context) {
 
         if (!isBluetoothAvailable()) {
             Log.e(TAG, "Bluetooth not available or not enabled")
+            advertisingError = "Bluetooth tidak aktif"
+            return false
+        }
+
+        if (!isAdvertisingSupported()) {
+            Log.e(TAG, "BLE peripheral mode not supported on this device")
+            advertisingError = "HP ini tidak support BLE peripheral (bluetoothLeAdvertiser null). Gunakan mode WIFI / LAN."
             return false
         }
 
         return try {
             startGattServer()
+            gattServerStatus = "running"
             startAdvertising()
             isRunning = true
             Log.i(TAG, "BLE Server started — advertising service ${BLEProtocol.SERVICE_UUID}")
+            // Start auto-restart job: restart advertising every 3 minutes
+            // to prevent some Android devices from silently stopping it.
+            startAutoRestart()
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start BLE server: ${e.message}", e)
+            advertisingError = "Gagal start: ${e.message}"
             false
+        }
+    }
+
+    /** Restart advertising only (keeps GATT server running). */
+    fun restartAdvertising() {
+        if (!isRunning) return
+        stopAdvertising()
+        startAdvertising()
+        Log.i(TAG, "BLE advertising restarted manually")
+    }
+
+    private fun startAutoRestart() {
+        restartJob?.cancel()
+        restartJob = scope.launch {
+            while (isRunning) {
+                delay(180_000) // 3 minutes
+                if (isRunning && connectedDevices.isEmpty()) {
+                    Log.i(TAG, "Auto-restarting BLE advertising (prevent timeout)")
+                    stopAdvertising()
+                    delay(500)
+                    startAdvertising()
+                }
+            }
         }
     }
 
     /** Stop the BLE GATT server + advertising. */
     fun stop() {
         if (!isRunning) return
+
+        restartJob?.cancel()
+        restartJob = null
 
         try {
             stopAdvertising()
@@ -122,6 +174,8 @@ class BLEServerManager(private val context: Context) {
         gattServer = null
         connectedDevices.clear()
         isRunning = false
+        advertisingStatus = "idle"
+        gattServerStatus = "idle"
         Log.i(TAG, "BLE Server stopped")
     }
 
@@ -254,57 +308,59 @@ class BLEServerManager(private val context: Context) {
         val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         if (advertiser == null) {
             Log.e(TAG, "BluetoothLeAdvertiser not available — this device does not support BLE peripheral mode")
+            advertisingStatus = "failed"
+            advertisingError = "HP tidak support BLE peripheral"
             return
         }
 
-        // CRITICAL FIX: Use ADVERTISE_MODE_BALANCED instead of LOW_LATENCY.
-        // LOW_LATENCY + setTimeout(0) fails on many Android devices with
-        // onStartFailure error code 1 (FEATURE_UNSUPPORTED).
-        // BALANCED mode is reliable and still discoverable within 1-2 seconds.
+        // OPTIMIZATION: Use LOW_LATENCY for maximum discoverability.
+        // This uses more battery but ensures the device is found within 1-2 seconds.
+        // Combined with setTimeout(0) + auto-restart every 3 min, this is reliable.
+        // Previous BALANCED mode was too slow for Web Bluetooth to discover on Windows.
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(true)
-            .setTimeout(0) // 0 = advertise indefinitely (works with BALANCED/LOW_POWER)
+            .setTimeout(0) // 0 = advertise indefinitely
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // CRITICAL FIX: Primary advertisement must NOT include the device name.
-        // A 128-bit service UUID takes 16 bytes. The device name can be 20+ bytes.
-        // Together they exceed the 31-byte advertisement packet limit, causing
-        // the service UUID to be DROPPED. Web Bluetooth filters by service UUID,
-        // so if it's not in the advertisement, the device is invisible to Chrome/Edge.
-        // Solution: put ONLY the service UUID in the primary advertisement,
-        // and put the device name in the scan response (another 31 bytes).
+        // CRITICAL: Primary advertisement contains ONLY the service UUID.
+        // Device name goes in scan response to avoid 31-byte overflow.
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)  // ← FIX: was true, caused UUID to be dropped
+            .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(java.util.UUID.fromString(BLEProtocol.SERVICE_UUID)))
             .build()
 
-        // Scan response: includes the device name so the user can identify the MC HP
-        // in the Web Bluetooth picker. This is sent in response to scan requests.
+        // Scan response: device name + tx power + service UUID again (belt & suspenders).
+        // Some Web Bluetooth implementations (Windows) only look at scan response.
+        // Including the service UUID here too increases discoverability.
         val scanResponse = AdvertiseData.Builder()
             .setIncludeDeviceName(true)
-            .setIncludeTxPowerLevel(false)
+            .setIncludeTxPowerLevel(true)
+            .addServiceUuid(ParcelUuid(java.util.UUID.fromString(BLEProtocol.SERVICE_UUID)))
             .build()
 
         advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                Log.i(TAG, "BLE advertising started — service UUID in advertisement, device name in scan response")
+                Log.i(TAG, "BLE advertising started — LOW_LATENCY, service UUID in ad + scan response")
+                advertisingStatus = "advertising"
+                advertisingError = ""
             }
 
             override fun onStartFailure(errorCode: Int) {
                 val reason = when (errorCode) {
                     AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
                     AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
-                    AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED (device lacks BLE peripheral support)"
+                    AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED"
                     AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
                     AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
                     else -> "UNKNOWN($errorCode)"
                 }
                 Log.e(TAG, "BLE advertising FAILED: $reason")
-                // Auto-retry after 2 seconds — sometimes the Bluetooth stack needs a moment
-                // to release the previous advertising session
+                advertisingStatus = "failed"
+                advertisingError = reason
+                // Auto-retry after 2 seconds
                 scope.launch {
                     delay(2000)
                     if (isRunning && advertiseCallback == null) {
@@ -315,7 +371,6 @@ class BLEServerManager(private val context: Context) {
             }
         }
 
-        // Use the 3-arg version with scan response so the device name shows in the picker
         advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
     }
 

@@ -74,6 +74,10 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
     var statusPhase by remember { mutableStateOf("standby") }
     var queueData by remember { mutableStateOf<JSONObject?>(null) }
     var projectInfo by remember { mutableStateOf<JSONObject?>(null) }
+    // Diagnostics state
+    var adStatus by remember { mutableStateOf("idle") }
+    var adError by remember { mutableStateOf("") }
+    var bleSupported by remember { mutableStateOf(true) }
 
     // Bluetooth permission
     var hasBtPermission by remember {
@@ -118,15 +122,18 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
     // Start advertising automatically when permission granted
     LaunchedEffect(hasBtPermission) {
         if (hasBtPermission && !isAdvertising && bleServer.isBluetoothAvailable()) {
+            bleSupported = bleServer.isAdvertisingSupported()
             val started = bleServer.start()
             isAdvertising = started
         }
     }
 
-    // Poll connected clients count
+    // Poll connected clients count + diagnostics
     LaunchedEffect(isAdvertising) {
         while (isAdvertising) {
             connectedClientCount = bleServer.getConnectedClientCount()
+            adStatus = bleServer.advertisingStatus
+            adError = bleServer.advertisingError
             kotlinx.coroutines.delay(2000)
         }
     }
@@ -215,11 +222,76 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                     Spacer(Modifier.height(8.dp))
                     Text("Menunggu Electron Admin connect…", style = TextStyle(color = AMBER, fontSize = 13.sp, fontWeight = FontWeight.Bold), modifier = Modifier.align(Alignment.CenterHorizontally))
                     Spacer(Modifier.height(4.dp))
-                    Text("Aktifkan Bluetooth di laptop admin,\nlalu buka Saatiril → scan Bluetooth", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.align(Alignment.CenterHorizontally))
+                    Text("Di laptop Admin: buka tab Admin → panel 'Koneksi MC via Bluetooth' → klik CONNECT", style = TextStyle(color = MUTED, fontSize = 10.sp), modifier = Modifier.align(Alignment.CenterHorizontally))
                 } else {
                     Icon(Icons.Default.BluetoothConnected, contentDescription = null, tint = GREEN, modifier = Modifier.size(32.dp).align(Alignment.CenterHorizontally))
                     Spacer(Modifier.height(8.dp))
                     Text("✓ Electron Admin Terhubung", style = TextStyle(color = GREEN, fontSize = 14.sp, fontWeight = FontWeight.Bold), modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+            }
+        }
+
+        // ── Diagnostics card (shown when waiting for connection) ──
+        if (connectedClientCount == 0 && isAdvertising) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = PANEL.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    Text("Diagnostik BLE:", style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    Spacer(Modifier.height(6.dp))
+                    // BLE support
+                    val supportColor = if (bleSupported) GREEN else RED
+                    val supportText = if (bleSupported) "✓ BLE Peripheral didukung" else "✗ BLE Peripheral TIDAK didukung"
+                    Text(supportText, style = TextStyle(color = supportColor, fontSize = 10.sp))
+                    // Advertising status
+                    val adColor = when (adStatus) {
+                        "advertising" -> GREEN
+                        "failed" -> RED
+                        else -> MUTED
+                    }
+                    val adText = when (adStatus) {
+                        "advertising" -> "✓ Advertising aktif (menunggu scan dari laptop)"
+                        "failed" -> "✗ Advertising gagal: $adError"
+                        else -> "... Advertising idle"
+                    }
+                    Text(adText, style = TextStyle(color = adColor, fontSize = 10.sp))
+                    // Service UUID (so user can verify)
+                    Text("Service UUID:", style = TextStyle(color = MUTED, fontSize = 9.sp))
+                    Text(BLEProtocol.SERVICE_UUID, style = TextStyle(color = MUTED.copy(alpha = 0.7f), fontSize = 8.sp, fontFamily = FontFamily.Monospace))
+                    // Restart button
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            bleServer.restartAdvertising()
+                            adStatus = "idle"
+                            adError = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = BORDER),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                    Text("Restart Advertising", color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // ── Not supported warning ──
+        if (!bleSupported && hasBtPermission) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                colors = CardDefaults.cardColors(containerColor = RED.copy(alpha = 0.1f)),
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RED)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    Text("⚠️ HP ini tidak support BLE Peripheral", style = TextStyle(color = RED, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                    Spacer(Modifier.height(4.dp))
+                    Text("Beberapa HP tidak bisa menjadi BLE Server.\nGunakan mode WIFI / LAN sebagai gantinya.", style = TextStyle(color = MUTED, fontSize = 10.sp))
                 }
             }
         }
