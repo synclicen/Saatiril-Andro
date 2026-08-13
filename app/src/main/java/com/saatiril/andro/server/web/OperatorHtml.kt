@@ -3,703 +3,3713 @@ package com.saatiril.andro.server.web
 /**
  * Operator Web Page — served by the ktor server at `/operator?channel=1`.
  *
- * Adapted from Electron's operator-panel.tsx + use-palm-detection.ts.
+ * This is a direct port of the Electron operator.html (3431 lines) with an
+ * inline EIO3 Socket.IO shim that wraps raw WebSocket Engine.IO v3 to expose
+ * a socket.io-client v2/v3 compatible API. The Android ktor server implements
+ * Engine.IO v3 (NOT socket.io v4), so the standard socket.io-client library
+ * cannot be used. The shim bridges this gap, allowing the Electron UI code
+ * (which uses `io(url, options)`, `socket.on(...)`, `socket.emit(...)`) to
+ * work unchanged.
  *
- * Features:
- *  1. Camera picker — enumerate video devices (front/back/USB capture card)
- *  2. Camera preview — video element with aspect-ratio-locked container
- *  3. Shutter modes — manual, timer-3, timer-5, timer-10, hand trigger
- *  4. Hand trigger — MediaPipe Hands (loaded from CDN, same as Electron)
- *     - Hand appears → 500ms sustain → confirmed
- *     - Hand leaves frame → trigger shutter (respects selected mode)
- *     - 5s cooldown after trigger
- *  5. Photo capture — Canvas API → crop to aspect ratio → base64 → socket
- *  6. Frame overlay — Canvas compositing (if frame URL provided)
- *  7. Real-time — receives MC_CALL, SYNC_DB, STUDENT_RESET from server
+ * Features (same as Electron version):
+ *  1. Connection screen — IP input, channel selector, password field
+ *  2. Camera auto-detect — probes all cameras, picks the one with content
+ *  3. Camera preview — video element with object-fit: cover
+ *  4. Shutter modes — manual, timer-3, timer-5, timer-10, hand trigger
+ *  5. Hand trigger — MediaPipe Hands (loaded from CDN)
+ *  6. Photo capture — Canvas API → crop → base64 → socket
+ *  7. Frame overlay — Canvas compositing (if frame URL provided)
+ *  8. Real-time — receives MC_CALL, SYNC_DB, STUDENT_RESET from server
+ *  9. Queue list — tabular display with status indicators
+ *  10. Troubleshooting guide — diagnostics + camera probe
+ *
+ * Additional safety net:
+ *  - Periodic REQUEST_STATE every 5 seconds (fixes "MC called but Operator
+ *    didn't receive" relay reliability issue).
  *
  * URL format:
  *   http://192.168.1.5:3003/operator?channel=1
  *   http://192.168.1.5:3003/operator?channel=1&password=secret
  *
- * Note: MediaPipe Hands scripts are loaded from jsdelivr CDN. If the laptop
- * has no internet, hand trigger mode will fail gracefully (fall back to
- * manual/timer). All other features work on LAN only.
+ * Architecture notes:
+ *  - The page is served from the ktor server on port 3003. The WebSocket
+ *    connects to the same host:port (single-port architecture).
+ *  - The EIO3 shim converts `http://host:3003` to `ws://host:3003/?EIO=3&transport=websocket`.
+ *  - On HTTP LAN, crypto.subtle is unavailable, so the sha256Fallback
+ *    (pure-JS SHA-256, same algorithm as McHtml.kt) is used for password hashing.
+ *  - The socket.io-client library is NOT loaded — the inline shim replaces it.
  */
+
 const val OPERATOR_HTML = """<!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Saatiril Operator</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; overflow:hidden; }
-.header { background:#2a164a; padding:8px 12px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #533485; }
-.header .dot { width:10px; height:10px; border-radius:50%; background:#fbbf24; }
-.header .dot.connecting { background:#fbbf24; }
-.header .dot.authenticating { background:#06b6d4; }
-.header .dot.connected { background:#4ade80; }
-.header .dot.disconnected { background:#ef4444; }
-.header h1 { font-size:14px; color:#d4af37; }
-.header .ch { font-size:11px; color:#c4b5fd; margin-left:auto; }
-.header .target { font-size:12px; color:#fff; font-weight:bold; margin-left:8px; }
-.header .btn-disc { background:#2a164a; border:1px solid #ef4444; color:#ef4444; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:11px; }
-.camera-container { position:relative; background:#000; display:flex; align-items:center; justify-content:center; width:100vw; height:calc(100vh - 50px - 90px); }
-video { max-width:100%; max-height:100%; object-fit:contain; }
-.canvas-hidden { display:none; }
-.overlay { position:absolute; pointer-events:none; }
-.overlay.tl { top:4px; left:4px; }
-.overlay.tr { top:4px; right:4px; }
-.overlay.bc { bottom:4px; left:50%; transform:translateX(-50%); }
-.overlay.tc { top:4px; left:50%; transform:translateX(-50%); }
-.status-badge { background:rgba(0,0,0,0.6); padding:4px 8px; border-radius:4px; font-size:10px; display:flex; align-items:center; gap:4px; }
-.status-badge .d { width:5px; height:5px; border-radius:50%; }
-.no-signal { text-align:center; color:#c4b5fd; }
-.no-signal svg { width:48px; height:48px; opacity:0.5; margin-bottom:8px; }
-.timer-overlay { background:rgba(0,0,0,0.7); border-radius:50px; padding:12px 30px; font-size:48px; font-weight:900; color:#d4af37; }
-.hand-overlay { background:rgba(0,0,0,0.7); border-radius:16px; padding:8px 12px; font-size:11px; font-weight:bold; color:#d4af37; }
-.hand-overlay.confirmed { background:rgba(74,222,128,0.8); color:#1a0b2e; }
-.hand-overlay.triggered { background:rgba(212,175,55,0.8); color:#1a0b2e; }
-.flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; transition:opacity 0.1s; }
-.flash.show { opacity:0.8; }
-.controls { background:#2a164a; padding:8px; border-top:1px solid #533485; height:90px; display:flex; flex-direction:column; gap:4px; }
-.modes { display:flex; gap:4px; }
-.mode-btn { flex:1; padding:6px; background:#2a164a; border:1px solid #533485; border-radius:4px; color:#c4b5fd; font-size:11px; font-weight:bold; cursor:pointer; text-align:center; }
-.mode-btn.active { background:#3b2263; border-color:#d4af37; color:#d4af37; }
-.shutter-row { display:flex; gap:4px; align-items:center; }
-.shutter-btn { flex:1; height:42px; border:none; border-radius:8px; font-size:13px; font-weight:900; cursor:pointer; }
-.shutter-btn.ready { background:#d4af37; color:#1a0b2e; }
-.shutter-btn.waiting { background:#533485; color:#d4af37; cursor:wait; }
-.shutter-btn.disabled { background:#2a164a; color:#c4b5fd; cursor:default; }
-.phase { text-align:center; font-size:10px; color:#06b6d4; font-weight:bold; }
-.cam-select { position:absolute; top:4px; right:4px; background:rgba(0,0,0,0.7); color:#fff; border:1px solid #533485; border-radius:4px; padding:4px 8px; font-size:10px; cursor:pointer; }
-.error-box { background:#ef4444; color:#fff; padding:8px; border-radius:6px; margin:8px; font-size:11px; }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>SAATIRIL Operator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #1a0b2e;
+      --panel: #2a164a;
+      --card: #3b2263;
+      --border: #533485;
+      --gold: #d4af37;
+      --muted: #c4b5fd;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warn: #f59e0b;
+    }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: #fff; overflow-x: hidden;
+      min-height: 100vh; width: 100vw;
+      -webkit-user-select: none; user-select: none;
+    }
+
+    /* ── Connection Screen ── */
+    .connection-screen {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 20px 16px; gap: 16px;
+    }
+    .connection-screen.hidden { display: none; }
+    .logo-text {
+      font-size: 26px; font-weight: 800; letter-spacing: 3px;
+      background: linear-gradient(135deg, var(--gold), #f5e6a3, var(--gold));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .logo-sub { font-size: 10px; color: var(--muted); letter-spacing: 2px; margin-top: 4px; text-align: center; }
+    .form-card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px; width: 100%; max-width: 380px;
+    }
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+    .form-input {
+      width: 100%; padding: 12px 14px; border-radius: 10px;
+      background: var(--card); border: 1px solid var(--border);
+      color: #fff; font-size: 15px; outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus { border-color: var(--gold); }
+    .form-input::placeholder { color: rgba(196,181,253,0.4); }
+    .form-row { display: flex; gap: 12px; }
+    .form-row .form-group { flex: 1; }
+    .channel-btns { display: flex; gap: 8px; }
+    .channel-btn {
+      flex: 1; padding: 10px; border-radius: 10px; font-weight: 700; font-size: 14px;
+      background: var(--card); border: 2px solid var(--border); color: var(--muted);
+      cursor: pointer; transition: all 0.2s;
+    }
+    .channel-btn.active { border-color: var(--gold); color: var(--gold); background: rgba(212,175,55,0.1); }
+    .connect-btn {
+      width: 100%; padding: 14px; border-radius: 12px; font-weight: 700; font-size: 16px;
+      background: linear-gradient(135deg, var(--gold), #c49b2e); color: var(--bg);
+      border: none; cursor: pointer; transition: opacity 0.2s;
+    }
+    .connect-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .connect-btn:active { opacity: 0.8; }
+    .error-card {
+      background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 10px; padding: 12px; width: 100%; max-width: 380px;
+      color: #fca5a5; font-size: 13px; text-align: center;
+    }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border-radius: 20px; font-size: 11px; font-weight: 600;
+    }
+    .status-badge.connecting { background: rgba(234,179,8,0.15); color: #facc15; }
+    .status-badge.connected { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .status-badge.disconnected { background: rgba(239,68,68,0.15); color: #f87171; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .connecting .status-dot { background: #facc15; animation: pulse 1.5s infinite; }
+    .connected .status-dot { background: #4ade80; }
+    .disconnected .status-dot { background: #f87171; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* Camera status */
+    .usb-status {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 14px; width: 100%; max-width: 380px;
+      display: flex; align-items: center; gap: 10px; font-size: 12px;
+    }
+    .usb-icon { font-size: 18px; }
+    .usb-label { flex: 1; color: var(--muted); }
+    .usb-value { font-weight: 700; }
+    .usb-value.ok { color: var(--success); }
+    .usb-value.warn { color: var(--warn); }
+    .usb-value.err { color: var(--danger); }
+
+    /* Permission button */
+    .perm-btn {
+      width: 100%; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 14px;
+      background: linear-gradient(135deg, var(--warn), #d97706); color: var(--bg);
+      border: none; cursor: pointer; transition: opacity 0.2s; margin-bottom: 10px;
+    }
+    .perm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .perm-btn.granted { background: linear-gradient(135deg, var(--success), #16a34a); }
+
+    /* Troubleshooting */
+    .troubleshoot-card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; width: 100%; max-width: 380px; font-size: 11px; line-height: 1.6;
+    }
+    .troubleshoot-title { font-weight: 700; color: var(--gold); font-size: 13px; margin-bottom: 8px; }
+    .troubleshoot-card ol { padding-left: 18px; }
+    .troubleshoot-card li { margin-bottom: 4px; color: var(--muted); }
+    .troubleshoot-card li strong { color: #fff; }
+    .troubleshoot-card code {
+      background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 3px;
+      font-size: 10px; color: var(--gold);
+    }
+    .troubleshoot-card .highlight { color: var(--gold); font-weight: 600; }
+    .troubleshoot-card .step-result { margin-top: 4px; padding: 4px 8px; border-radius: 6px; font-size: 10px; }
+    .step-result.ok { background: rgba(34,197,94,0.1); color: #4ade80; }
+    .step-result.fail { background: rgba(239,68,68,0.1); color: #f87171; }
+    .step-result.pending { background: rgba(234,179,8,0.1); color: #facc15; }
+
+    /* Camera probe */
+    .probe-section {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; width: 100%; max-width: 380px;
+    }
+    .probe-title { font-weight: 700; color: var(--gold); font-size: 12px; margin-bottom: 8px; }
+    .probe-list { max-height: 200px; overflow-y: auto; }
+    .probe-item {
+      background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 10px; margin-bottom: 6px; cursor: pointer; transition: all 0.15s;
+      display: flex; align-items: center; gap: 8px; font-size: 11px;
+    }
+    .probe-item:active { background: rgba(212,175,55,0.15); }
+    .probe-item .pi-icon { font-size: 16px; flex-shrink: 0; }
+    .probe-item .pi-info { flex: 1; min-width: 0; }
+    .probe-item .pi-label { font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .probe-item .pi-detail { font-size: 9px; color: var(--muted); }
+    .probe-item .pi-badge {
+      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+      white-space: nowrap;
+    }
+    .pi-badge.usb { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .pi-badge.phone { background: rgba(196,181,253,0.15); color: var(--muted); }
+    .pi-badge.unknown { background: rgba(234,179,8,0.15); color: #facc15; }
+    .pi-badge.active-cam { background: rgba(212,175,55,0.2); color: var(--gold); }
+
+    /* ── Operator Screen ── */
+    .operator-screen { display: none; height: 100vh; flex-direction: column; }
+    .operator-screen.active { display: flex; }
+    
+    /* Top Bar */
+    .top-bar {
+      display: flex; align-items: center; padding: 6px 12px; gap: 8px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      min-height: 44px; flex-shrink: 0;
+    }
+    .top-bar-title { font-size: 12px; font-weight: 700; color: var(--gold); letter-spacing: 1px; }
+    .top-bar-mode { font-size: 9px; font-weight: 700; color: var(--gold); margin: 0 4px; }
+    .top-bar-target { font-size: 9px; color: #fff; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+    .top-bar-sep { width: 1px; height: 20px; background: var(--border); }
+    .camera-selector {
+      display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+    }
+    .camera-select {
+      flex: 1; padding: 4px 8px; border-radius: 6px; font-size: 11px;
+      background: var(--card); border: 1px solid var(--border); color: #fff;
+      outline: none; min-width: 0;
+    }
+    .rescan-btn {
+      padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 700;
+      background: var(--card); border: 1px solid var(--border); color: var(--muted);
+      cursor: pointer; white-space: nowrap;
+    }
+    .rescan-btn:active { background: var(--border); }
+    .latency-badge { font-size: 10px; color: var(--muted); font-weight: 600; }
+    .next-cam-btn {
+      padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: 700;
+      background: linear-gradient(135deg, var(--gold), #c49b2e); color: var(--bg);
+      border: none; cursor: pointer; white-space: nowrap;
+    }
+    .next-cam-btn:active { opacity: 0.7; }
+    
+    /* Auto-detect status */
+    .auto-detect-status {
+      position: absolute; top: 50px; left: 50%; transform: translateX(-50%);
+      padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      z-index: 10; pointer-events: none; transition: all 0.3s;
+      max-width: 90%; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .auto-detect-status.pending { background: rgba(234,179,8,0.2); color: #facc15; border: 1px solid rgba(234,179,8,0.4); }
+    .auto-detect-status.ok { background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }
+    .auto-detect-status.warn { background: rgba(234,179,8,0.2); color: #facc15; border: 1px solid rgba(234,179,8,0.4); }
+    .auto-detect-status.err { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .disconnect-btn {
+      padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 700;
+      background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3);
+      color: #f87171; cursor: pointer;
+    }
+    
+    /* Camera Area */
+    .camera-area {
+      flex: 1; position: relative; background: #000; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 0;
+    }
+    .camera-area video {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    .camera-area canvas { display: none; }
+    .no-camera-msg {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px; z-index: 5;
+    }
+    .no-camera-msg.hidden { display: none; }
+    .no-camera-icon { font-size: 48px; opacity: 0.3; }
+    .no-camera-text { font-size: 14px; color: var(--muted); text-align: center; }
+    
+    /* Gridline overlay */
+    .gridline-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 6;
+    }
+    .gridline-overlay.hidden { display: none; }
+    
+    /* Frame overlay */
+    .frame-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 5;
+      width: 100%; height: 100%; object-fit: fill;
+    }
+    .frame-overlay.hidden { display: none; }
+    
+    /* Timer countdown */
+    .timer-overlay {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; pointer-events: none; z-index: 15;
+    }
+    .timer-overlay.hidden { display: none; }
+    .timer-circle {
+      width: 80px; height: 80px; border-radius: 50%;
+      background: rgba(26,11,46,0.8); border: 4px solid var(--gold);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 0 40px rgba(212,175,55,0.4);
+    }
+    .timer-number { font-size: 36px; font-weight: 800; color: var(--gold); }
+    
+    /* Flash effect */
+    .flash-overlay {
+      position: absolute; inset: 0; background: #fff; pointer-events: none;
+      z-index: 20; opacity: 0; transition: opacity 0.1s;
+    }
+    .flash-overlay.active { opacity: 0.8; }
+    
+    /* Target info */
+    .target-info {
+      position: absolute; top: 8px; left: 8px; z-index: 10;
+      background: rgba(26,11,46,0.85); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 10px; font-size: 11px;
+    }
+    .target-info.hidden { display: none; }
+    .target-nama { font-weight: 700; color: var(--gold); font-size: 13px; }
+    .target-nim { color: var(--muted); font-size: 10px; }
+    .target-phase { 
+      display: inline-block; padding: 2px 6px; border-radius: 4px;
+      font-size: 9px; font-weight: 700; margin-top: 3px;
+    }
+    .target-phase.ready-1 { background: rgba(234,179,8,0.2); color: #facc15; }
+    .target-phase.ready-2 { background: rgba(168,85,247,0.2); color: #c084fc; }
+    .target-phase.sending { background: rgba(34,197,94,0.2); color: #4ade80; }
+    .target-phase.standby { background: rgba(196,181,253,0.15); color: var(--muted); }
+    
+    /* Photo progress dots */
+    .photo-dots {
+      position: absolute; top: 8px; right: 8px; z-index: 10;
+      display: flex; gap: 4px;
+    }
+    .photo-dots.hidden { display: none; }
+    .photo-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--border);
+    }
+    .photo-dot.done { background: var(--gold); }
+    .photo-dot.current { background: #facc15; animation: pulse 1s infinite; }
+
+    /* ── Draggable Divider ── */
+    .drag-divider {
+      height: 20px; background: var(--panel); border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border); cursor: ns-resize;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .drag-divider::after {
+      content: '···'; color: var(--muted); font-size: 12px; letter-spacing: 4px;
+    }
+
+    /* ── Capture bar (full-width button) ── */
+    .capture-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; background: rgba(42,22,74,0.8); flex-shrink: 0;
+    }
+    .capture-bar-btn {
+      flex: 1; height: 40px; border-radius: 8px; border: none;
+      font-weight: 700; font-size: 13px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+      transition: all 0.15s;
+    }
+    .capture-bar-btn.standby {
+      background: rgba(42,22,74,0.5); color: var(--muted); border: 1px solid var(--border);
+      cursor: not-allowed;
+    }
+    .capture-bar-btn.ready-1 {
+      background: var(--gold); color: var(--bg);
+    }
+    .capture-bar-btn.ready-2 {
+      background: #166534; color: #fff;
+    }
+    .capture-bar-btn.sending {
+      background: rgba(42,22,74,0.5); color: var(--muted); border: 1px solid var(--border);
+      cursor: not-allowed;
+    }
+    .capture-bar-btn.cancel-timer {
+      background: var(--danger); color: #fff;
+    }
+    .progress-dots {
+      display: flex; gap: 3px; flex-shrink: 0;
+    }
+    .progress-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--border);
+    }
+    .progress-dot.done { background: var(--success); }
+    .progress-dot.current { background: #facc15; animation: pulse 1s infinite; }
+
+    /* ── Shutter mode ── */
+    .shutter-row { display: flex; gap: 4px; flex-wrap: wrap; }
+    .shutter-chip {
+      display: flex; align-items: center; gap: 2px;
+      padding: 4px 8px; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--card);
+      font-size: 10px; font-weight: 700; color: var(--muted);
+    }
+    .shutter-chip.active { border-color: var(--gold); color: var(--gold); background: rgba(212,175,55,0.2); }
+
+    /* ── Gridline / Mirror switches ── */
+    .switch {
+      width: 36px; height: 20px; border-radius: 10px; background: var(--border);
+      position: relative; cursor: pointer; transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .switch.on { background: var(--gold); }
+    .switch::after {
+      content: ''; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; top: 2px; left: 2px; transition: transform 0.2s;
+    }
+    .switch.on::after { transform: translateX(16px); }
+
+    /* ── OP Search (legacy, kept for old references) ── */
+
+    /* ── Queue list panel (tabular like APK) ── */
+    .queue-header {
+      padding: 2px 6px; flex-shrink: 0;
+    }
+    .queue-title {
+      font-size: 9px; font-weight: 700; color: var(--gold);
+    }
+    .queue-panel .queue-table,
+    .tab-page .queue-table {
+      max-height: none; overflow-y: auto; flex: 1; min-height: 0;
+    }
+    .queue-panel .queue-row,
+    .tab-page .queue-row {
+      display: flex; align-items: center; gap: 2px;
+      padding: 3px 4px; font-size: 9px; min-height: 26px;
+      border-bottom: 1px solid rgba(83,52,133,0.3);
+    }
+    .queue-panel .queue-row.active-row,
+    .tab-page .queue-row.active-row { background: rgba(212,175,55,0.15); }
+    .queue-panel .queue-row.sent-row,
+    .tab-page .queue-row.sent-row { background: rgba(212,175,55,0.05); }
+    .queue-panel .queue-row.done-row,
+    .tab-page .queue-row.done-row { background: rgba(196,181,253,0.03); }
+    .queue-panel .q-idx,
+    .tab-page .q-idx { width: 20px; color: var(--muted); font-family: monospace; font-size: 8px; }
+    .queue-panel .q-nim-col,
+    .tab-page .q-nim-col { width: 55px; color: var(--muted); font-family: monospace; font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-panel .q-nama-col,
+    .tab-page .q-nama-col { flex: 1; color: #fff; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-panel .q-nama-col.active-name,
+    .tab-page .q-nama-col.active-name { color: var(--gold); font-weight: 700; }
+    .queue-panel .q-nama-col.done-name,
+    .tab-page .q-nama-col.done-name { color: var(--muted); text-decoration: line-through; }
+    .queue-panel .q-status-col,
+    .tab-page .q-status-col { width: 40px; font-size: 7px; font-weight: 700; text-align: right; }
+    .queue-panel .queue-empty,
+    .tab-page .queue-empty { font-size: 9px; color: var(--muted); text-align: center; padding: 8px 0; }
+
+    /* ── Target Bar (always visible, like APK) ── */
+    .target-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 8px; background: var(--card); border-bottom: 1px solid var(--border);
+      flex-shrink: 0; min-height: 36px;
+    }
+    .tb-left { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+    .tb-avatar {
+      width: 26px; height: 26px; border-radius: 50%; background: var(--panel);
+      border: 1px solid var(--gold); display: flex; align-items: center; justify-content: center;
+      font-size: 12px; flex-shrink: 0;
+    }
+    .tb-info { flex: 1; min-width: 0; }
+    .tb-name { font-size: 12px; font-weight: 700; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tb-nim { font-size: 9px; color: var(--muted); font-family: monospace; }
+    .tb-badge { font-size: 8px; font-weight: 700; padding: 2px 6px; border-radius: 3px; flex-shrink: 0; }
+    .tb-badge.toga { background: rgba(212,175,55,0.2); color: var(--gold); }
+    .tb-badge.ijazah { background: rgba(34,197,94,0.2); color: var(--success); }
+    .tb-badge.sending { background: rgba(196,181,253,0.15); color: var(--muted); }
+    .tb-badge.standby { background: rgba(196,181,253,0.1); color: rgba(196,181,253,0.5); }
+
+    /* ── Tab Bar ── */
+    .tab-bar {
+      display: flex; border-bottom: 1px solid var(--border);
+      flex-shrink: 0; background: var(--panel);
+    }
+    .tab-btn {
+      flex: 1; padding: 5px 4px; font-size: 10px; font-weight: 700;
+      background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--muted); cursor: pointer; text-align: center;
+    }
+    .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+    .tab-btn:active { background: rgba(212,175,55,0.1); }
+
+    /* ── Tab Content ── */
+    .tab-content {
+      flex: 1; min-height: 0; overflow: hidden; position: relative;
+    }
+    .tab-page {
+      display: none; position: absolute; inset: 0;
+      flex-direction: column; overflow: hidden;
+    }
+    .tab-page.active { display: flex; }
+
+    /* ── Search tab (inside .tab-page) ── */
+    .tab-page .opsearch-wrap { position: relative; padding: 4px 6px; flex-shrink: 0; }
+    .tab-page .opsearch-input {
+      width: 100%; height: 34px; border-radius: 6px;
+      background: var(--card); border: 1px solid var(--border);
+      color: #fff; font-size: 12px; padding: 0 8px 0 30px; outline: none;
+    }
+    .tab-page .opsearch-input:focus { border-color: var(--gold); }
+    .tab-page .opsearch-input::placeholder { color: rgba(196,181,253,0.4); }
+    .tab-page .opsearch-icon {
+      position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+      font-size: 13px; color: var(--muted); pointer-events: none;
+    }
+    .tab-page .opsearch-results {
+      flex: 1; overflow-y: auto; min-height: 0;
+    }
+    .tab-page .opsearch-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; cursor: pointer; font-size: 11px;
+      border-bottom: 1px solid rgba(83,52,133,0.2);
+    }
+    .tab-page .opsearch-item:active { background: rgba(212,175,55,0.15); }
+    .tab-page .os-nim { width: 55px; color: var(--muted); font-family: monospace; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab-page .os-nama { flex: 1; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .tab-page .os-nama.active { color: var(--gold); font-weight: 700; }
+    .tab-page .os-status { font-size: 7px; font-weight: 700; width: 30px; text-align: right; }
+    .tab-page .opsearch-empty { font-size: 10px; color: var(--muted); text-align: center; padding: 12px 0; }
+
+    /* ── Settings tab ── */
+    .settings-section {
+      padding: 6px 8px; border-bottom: 1px solid rgba(83,52,133,0.3);
+    }
+    .settings-label { font-size: 10px; font-weight: 700; color: var(--gold); margin-bottom: 4px; }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 0;
+    }
+    .settings-row .settings-label { margin-bottom: 0; }
+
+    /* ── Bottom panel area (resizable, APK-style) ── */
+    .bottom-area {
+      background: var(--panel); border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    /* Session password prompt */
+    .password-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .password-overlay.hidden { display: none; }
+    .password-card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 16px; padding: 24px; width: 90%; max-width: 320px;
+    }
+    .password-title { font-size: 16px; font-weight: 700; color: var(--gold); margin-bottom: 8px; text-align: center; }
+    .password-desc { font-size: 12px; color: var(--muted); text-align: center; margin-bottom: 16px; }
+    .password-error { font-size: 11px; color: var(--danger); text-align: center; margin-top: 8px; display: none; }
+    .password-error.show { display: block; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Collapsible sections */
+    .collapse-toggle {
+      width: 100%; padding: 8px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
+      background: var(--card); border: 1px solid var(--border); color: var(--muted);
+      cursor: pointer; text-align: left; display: flex; align-items: center; gap: 6px;
+    }
+    .collapse-toggle:active { background: var(--border); }
+    .collapse-toggle .arrow { transition: transform 0.2s; font-size: 10px; }
+    .collapse-toggle.open .arrow { transform: rotate(90deg); }
+    .collapse-body { display: none; margin-top: 8px; }
+    .collapse-body.open { display: block; }
+  </style>
 </head>
 <body>
-<div class="header">
-  <div class="dot connecting" id="status-dot"></div>
-  <h1>OPERATOR</h1>
-  <span class="ch" id="ch-label">Ch.1</span>
-  <span class="target" id="target-name">Menunggu…</span>
-  <button class="btn-disc" onclick="window.__disconnect()">✕</button>
-</div>
-<div class="camera-container" id="cam-container">
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="canvas" class="canvas-hidden"></canvas>
-  <div class="flash" id="flash"></div>
-  <div class="overlay tl">
-    <div class="status-badge"><div class="d" id="cam-dot" style="background:#ef4444"></div><span id="cam-label">No camera</span></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- CONNECTION SCREEN                                                          -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="connectionScreen" class="connection-screen">
+  <div>
+    <div class="logo-text">SAATIRIL</div>
+    <div class="logo-sub">SISTEM AUTO TRACK INPUT, RAW INTO LIVE<br>OPERATOR KAMERA</div>
   </div>
-  <select class="cam-select" id="cam-select" onchange="window.__switchCam(this.value)"></select>
-  <div class="overlay tc" id="timer-overlay" style="display:none"><div class="timer-overlay" id="timer-text">3</div></div>
-  <div class="overlay tc" id="hand-overlay" style="display:none"><div class="hand-overlay" id="hand-text">Tangan terdeteksi…</div></div>
-  <div class="overlay bc" id="no-signal" style="display:none">
-    <div class="no-signal">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 6.5l-3.5 3.5c.83 1.34.83 3.16 0 4.5l3.5 3.5V6.5zM17 10.5l-9 9h9v-9zM3 3l18 18-1.41 1.41L18 18.41V21H6v-3.59l-1.59 1.59L3 18l9-9L3 3z"/></svg>
-      <div>NO CAMERA SIGNAL</div>
-      <div style="font-size:9px;opacity:0.5">Pilih kamera atau cek USB</div>
+  
+  <!-- Step 1: Camera Permission -->
+  <div id="permSection" style="width:100%;max-width:380px;">
+    <button id="permBtn" class="perm-btn" onclick="requestCameraPermission()">
+      📷 Izinkan Akses Kamera
+    </button>
+    <div id="permStatus" style="font-size:10px;color:var(--muted);text-align:center;margin-top:4px;">
+      Kamera perlu diizinkan agar USB capture card terdeteksi
+    </div>
+  </div>
+
+  <!-- Camera Probe Section -->
+  <div id="probeSection" class="probe-section" style="display:none;">
+    <div class="probe-title">📷 Kamera Terdeteksi</div>
+    <div id="probeList" class="probe-list"></div>
+    <button onclick="deepProbeCameras()" style="width:100%;padding:8px;border-radius:8px;font-weight:600;font-size:11px;background:var(--card);border:1px solid var(--border);color:var(--muted);cursor:pointer;margin-top:6px;">
+      🔍 Pindai Ulang Kamera (Detail)
+    </button>
+  </div>
+
+  <!-- USB Status -->
+  <div id="usbStatus" class="usb-status">
+    <span class="usb-icon">🔌</span>
+    <span class="usb-label">USB Capture Card:</span>
+    <span class="usb-value" id="usbValue">Belum diperiksa</span>
+  </div>
+
+  <!-- Connection Form -->
+  <div class="form-card">
+    <div class="form-group">
+      <label class="form-label">Server IP (alamat IP komputer Admin)</label>
+      <input id="serverIp" class="form-input" type="text" placeholder="192.168.1.100" value="">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Channel</label>
+      <div class="channel-btns">
+        <button class="channel-btn active" data-ch="1" onclick="selectChannel(1)">Ch.1</button>
+        <button class="channel-btn" data-ch="2" onclick="selectChannel(2)">Ch.2</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password Sesi (opsional)</label>
+      <input id="sessionPassword" class="form-input" type="password" placeholder="Kosongkan jika tidak ada">
+    </div>
+    <button id="connectBtn" class="connect-btn" onclick="handleConnect()">Hubungkan</button>
+    <button id="testBtn" style="width:100%;padding:10px;border-radius:10px;font-weight:600;font-size:13px;background:var(--card);border:1px solid var(--border);color:var(--muted);cursor:pointer;margin-top:6px;" onclick="testConnection()">🔍 Test Koneksi Server</button>
+    <div style="font-size:10px; color:rgba(196,181,253,0.5); text-align:center; margin-top:8px;">
+      Otomatis terhubung ke Socket.io port 3003 di IP server
+    </div>
+  </div>
+  
+  <div id="connectionStatus" class="status-badge connecting" style="display:none">
+    <div class="status-dot"></div>
+    <span>Menghubungkan...</span>
+  </div>
+  
+  <div id="errorCard" class="error-card" style="display:none"></div>
+
+  <!-- Troubleshooting Section -->
+  <button class="collapse-toggle" onclick="toggleTroubleshoot(this)">
+    <span class="arrow">▶</span> ❓ USB Capture Card Tidak Terdeteksi?
+  </button>
+  <div id="troubleshootBody" class="collapse-body">
+    <div class="troubleshoot-card">
+      <!-- Section: Android -->
+      <div class="troubleshoot-title">📱 Langkah-langkah untuk Android (HP/Tablet):</div>
+      <ol>
+        <li><strong>Pastikan USB OTG aktif</strong> — Buka Pengaturan → Cari "OTG" → Aktifkan (beberapa HP menyebutnya "USB Host" atau "Koneksi USB")</li>
+        <li><strong>Hubungkan USB capture card</strong> via kabel OTG ke HP</li>
+        <li><strong>Periksa notifikasi USB</strong> — Saat colok USB, akan muncul notifikasi. Tap notifikasi tersebut</li>
+        <li><strong>Izinkan akses kamera Chrome</strong> — Pengaturan → Aplikasi → Chrome → Izin → Kamera → Izinkan</li>
+        <li><strong>Aktifkan Chrome Flag</strong> (WAJIB untuk akses kamera via HTTP):
+          <br>Buka tab baru → ketik <code>chrome://flags</code>
+          <br>Cari <code>insecure origin</code>
+          <br>Pada "Insecure origins treated as secure", masukkan:
+          <br><code id="flagUrl">http://192.168.x.x:3000</code>
+          <br>Pilih <strong>Enabled</strong> → Tap <strong>Relaunch</strong>
+        </li>
+        <li><strong>Tutup dan buka ulang Chrome</strong> setelah colok USB</li>
+        <li>Tap tombol <strong>"Izinkan Akses Kamera"</strong> di atas, lalu pilih <strong>izinkan</strong></li>
+      </ol>
+
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);"></div>
+
+      <!-- Section: PC/Laptop -->
+      <div class="troubleshoot-title">💻 Langkah-langkah untuk PC / Laptop:</div>
+      <ol>
+        <li><strong>Hubungkan USB capture card</strong> langsung ke port USB di PC/Laptop. Pastikan HDMI terhubung ke kamera DSLR</li>
+        <li><strong>Aktifkan Chrome Flag</strong> (WAJIB untuk akses kamera via HTTP):
+          <br>Buka tab baru → ketik <code>chrome://flags</code>
+          <br>Cari <code>insecure origin</code>
+          <br>Pada "Insecure origins treated as secure", masukkan:
+          <br><code id="flagUrlPc">http://192.168.x.x:3000</code>
+          <br>Pilih <strong>Enabled</strong> → Klik <strong>Relaunch</strong>
+        </li>
+        <li><strong>Izinkan akses kamera di Windows</strong> — Pengaturan → Privasi & Keamanan → Kamera → Pastikan "Izinkan aplikasi mengakses kamera" aktif, dan Chrome diizinkan</li>
+        <li><strong>Refresh halaman</strong> setelah Chrome Flag diaktifkan</li>
+        <li>Klik tombol <strong>"Izinkan Akses Kamera"</strong> di atas, lalu pilih <strong>izinkan</strong></li>
+      </ol>
+
+      <div style="margin-top:10px; padding:8px; background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.2); border-radius:6px;">
+        <div style="font-weight:700;color:var(--warn);font-size:11px;">💡 Tips:</div>
+        <div style="color:var(--muted);font-size:10px;">
+          Jika tetap tidak terdeteksi, coba:
+          <br>• Buka aplikasi Kamera bawaan HP → cek apakah USB capture card muncul
+          <br>• Jika muncul di Kamera HP tapi tidak di Chrome, berarti Chrome perlu Chrome Flag
+          <br>• Di PC/Laptop, cek Device Manager → pastikan USB capture card terdeteksi
+          <br>• Coba cabut dan pasang ulang USB capture card
+          <br>• Pastikan HDMI cable terhubung ke kamera dan capture card
+          <br>• Chrome Flag hanya perlu diatur sekali per perangkat
+        </div>
+      </div>
     </div>
   </div>
 </div>
-<div class="controls">
-  <div class="phase" id="phase-label">Standby</div>
-  <div class="modes">
-    <div class="mode-btn active" data-mode="manual" onclick="window.__setMode('manual')">M</div>
-    <div class="mode-btn" data-mode="timer-3" onclick="window.__setMode('timer-3')">3s</div>
-    <div class="mode-btn" data-mode="timer-5" onclick="window.__setMode('timer-5')">5s</div>
-    <div class="mode-btn" data-mode="timer-10" onclick="window.__setMode('timer-10')">10s</div>
-    <div class="mode-btn" data-mode="hand" onclick="window.__setMode('hand')">✋</div>
-  </div>
-  <div class="shutter-row">
-    <button class="shutter-btn disabled" id="shutter-btn" onclick="window.__shutter()" disabled>STANDBY</button>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- PASSWORD PROMPT OVERLAY                                                    -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="passwordOverlay" class="password-overlay hidden">
+  <div class="password-card">
+    <div class="password-title">🔒 Password Diperlukan</div>
+    <div class="password-desc">Sesi ini dilindungi password. Masukkan password untuk melanjutkan.</div>
+    <div class="form-group">
+      <input id="authPassword" class="form-input" type="password" placeholder="Password sesi">
+    </div>
+    <button id="authSubmitBtn" class="connect-btn" onclick="handleAuthSubmit()">Lanjutkan</button>
+    <div id="authError" class="password-error">Password salah. Coba lagi.</div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- OPERATOR SCREEN                                                            -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="operatorScreen" class="operator-screen">
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <span class="top-bar-title">SAATIRIL</span>
+    <div class="top-bar-sep"></div>
+    <span id="topBarMode" class="top-bar-mode"></span>
+    <span id="topBarTarget" class="top-bar-target"></span>
+    <div class="camera-selector">
+      <select id="cameraSelect" class="camera-select" onchange="handleCameraChange()">
+        <option value="">Memuat kamera...</option>
+      </select>
+      <button class="next-cam-btn" onclick="switchToNextCamera()">▶ Ganti</button>
+      <button class="rescan-btn" onclick="autoDetectBestCamera()">🔄 Cari</button>
+    </div>
+    <span id="latencyBadge" class="latency-badge">--ms</span>
+    <button class="disconnect-btn" onclick="handleDisconnect()">✕</button>
+  </div>
+  
+  <!-- Camera Area -->
+  <div id="cameraArea" class="camera-area">
+    <video id="videoPreview" autoplay playsinline muted></video>
+    <canvas id="captureCanvas"></canvas>
+    
+    <!-- Auto-detect status badge -->
+    <div id="autoDetectStatus" class="auto-detect-status" style="display:none;"></div>
+    
+    <div id="noCameraMsg" class="no-camera-msg">
+      <div class="no-camera-icon">📷</div>
+      <div class="no-camera-text">Kamera belum terhubung<br>Pilih kamera di atas</div>
+    </div>
+    
+    <!-- Gridline overlay -->
+    <svg id="gridlineOverlay" class="gridline-overlay hidden" viewBox="0 0 100 100" preserveAspectRatio="none">
+    </svg>
+    
+    <!-- Frame overlay -->
+    <img id="frameOverlay" class="frame-overlay hidden" alt="">
+    
+    <!-- Timer -->
+    <div id="timerOverlay" class="timer-overlay hidden">
+      <div class="timer-circle">
+        <span id="timerNumber" class="timer-number">3</span>
+      </div>
+    </div>
+    
+    <!-- Flash -->
+    <div id="flashOverlay" class="flash-overlay"></div>
+    
+    <!-- Target info -->
+    <div id="targetInfo" class="target-info hidden">
+      <div id="targetNama" class="target-nama">-</div>
+      <div id="targetNim" class="target-nim">-</div>
+      <div id="targetPhase" class="target-phase standby">STANDBY</div>
+    </div>
+    
+    <!-- Photo progress dots -->
+    <div id="photoDots" class="photo-dots hidden">
+      <div id="dot1" class="photo-dot"></div>
+      <div id="dot2" class="photo-dot"></div>
+    </div>
+  </div>
+  
+  <!-- Draggable Divider -->
+  <div id="dragDivider" class="drag-divider"></div>
+  
+  <!-- Bottom Area (resizable) — APK-style layout -->
+  <div id="bottomArea" class="bottom-area">
+    <!-- ══ FIXED: Target Info Bar (always visible, like APK) ══ -->
+    <div class="target-bar">
+      <div class="tb-left">
+        <span class="tb-avatar">🧑</span>
+        <div class="tb-info">
+          <div id="tbName" class="tb-name">Menunggu target...</div>
+          <div id="tbNim" class="tb-nim"></div>
+        </div>
+      </div>
+      <span id="tbBadge" class="tb-badge standby">STANDBY</span>
+    </div>
+
+    <!-- ══ Tabs: Antrean | Cari | Lainnya ══ -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="queue" onclick="switchTab('queue')">📋 Antrean</button>
+      <button class="tab-btn" data-tab="search" onclick="switchTab('search')">🔍 Cari</button>
+      <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">⚙️ Lainnya</button>
+    </div>
+
+    <!-- ══ Tab Content ══ -->
+    <div class="tab-content">
+      <!-- Tab: Antrean (default, always most important) -->
+      <div id="tabQueue" class="tab-page active">
+        <div class="queue-header">
+          <span id="queuePanelTitle" class="queue-title">Antrean: 0 • Ch.1</span>
+        </div>
+        <div id="queueTable" class="queue-table"></div>
+      </div>
+
+      <!-- Tab: Cari -->
+      <div id="tabSearch" class="tab-page">
+        <div class="opsearch-wrap">
+          <span class="opsearch-icon">🔍</span>
+          <input id="opSearchInput" class="opsearch-input" type="text" placeholder="Cari NIM / Nama..." oninput="handleOpSearch(this.value)">
+        </div>
+        <div id="opSearchResults" class="opsearch-results"></div>
+      </div>
+
+      <!-- Tab: Lainnya (settings) -->
+      <div id="tabSettings" class="tab-page">
+        <!-- Shutter Mode -->
+        <div class="settings-section">
+          <div class="settings-label">📷 Mode Shutter</div>
+          <div class="shutter-row">
+            <div class="shutter-chip active" data-mode="manual" onclick="setShutterMode('manual')">Manual</div>
+            <div class="shutter-chip" data-mode="timer-3" onclick="setShutterMode('timer-3')">3s</div>
+            <div class="shutter-chip" data-mode="timer-5" onclick="setShutterMode('timer-5')">5s</div>
+            <div class="shutter-chip" data-mode="timer-10" onclick="setShutterMode('timer-10')">10s</div>
+          </div>
+        </div>
+        <!-- Gridline -->
+        <div class="settings-section">
+          <div class="settings-row">
+            <span class="settings-label">📐 Gridline</span>
+            <div id="gridlineSwitch" class="switch" onclick="toggleGridline()"></div>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">↔️ Mirror</span>
+            <div id="mirrorSwitch" class="switch on" onclick="toggleMirror()"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ Capture Bar (at the very bottom, like APK) ══ -->
+    <div class="capture-bar">
+      <div id="progressDots" class="progress-dots" style="display:none;">
+        <div id="pdot1" class="progress-dot"></div>
+        <div id="pdot2" class="progress-dot"></div>
+      </div>
+      <button id="captureBarBtn" class="capture-bar-btn standby" onclick="handleCaptureClick()">
+        STANDBY
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- EIO3 Socket.IO Shim — wraps raw WebSocket Engine.IO v3 to expose a
+     socket.io-client v2/v3 compatible API. The Android ktor server implements
+     Engine.IO v3 (EIO=3) with raw WebSocket (NOT socket.io v4). This shim
+     bridges the gap so the existing Electron operator.html code (which uses
+     socket.io-client) works unchanged on the Android server. -->
 <script>
-(function(){
-  var params = new URLSearchParams(window.location.search);
-  var channel = parseInt(params.get('channel') || '1');
-  var password = params.get('password') || '';
-  var ws = null;
-  var connected = false;
-  var authenticated = false;
-  var project = null;
-  var currentTarget = null;
-  var capturePhase = 'standby';
-  var capturedPhotos = [];
-  var isCapturing = false;
-  var shutterMode = 'manual';
-  var timerCountdown = 0;
-  var timerInterval = null;
-  var videoStream = null;
-  var currentDeviceId = null;
-  var pingTimer = null;
-  var passwordHash = null;
-  var frameImg = null;
-  var frameDataUrl = null;
-  var aspectRatio = 4/3;
-  var photosPerSession = 2;
-  var isPhotoshoot = false;
+(function(global) {
+  function io(url, options) {
+    options = options || {};
+    var socket = {
+      id: null,
+      connected: false,
+      _ws: null,
+      _listeners: {},
+      _onceListeners: {},
+      _reconnectTimer: null,
+      _reconnectAttempts: 0,
+      _pingTimer: null,
+      _disconnectedByUser: false,
+      _url: url,
+      _options: options,
+      _reconnectDelay: options.reconnectionDelay || 500,
+      _reconnectDelayMax: options.reconnectionDelayMax || 5000,
+    };
 
-  var handsModel = null;
-  var handDetecting = false;
-  var handAnimFrame = null;
-  var handVisibleSince = 0;
-  var handConfirmed = false;
-  var handTriggerFired = false;
-  var lastTriggerTime = 0;
-  var HAND_CONFIRM_SUSTAIN_MS = 500;
-  var TRIGGER_COOLDOWN_MS = 5000;
-  var palmScriptsLoaded = false;
+    socket.on = function(event, cb) {
+      if (!socket._listeners[event]) socket._listeners[event] = [];
+      socket._listeners[event].push(cb);
+      return socket;
+    };
 
-  document.getElementById('ch-label').textContent = 'Ch.' + channel;
+    socket.once = function(event, cb) {
+      if (!socket._onceListeners[event]) socket._onceListeners[event] = [];
+      socket._onceListeners[event].push(cb);
+      return socket;
+    };
 
-  async function sha256(message) {
-    if (window.crypto && window.crypto.subtle) {
-      try {
-        var data = new TextEncoder().encode(message);
-        var hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-        var hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-      } catch(e) {}
-    }
-    // Pure-JS fallback — needed on HTTP LAN where crypto.subtle is undefined.
-    // Previous version returned the plaintext `message` here (catastrophic —
-    // sent the raw password as the "hash"), so Operator could never auth on
-    // HTTP LAN. This correct implementation matches java.security.MessageDigest.
-    return sha256Fallback(new TextEncoder().encode(message));
-  }
-
-  function rotR(x, n) { return (x >>> n) | (x << (32 - n)); }
-  function sha256Fallback(data) {
-    var K = new Uint32Array([
-      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-    ]);
-    var msgLen = data.length;
-    var bitLen = msgLen * 8;
-    var paddedLen = msgLen + 1;
-    while (paddedLen % 64 !== 56) paddedLen++;
-    paddedLen += 8;
-    var padded = new Uint8Array(paddedLen);
-    padded.set(data);
-    padded[msgLen] = 0x80;
-    var view = new DataView(padded.buffer);
-    view.setUint32(paddedLen - 8, 0, false);
-    view.setUint32(paddedLen - 4, bitLen, false);
-    var h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
-    var h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
-    for (var offset = 0; offset < paddedLen; offset += 64) {
-      var w = new Uint32Array(64);
-      for (var i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false);
-      for (var i2 = 16; i2 < 64; i2++) {
-        var s0 = rotR(w[i2 - 15], 7) ^ rotR(w[i2 - 15], 18) ^ (w[i2 - 15] >>> 3);
-        var s1 = rotR(w[i2 - 2], 17) ^ rotR(w[i2 - 2], 19) ^ (w[i2 - 2] >>> 10);
-        w[i2] = (w[i2 - 16] + s0 + w[i2 - 7] + s1) | 0;
-      }
-      var a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, hh = h7;
-      for (var j = 0; j < 64; j++) {
-        var S1 = rotR(e, 6) ^ rotR(e, 11) ^ rotR(e, 25);
-        var ch = (e & f) ^ (~e & g);
-        var temp1 = (hh + S1 + ch + K[j] + w[j]) | 0;
-        var S0 = rotR(a, 2) ^ rotR(a, 13) ^ rotR(a, 22);
-        var maj = (a & b) ^ (a & c) ^ (b & c);
-        var temp2 = (S0 + maj) | 0;
-        hh = g; g = f; f = e; e = (d + temp1) | 0;
-        d = c; c = b; b = a; a = (temp1 + temp2) | 0;
-      }
-      h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
-      h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + hh) | 0;
-    }
-    function hex(x) { return (x >>> 0).toString(16).padStart(8, '0'); }
-    return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4) + hex(h5) + hex(h6) + hex(h7);
-  }
-
-  async function connect() {
-    if (password && !passwordHash) {
-      passwordHash = await sha256(password);
-    }
-    // Respect ?socketPort= if provided; default same host:port as the page.
-    var socketPort = new URLSearchParams(window.location.search).get('socketPort') || '';
-    var wsHost = location.hostname;
-    var wsPort = socketPort || location.port;
-    var wsUrl = 'ws://' + wsHost + ':' + wsPort + '/?EIO=3&transport=websocket';
-    try { ws = new WebSocket(wsUrl); }
-    catch(e) { setTimeout(connect, 3000); return; }
-    ws.onmessage = function(ev){ onMessage(ev.data); };
-    ws.onclose = function(){ connected=false; authenticated=false; setStatus('disconnected'); setTimeout(connect, 2000); };
-    ws.onerror = function(){};
-  }
-
-  function onMessage(raw) {
-    if(raw.length < 1) return;
-    var type = parseInt(raw[0]);
-    var payload = raw.substring(1);
-    if(type === 0) { connected=true; setStatus('connecting'); sendRaw('40'); }
-    else if(type === 4) handleSio(payload);
-    else if(type === 2) sendRaw('3');
-  }
-
-  function handleSio(payload) {
-    if(payload === '0') {
-      setStatus('authenticating');
-      var data = {role:'operator', channel:channel};
-      if(passwordHash) data.sessionPasswordHash = passwordHash;
-      sendEvent('identify', data);
-      if(pingTimer) clearInterval(pingTimer);
-      pingTimer = setInterval(function(){ sendRaw('2'); }, 20000);
-    } else if(payload[0] === '2') {
-      try {
-        var arr = JSON.parse(payload.substring(1));
-        onEvent(arr[0], arr[1]);
-      } catch(e) {}
-    }
-  }
-
-  function onEvent(name, data) {
-    if(name === 'auth-success') {
-      authenticated = true;
-      setStatus('connected');
-      sendLanMessage('REQUEST_STATE', {role:'operator', channel:channel});
-    } else if(name === 'auth-failed') {
-      showError('Password salah');
-    } else if(name === 'lan-message') {
-      if(data && data.event) handleLanMessage(data.event, data.data);
-    }
-  }
-
-  function handleLanMessage(event, data) {
-    if(event === 'SYNC_DB') {
-      project = data.project || data;
-      if(project && project.config) {
-        aspectRatio = parseRatio(project.config.ratio);
-        isPhotoshoot = (project.config.mode || '').indexOf('photoshoot') >= 0;
-        photosPerSession = isPhotoshoot ? 1 : 2;
-        if(project.config.frame && project.config.frame !== '__FRAME_SAVED__' && !frameDataUrl) {
-          frameDataUrl = project.config.frame;
-          frameImg = new Image();
-          frameImg.onload = function(){};
-          frameImg.src = frameDataUrl;
+    socket.off = function(event, cb) {
+      if (socket._listeners[event]) {
+        if (cb) {
+          socket._listeners[event] = socket._listeners[event].filter(function(f){ return f !== cb; });
+        } else {
+          delete socket._listeners[event];
         }
       }
-      updateTargetFromDb();
-    } else if(event === 'MC_CALL') {
-      if(data && data.student) {
-        currentTarget = data.student;
-        capturePhase = 'ready-1';
-        capturedPhotos = [];
-        renderTarget();
+      if (socket._onceListeners[event]) {
+        if (cb) {
+          socket._onceListeners[event] = socket._onceListeners[event].filter(function(f){ return f !== cb; });
+        } else {
+          delete socket._onceListeners[event];
+        }
       }
-    } else if(event === 'STUDENT_RESET') {
-      if(currentTarget && data && data.studentId === currentTarget.id) {
-        currentTarget = null;
-        capturePhase = 'standby';
-        capturedPhotos = [];
-        renderTarget();
+      return socket;
+    };
+
+    socket.emit = function(event, data) {
+      if (socket._ws && socket._ws.readyState === 1) {
+        var msg = '42' + JSON.stringify([event, data]);
+        socket._ws.send(msg);
       }
-    } else if(event === 'PHOTOS_SAVED') {
-      if(currentTarget && data && data.student && data.student.id === currentTarget.id) {
-        currentTarget = null;
-        capturePhase = 'standby';
-        capturedPhotos = [];
-        renderTarget();
+      return socket;
+    };
+
+    socket._fire = function(event, args) {
+      args = args || [];
+      var listeners = socket._listeners[event] || [];
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i].apply(null, args); } catch(e) { console.error('[EIO3 shim] listener error for ' + event + ':', e); }
       }
-    } else if(event === 'STUDENT_DONE') {
-      if(currentTarget && data && data.studentId === currentTarget.id) {
-        currentTarget = null;
-        capturePhase = 'standby';
-        capturedPhotos = [];
-        renderTarget();
+      var onceListeners = socket._onceListeners[event] || [];
+      if (onceListeners.length > 0) {
+        socket._onceListeners[event] = [];
+        for (var j = 0; j < onceListeners.length; j++) {
+          try { onceListeners[j].apply(null, args); } catch(e) { console.error('[EIO3 shim] once listener error for ' + event + ':', e); }
+        }
       }
-    }
-  }
+    };
 
-  function updateTargetFromDb() {
-    if(!project || !project.database) return;
-    var db = project.database;
-    var found = db.find(function(s){ return s.status && s.status.indexOf('active') === 0; });
-    if(found && (!currentTarget || currentTarget.id !== found.id)) {
-      currentTarget = found;
-      capturePhase = 'ready-1';
-      capturedPhotos = [];
-    }
-    renderTarget();
-  }
-
-  function parseRatio(r) {
-    if(!r) return 4/3;
-    var parts = r.split(':');
-    if(parts.length === 2) {
-      var w = parseFloat(parts[0]);
-      var h = parseFloat(parts[1]);
-      if(w > 0 && h > 0) return w/h;
-    }
-    return 4/3;
-  }
-
-  function sendRaw(msg) { if(ws && ws.readyState === 1) ws.send(msg); }
-  function sendEvent(name, data) { sendRaw('42' + JSON.stringify([name, data])); }
-  function sendLanMessage(event, data) { sendEvent('lan-message', {event:event, data:data}); }
-
-  async function startCamera(deviceId) {
-    try {
-      if(videoStream) videoStream.getTracks().forEach(function(t){ t.stop(); });
-      var constraints = { video: { width: {ideal:1920}, height:{ideal:1080} }, audio: false };
-      if(deviceId) constraints.video.deviceId = { exact: deviceId };
-      videoStream = await navigator.mediaDevices.getUserMedia(constraints);
-      var video = document.getElementById('video');
-      video.srcObject = videoStream;
-      currentDeviceId = deviceId || (videoStream.getVideoTracks()[0] && videoStream.getVideoTracks()[0].getSettings().deviceId);
-      document.getElementById('cam-dot').style.background = '#4ade80';
-      document.getElementById('cam-label').textContent = 'Connected';
-      document.getElementById('no-signal').style.display = 'none';
-      enumerateCameras();
-      return true;
-    } catch(e) {
-      document.getElementById('cam-dot').style.background = '#ef4444';
-      document.getElementById('cam-label').textContent = 'No camera';
-      document.getElementById('no-signal').style.display = 'block';
-      return false;
-    }
-  }
-
-  async function enumerateCameras() {
-    try {
-      var devices = await navigator.mediaDevices.enumerateDevices();
-      var videos = devices.filter(function(d){ return d.kind === 'videoinput'; });
-      var select = document.getElementById('cam-select');
-      select.innerHTML = '';
-      videos.forEach(function(d, i){
-        var opt = document.createElement('option');
-        opt.value = d.deviceId;
-        opt.textContent = d.label || ('Camera ' + (i+1));
-        if(d.deviceId === currentDeviceId) opt.selected = true;
-        select.appendChild(opt);
-      });
-    } catch(e) {}
-  }
-
-  window.__switchCam = function(deviceId) { startCamera(deviceId); };
-
-  function handleCapture() {
-    if(!currentTarget || isCapturing) return;
-    if(capturePhase !== 'ready-1' && capturePhase !== 'ready-2') return;
-    isCapturing = true;
-
-    var video = document.getElementById('video');
-    var canvas = document.getElementById('canvas');
-    var targetWidth = 1920;
-    var targetHeight = Math.round(targetWidth / aspectRatio);
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-    var ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, targetWidth, targetHeight);
-
-    if(video && video.readyState >= 2) {
-      var vw = video.videoWidth, vh = video.videoHeight;
-      var vRatio = vw / vh;
-      var sx=0, sy=0, sw=vw, sh=vh;
-      if(vRatio > aspectRatio) { sw = vh * aspectRatio; sx = (vw - sw)/2; }
-      else { sh = vw / aspectRatio; sy = (vh - sh)/2; }
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
-    }
-
-    if(frameImg && frameImg.complete && frameImg.naturalWidth > 0) {
-      ctx.drawImage(frameImg, 0, 0, targetWidth, targetHeight);
-    }
-
-    var dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-    capturedPhotos.push(dataUrl);
-
-    var flash = document.getElementById('flash');
-    flash.classList.add('show');
-    setTimeout(function(){ flash.classList.remove('show'); }, 200);
-
-    if(capturedPhotos.length >= photosPerSession) {
-      capturePhase = 'sending';
-      sendPhotos();
-    } else {
-      capturePhase = 'ready-2';
-      isCapturing = false;
-    }
-    renderTarget();
-  }
-
-  function sendPhotos() {
-    if(!currentTarget) return;
-    var filename = buildFilename(currentTarget, capturedPhotos.length, 1);
-    sendLanMessage('PHOTOS_SAVED', {
-      student: currentTarget,
-      photos: capturedPhotos,
-      channel: channel,
-      version: 1,
-      filename: filename
-    });
-    capturedPhotos = [];
-    capturePhase = 'standby';
-    isCapturing = false;
-    renderTarget();
-  }
-
-  function buildFilename(student, photoCount, version) {
-    var nim = (student.nim || '').replace(/[^a-zA-Z0-9_-]/g, '');
-    var nama = (student.nama || '').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
-    if(isPhotoshoot) {
-      var base = nim + '_' + nama;
-      var withCh = channel > 1 ? base + '_Ch' + channel : base;
-      return (version > 1 ? withCh + '_v' + version : withCh) + '.jpg';
-    } else {
-      var results = [];
-      for(var i = 0; i < photoCount; i++) {
-        var type = i === 0 ? 'Toga' : 'Ijazah';
-        var b = nim + '_' + nama + '_' + (i+1) + '_' + type;
-        results.push((version > 1 ? b + '_v' + version : b) + '.jpg');
+    socket._sendRaw = function(msg) {
+      if (socket._ws && socket._ws.readyState === 1) {
+        socket._ws.send(msg);
       }
-      return results[0] || '';
-    }
-  }
+    };
 
-  function handleShutterClick() {
-    if(!currentTarget || isCapturing) return;
-    if(shutterMode === 'hand') return;
-    if(shutterMode === 'manual') {
-      handleCapture();
-    } else {
-      if(timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-        timerCountdown = 0;
-        document.getElementById('timer-overlay').style.display = 'none';
-      } else {
-        var duration = parseInt(shutterMode.split('-')[1]);
-        timerCountdown = duration;
-        document.getElementById('timer-overlay').style.display = 'block';
-        document.getElementById('timer-text').textContent = duration;
-        timerInterval = setInterval(function(){
-          timerCountdown--;
-          if(timerCountdown <= 0) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-            timerCountdown = 0;
-            document.getElementById('timer-overlay').style.display = 'none';
-            handleCapture();
-          } else {
-            document.getElementById('timer-text').textContent = timerCountdown;
+    // ── Engine.IO v3 + socket.io v3 protocol handler ──
+    // Packet types (Engine.IO): 0=OPEN, 1=CLOSE, 2=PING, 3=PONG, 4=MESSAGE
+    // socket.io subtypes (after type 4): 0=CONNECT, 1=DISCONNECT, 2=EVENT, 3=ACK, 4=ERROR
+    socket._onMessage = function(raw) {
+      if (!raw || raw.length < 1) return;
+      var type = parseInt(raw[0]);
+      var payload = raw.substring(1);
+      if (type === 0) {
+        // Engine.IO OPEN — parse sid + pingInterval, send socket.io CONNECT (40)
+        try {
+          var openData = JSON.parse(payload);
+          if (openData.sid) socket.id = openData.sid;
+          var pingInterval = openData.pingInterval || 25000;
+          if (socket._pingTimer) clearInterval(socket._pingTimer);
+          socket._pingTimer = setInterval(function(){ socket._sendRaw('2'); }, pingInterval);
+        } catch(e) {
+          if (socket._pingTimer) clearInterval(socket._pingTimer);
+          socket._pingTimer = setInterval(function(){ socket._sendRaw('2'); }, 25000);
+        }
+        socket._sendRaw('40'); // socket.io CONNECT
+      } else if (type === 4) {
+        // socket.io packet
+        if (payload === '0') {
+          // socket.io CONNECT ack — connected
+          var wasReconnect = socket._reconnectAttempts > 0;
+          var attempts = socket._reconnectAttempts;
+          socket.connected = true;
+          socket._reconnectAttempts = 0;
+          if (wasReconnect) {
+            socket._fire('reconnect', [attempts]);
           }
-        }, 1000);
+          socket._fire('connect');
+        } else if (payload.length > 0 && payload[0] === '2') {
+          // Event: 42["event",{data}]
+          try {
+            var arr = JSON.parse(payload.substring(1));
+            var eventName = arr[0];
+            var data = arr[1];
+            socket._fire(eventName, [data]);
+          } catch(e) { console.error('[EIO3 shim] parse error:', e, payload); }
+        } else if (payload.length > 0 && payload[0] === '4') {
+          // Error: 44{...}
+          try {
+            var errData = JSON.parse(payload.substring(1));
+            socket._fire('error', [errData]);
+          } catch(e) {}
+        }
+      } else if (type === 2) {
+        // Engine.IO PING from server — respond with PONG (type 3)
+        socket._sendRaw('3');
+      } else if (type === 3) {
+        // PONG — ignore
+      } else if (type === 1) {
+        // Engine.IO CLOSE — server initiated disconnect
+        socket._handleClose('io server disconnect');
       }
-    }
-  }
+    };
 
-  window.__shutter = handleShutterClick;
-  window.__setMode = function(mode) {
-    shutterMode = mode;
-    document.querySelectorAll('.mode-btn').forEach(function(el){
-      el.classList.toggle('active', el.dataset.mode === mode);
-    });
-    if(mode === 'hand') {
-      initHandTrigger();
-    } else {
-      stopHandTrigger();
-    }
-  };
-  window.__disconnect = function() {
-    if(videoStream) videoStream.getTracks().forEach(function(t){ t.stop(); });
-    stopHandTrigger();
-    sendRaw('41');
-    try { ws.close(); } catch(e) {}
-    window.close();
-  };
-
-  function loadScript(src) {
-    return new Promise(function(resolve, reject){
-      var existing = document.querySelector('script[src="' + src + '"]');
-      if(existing) { resolve(); return; }
-      var s = document.createElement('script');
-      s.src = src;
-      s.async = true;
-      s.onload = function(){ resolve(); };
-      s.onerror = function(){ reject(new Error('Failed: ' + src)); };
-      document.head.appendChild(s);
-    });
-  }
-
-  async function loadPalmScripts() {
-    if(palmScriptsLoaded) return true;
-    try {
-      await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js');
-      await new Promise(function(r){ setTimeout(r, 100); });
-      if(typeof window.Hands === 'undefined') throw new Error('MediaPipe Hands global missing');
-      palmScriptsLoaded = true;
-      return true;
-    } catch(e) {
-      console.error('[Hand] Script load failed:', e.message);
-      return false;
-    }
-  }
-
-  async function initHandTrigger() {
-    if(handsModel) { startHandDetection(); return; }
-    var ok = await loadPalmScripts();
-    if(!ok) {
-      window.__setMode('manual');
-      showError('Hand trigger butuh internet untuk load MediaPipe. Gunakan mode manual/timer.');
-      setTimeout(function(){ var eb = document.querySelector('.error-box'); if(eb) eb.remove(); }, 5000);
-      return;
-    }
-    try {
-      handsModel = new window.Hands({
-        locateFile: function(file){ return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/' + file; }
-      });
-      handsModel.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.3,
-        minTrackingConfidence: 0.3
-      });
-      handsModel.onResults(processHandResults);
-      var tc = document.createElement('canvas');
-      tc.width = 1; tc.height = 1;
-      await handsModel.send({ image: tc });
-      startHandDetection();
-    } catch(e) {
-      console.error('[Hand] Init failed:', e);
-      window.__setMode('manual');
-    }
-  }
-
-  function startHandDetection() {
-    handDetecting = true;
-    handVisibleSince = 0;
-    handConfirmed = false;
-    handTriggerFired = false;
-    detectHandFrame();
-  }
-
-  function stopHandTrigger() {
-    handDetecting = false;
-    if(handAnimFrame) cancelAnimationFrame(handAnimFrame);
-    handAnimFrame = null;
-    document.getElementById('hand-overlay').style.display = 'none';
-  }
-
-  async function detectHandFrame() {
-    if(!handDetecting || !handsModel) return;
-    var video = document.getElementById('video');
-    try {
-      await handsModel.send({ image: video });
-    } catch(e) {}
-    if(handDetecting) handAnimFrame = requestAnimationFrame(detectHandFrame);
-  }
-
-  function processHandResults(results) {
-    if(!handDetecting) return;
-    var hands = results.multiHandLandmarks || [];
-    var now = Date.now();
-    var handDetected = hands.length > 0;
-
-    if(lastTriggerTime > 0 && now - lastTriggerTime < TRIGGER_COOLDOWN_MS) {
-      showHandStatus('triggered', 'Cooldown…');
-      return;
-    }
-
-    if(handDetected) {
-      if(handVisibleSince === 0) {
-        handVisibleSince = now;
-        handConfirmed = false;
-        handTriggerFired = false;
-        showHandStatus('detected', 'Tangan terdeteksi…');
-      } else if(!handConfirmed && now - handVisibleSince >= HAND_CONFIRM_SUSTAIN_MS) {
-        handConfirmed = true;
-        showHandStatus('confirmed', 'Tangan ✓ — lepaskan untuk foto');
+    socket._handleClose = function(reason) {
+      var wasConnected = socket.connected;
+      socket.connected = false;
+      if (socket._pingTimer) { clearInterval(socket._pingTimer); socket._pingTimer = null; }
+      if (socket._disconnectedByUser) return;
+      if (wasConnected) {
+        socket._fire('disconnect', [reason || 'transport close']);
       }
-    } else {
-      if(handConfirmed && !handTriggerFired) {
-        handTriggerFired = true;
-        lastTriggerTime = now;
-        showHandStatus('triggered', 'Trigger!');
-        handleShutterClick();
+      socket._scheduleReconnect();
+    };
+
+    // ── Reconnection logic (matches socket.io-client v2 defaults) ──
+    // 500ms initial delay, 5000ms max, infinite attempts, exponential backoff
+    socket._scheduleReconnect = function() {
+      if (socket._disconnectedByUser) return;
+      if (socket._reconnectTimer) return;
+      socket._reconnectAttempts++;
+      var baseDelay = Math.min(
+        socket._reconnectDelay * Math.pow(2, Math.min(socket._reconnectAttempts - 1, 10)),
+        socket._reconnectDelayMax
+      );
+      var jitter = Math.random() * 500;
+      var delay = baseDelay + jitter;
+      socket._fire('reconnect_attempt', [socket._reconnectAttempts]);
+      socket._reconnectTimer = setTimeout(function() {
+        socket._reconnectTimer = null;
+        if (socket._disconnectedByUser) return;
+        socket._doConnect();
+      }, delay);
+    };
+
+    // ── Build WebSocket URL and connect ──
+    // Converts http(s)://host:port to ws(s)://host:port/?EIO=3&transport=websocket
+    socket._doConnect = function() {
+      var wsUrl = socket._url
+        .replace(/^http:/, 'ws:')
+        .replace(/^https:/, 'wss:')
+        .replace(/\/$/, '');
+      var query = 'EIO=3&transport=websocket';
+      if (socket._options.query) {
+        if (typeof socket._options.query === 'object') {
+          for (var k in socket._options.query) {
+            query += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(socket._options.query[k]);
+          }
+        } else if (typeof socket._options.query === 'string') {
+          query += '&' + socket._options.query;
+        }
+      }
+      // The ktor server path is '/' — append /?EIO=3&transport=websocket
+      if (wsUrl.indexOf('?') >= 0) {
+        wsUrl += '&' + query;
+      } else if (wsUrl.indexOf('/', 8) >= 0) {
+        // URL already has a path (e.g. http://host:port/path)
+        wsUrl += '?' + query;
       } else {
-        document.getElementById('hand-overlay').style.display = 'none';
+        // URL is just http://host:port — append /?EIO=3...
+        wsUrl += '/?' + query;
       }
-      handVisibleSince = 0;
-      handConfirmed = false;
-    }
+      console.log('[EIO3 shim] connecting to ' + wsUrl);
+      try {
+        socket._ws = new WebSocket(wsUrl);
+      } catch(e) {
+        console.error('[EIO3 shim] WebSocket creation failed:', e);
+        socket._fire('connect_error', [{ message: (e && e.message) || 'websocket error', description: { message: 'websocket error' } }]);
+        socket._scheduleReconnect();
+        return;
+      }
+      socket._ws.onopen = function() {
+        console.log('[EIO3 shim] WebSocket open');
+      };
+      socket._ws.onmessage = function(ev) { socket._onMessage(ev.data); };
+      socket._ws.onclose = function() {
+        console.log('[EIO3 shim] WebSocket closed');
+        socket._handleClose('transport close');
+      };
+      socket._ws.onerror = function() {
+        console.error('[EIO3 shim] WebSocket error');
+        socket._fire('connect_error', [{ message: 'websocket error', description: { message: 'websocket error' } }]);
+      };
+    };
+
+    socket.disconnect = function() {
+      socket._disconnectedByUser = true;
+      if (socket._reconnectTimer) { clearTimeout(socket._reconnectTimer); socket._reconnectTimer = null; }
+      if (socket._pingTimer) { clearInterval(socket._pingTimer); socket._pingTimer = null; }
+      if (socket._ws) {
+        try { socket._ws.onclose = null; socket._ws.close(); } catch(e) {}
+        socket._ws = null;
+      }
+      var wasConnected = socket.connected;
+      socket.connected = false;
+      if (wasConnected) socket._fire('disconnect', ['io client disconnect']);
+      return socket;
+    };
+
+    socket.connect = function() {
+      socket._disconnectedByUser = false;
+      if (socket._ws && (socket._ws.readyState === 0 || socket._ws.readyState === 1)) {
+        return socket; // already connecting or connected
+      }
+      socket._doConnect();
+      return socket;
+    };
+
+    // Start initial connection
+    socket._doConnect();
+    return socket;
   }
 
-  function showHandStatus(state, text) {
-    var overlay = document.getElementById('hand-overlay');
-    var el = document.getElementById('hand-text');
-    overlay.style.display = 'block';
-    el.textContent = text;
-    el.className = 'hand-overlay';
-    if(state === 'confirmed') el.className = 'hand-overlay confirmed';
-    if(state === 'triggered') el.className = 'hand-overlay triggered';
-  }
-
-  function renderTarget() {
-    var nameEl = document.getElementById('target-name');
-    var phaseEl = document.getElementById('phase-label');
-    var btn = document.getElementById('shutter-btn');
-
-    if(!currentTarget) {
-      nameEl.textContent = 'Menunggu MC…';
-      phaseEl.textContent = 'Standby';
-      btn.textContent = 'STANDBY';
-      btn.className = 'shutter-btn disabled';
-      btn.disabled = true;
-      return;
-    }
-    nameEl.textContent = currentTarget.nama || currentTarget.nim;
-    var phaseText = '';
-    if(capturePhase === 'ready-1') phaseText = isPhotoshoot ? 'Siap Foto' : 'Pose 1 — Toga';
-    else if(capturePhase === 'ready-2') phaseText = 'Pose 2 — Ijazah';
-    else if(capturePhase === 'sending') phaseText = 'Mengirim…';
-    else phaseText = 'Standby';
-    phaseEl.textContent = phaseText;
-
-    if(capturePhase === 'sending') {
-      btn.textContent = 'Mengirim…';
-      btn.className = 'shutter-btn waiting';
-      btn.disabled = true;
-    } else if(capturePhase === 'ready-1' || capturePhase === 'ready-2') {
-      var label = capturePhase === 'ready-2' ? 'Ijazah' : (isPhotoshoot ? 'Foto' : 'Toga');
-      btn.textContent = label;
-      btn.className = 'shutter-btn ready';
-      btn.disabled = false;
-    } else {
-      btn.textContent = 'STANDBY';
-      btn.className = 'shutter-btn disabled';
-      btn.disabled = true;
-    }
-  }
-
-  function setStatus(state) {
-    document.getElementById('status-dot').className = 'dot ' + state;
-  }
-
-  function showError(msg) {
-    var div = document.createElement('div');
-    div.className = 'error-box';
-    div.textContent = msg;
-    document.body.insertBefore(div, document.body.firstChild);
-  }
-
-  if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    navigator.mediaDevices.addEventListener('devicechange', enumerateCameras);
-    startCamera(null);
-  } else {
-    showError('Browser tidak mendukung akses kamera. Gunakan Chrome/Firefox terbaru.');
-  }
-  connect();
-})();
+  io.version = '3-shim-eio3';
+  global.io = io;
+})(typeof window !== 'undefined' ? window : this);
 </script>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// SAATIRIL Operator — Chrome Web App for USB Capture Card Camera
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── State ────────────────────────────────────────────────────────────────
+let socket = null
+let myChannel = 1
+let connectionState = 'disconnected' // disconnected | connecting | connected | authenticated
+let sessionPasswordHash = null
+let cameraPermissionGranted = false
+
+// Camera
+let currentStream = null
+let selectedDeviceId = null
+let videoDevices = []
+let cameraAvailable = false
+let isMirrored = true // Mirror by default for selfie view
+let probedCameras = [] // { deviceId, label, kind, capabilities, isLikelyUsb }
+let isCyclingCameras = false // flag for camera cycling
+let cycleAbortController = null // to abort cycling
+let isAutoDetecting = false // flag for auto-detect process
+let autoDetectAborted = false // to abort auto-detect
+let cameraTestCanvas = null // offscreen canvas for black frame detection
+let currentCameraIndex = 0 // which camera index is currently active
+let workingCameras = [] // cameras that produce non-black frames
+
+// Capture
+let capturePhase = 'standby' // standby | ready-1 | ready-2 | sending
+let currentTarget = null
+let capturedPhotos = [] // { label: string, dataUrl: string }
+let mcCallBuffer = [] // Buffer for MC_CALL in photoshoot mode (operator selects manually)
+let photoHistory = [] // Track which students have been photographed by this operator
+let shutterMode = 'manual'
+let timerCountdown = 0
+let timerInterval = null
+
+// Project data
+let currentProject = null
+let frameData = null
+
+// Gridline
+let gridlineEnabled = false
+let gridlineType = 'thirds'
+
+// Latency
+let latencyMs = 0
+let pingInterval = null
+
+// USB detection
+let usbCameraDetected = false
+
+// Capture mode helpers (matching APK's CameraModes)
+function isPhotoshootMode(mode) { return mode === 'single-photoshoot' || mode === 'dual-photoshoot' }
+function isDualMode(mode) { return mode === 'dual' || mode === 'dual-photoshoot' }
+function photosPerSession(mode) { return isPhotoshootMode(mode) ? 1 : 2 }
+function channelCount(mode) { return isDualMode(mode) ? 2 : 1 }
+function isActiveStatus(status) { return status?.startsWith('active') }
+
+// ── SHA-256 Hash ─────────────────────────────────────────────────────────
+async function sha256(text) {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(text)
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', data)
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+    } catch(e) {
+      // Fall through to pure JS implementation
+    }
+  }
+  return sha256Fallback(data)
+}
+
+function sha256Fallback(data) {
+  const K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ])
+
+  const msgLen = data.length
+  const bitLen = msgLen * 8
+  let paddedLen = msgLen + 1
+  while (paddedLen % 64 !== 56) paddedLen++
+  paddedLen += 8
+
+  const padded = new Uint8Array(paddedLen)
+  padded.set(data)
+  padded[msgLen] = 0x80
+  const view = new DataView(padded.buffer)
+  view.setUint32(paddedLen - 8, 0, false)
+  view.setUint32(paddedLen - 4, bitLen, false)
+
+  let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a
+  let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19
+
+  for (let offset = 0; offset < paddedLen; offset += 64) {
+    const w = new Uint32Array(64)
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false)
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotR(w[i-15], 7) ^ rotR(w[i-15], 18) ^ (w[i-15] >>> 3)
+      const s1 = rotR(w[i-2], 17) ^ rotR(w[i-2], 19) ^ (w[i-2] >>> 10)
+      w[i] = (w[i-16] + s0 + w[i-7] + s1) | 0
+    }
+    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, hh = h7
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotR(e, 6) ^ rotR(e, 11) ^ rotR(e, 25)
+      const ch = (e & f) ^ (~e & g)
+      const temp1 = (hh + S1 + ch + K[i] + w[i]) | 0
+      const S0 = rotR(a, 2) ^ rotR(a, 13) ^ rotR(a, 22)
+      const maj = (a & b) ^ (a & c) ^ (b & c)
+      const temp2 = (S0 + maj) | 0
+      hh = g; g = f; f = e; e = (d + temp1) | 0
+      d = c; c = b; b = a; a = (temp1 + temp2) | 0
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + hh) | 0
+  }
+
+  const hashArray = new Uint8Array(32)
+  const hashView = new DataView(hashArray.buffer)
+  hashView.setUint32(0, h0, false); hashView.setUint32(4, h1, false)
+  hashView.setUint32(8, h2, false); hashView.setUint32(12, h3, false)
+  hashView.setUint32(16, h4, false); hashView.setUint32(20, h5, false)
+  hashView.setUint32(24, h6, false); hashView.setUint32(28, h7, false)
+  return Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function rotR(x, n) { return (x >>> n) | (x << (32 - n)) }
+
+// ── Camera Permission ────────────────────────────────────────────────────
+async function requestCameraPermission() {
+  const btn = document.getElementById('permBtn')
+  const status = document.getElementById('permStatus')
+  btn.disabled = true
+  btn.textContent = '⏳ Meminta izin...'
+  
+  try {
+    // Request camera access - this triggers the browser permission dialog
+    // IMPORTANT: We must actually get a stream to trigger the permission prompt
+    const tempStream = await navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: false 
+    })
+    
+    // Permission granted! Stop the temp stream
+    tempStream.getTracks().forEach(t => t.stop())
+    cameraPermissionGranted = true
+    
+    btn.textContent = '✅ Izin Kamera Diberikan'
+    btn.classList.add('granted')
+    status.textContent = 'Izin kamera diberikan. Memindai kamera...'
+    status.style.color = '#4ade80'
+    
+    // Now enumerate cameras (lightweight — no probing/opening)
+    await enumerateCameras()
+    
+  } catch(err) {
+    console.error('[OP] Camera permission denied:', err)
+    btn.textContent = '❌ Izin Kamera Ditolak'
+    btn.disabled = false
+    
+    if (err.name === 'NotAllowedError') {
+      status.textContent = 'Izin kamera ditolak. Buka Pengaturan → Chrome → Izin → Kamera → Izinkan'
+      status.style.color = '#f87171'
+    } else if (err.name === 'NotFoundError') {
+      status.textContent = 'Tidak ada kamera ditemukan di perangkat ini'
+      status.style.color = '#f87171'
+    } else {
+      status.textContent = 'Error: ' + err.message
+      status.style.color = '#f87171'
+    }
+  }
+}
+
+// ── Lightweight Camera Enumeration (NO probing/opening cameras) ──────────
+// Lists cameras and scores them by label for USB likelihood.
+async function enumerateCameras() {
+  console.log('[OP] Enumerating cameras...')
+  
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    videoDevices = devices.filter(d => d.kind === 'videoinput')
+    
+    console.log('[OP] Found', videoDevices.length, 'video devices')
+    videoDevices.forEach((d, i) => {
+      console.log(`[OP]   Camera ${'$'}{i}: id=${'$'}{d.deviceId?.slice(0,8)} label="${'$'}{d.label}" groupId=${'$'}{d.groupId?.slice(0,8)}`)
+    })
+    
+    // Build probe info WITHOUT opening cameras
+    probedCameras = []
+    
+    for (let i = 0; i < videoDevices.length; i++) {
+      const device = videoDevices[i]
+      const probeInfo = {
+        deviceId: device.deviceId,
+        label: device.label || `Kamera ${'$'}{i+1}`,
+        groupId: device.groupId || '',
+        isLikelyUsb: false,
+        usbScore: 0,
+        facingMode: null,
+        width: null,
+        height: null,
+        frameRate: null,
+        probed: false,
+        isBlack: null, // null = not tested, true = black, false = has content
+        index: i,
+      }
+      
+      // Check label for USB indicators
+      const label = (device.label || '').toLowerCase()
+      if (label.includes('usb')) probeInfo.usbScore += 5
+      if (label.includes('capture')) probeInfo.usbScore += 5
+      if (label.includes('uvc')) probeInfo.usbScore += 5
+      if (label.includes('external')) probeInfo.usbScore += 3
+      if (label.includes('video capture')) probeInfo.usbScore += 5
+      if (label.includes('hdmi')) probeInfo.usbScore += 5
+      if (label.includes('webcam')) probeInfo.usbScore += 3
+      
+      probeInfo.isLikelyUsb = probeInfo.usbScore >= 4
+      probedCameras.push(probeInfo)
+    }
+    
+    // Update USB detection status
+    usbCameraDetected = probedCameras.some(c => c.isLikelyUsb)
+    
+    // Show probe results
+    renderProbeResults()
+    updateUsbStatus()
+    
+    return probedCameras
+    
+  } catch(err) {
+    console.error('[OP] enumerateCameras failed:', err)
+    return []
+  }
+}
+
+// ── Black Frame Detection ────────────────────────────────────────────────
+// Captures a frame from the video element and checks if it's all black.
+// Returns true if the frame appears to be completely black.
+function isFrameBlack(videoEl) {
+  if (!videoEl || videoEl.readyState < 2) return true // not ready = treat as black
+  
+  try {
+    if (!cameraTestCanvas) {
+      cameraTestCanvas = document.createElement('canvas')
+    }
+    const canvas = cameraTestCanvas
+    const testW = 160 // small size for fast analysis
+    const testH = 120
+    canvas.width = testW
+    canvas.height = testH
+    
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    ctx.drawImage(videoEl, 0, 0, testW, testH)
+    
+    const imageData = ctx.getImageData(0, 0, testW, testH)
+    const data = imageData.data
+    
+    // Sample pixels instead of checking every one (performance)
+    let totalBrightness = 0
+    let sampleCount = 0
+    const step = 16 // sample every 16th pixel
+    
+    for (let i = 0; i < data.length; i += 4 * step) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+      totalBrightness += (r + g + b) / 3
+      sampleCount++
+    }
+    
+    const avgBrightness = totalBrightness / sampleCount
+    const isBlack = avgBrightness < 5 // threshold: average brightness < 5 out of 255
+    
+    console.log(`[OP] Frame analysis: avg brightness=${'$'}{avgBrightness.toFixed(1)}, samples=${'$'}{sampleCount}, isBlack=${'$'}{isBlack}`)
+    return isBlack
+  } catch(err) {
+    console.warn('[OP] Frame analysis failed:', err)
+    return true // assume black on error
+  }
+}
+
+// ── Auto-Detect Best Camera ──────────────────────────────────────────────
+// THE KEY FUNCTION: Tries each camera one by one, checks for black frames,
+// and auto-selects the first camera with actual video content.
+// This works regardless of device labels or USB detection heuristics.
+async function autoDetectBestCamera() {
+  if (isAutoDetecting) {
+    console.log('[OP] Auto-detect already in progress, aborting previous...')
+    autoDetectAborted = true
+    await new Promise(r => setTimeout(r, 300))
+  }
+  
+  isAutoDetecting = true
+  autoDetectAborted = false
+  workingCameras = []
+  
+  console.log('[OP] ═══ AUTO-DETECT: Starting camera scan ═══')
+  
+  // Stop current stream
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop())
+    currentStream = null
+  }
+  
+  // Ensure we have fresh device list
+  await enumerateCameras()
+  
+  if (videoDevices.length === 0) {
+    console.warn('[OP] No video devices found at all')
+    isAutoDetecting = false
+    showAutoDetectStatus('❌ Tidak ada kamera ditemukan', 'err')
+    return null
+  }
+  
+  const video = document.getElementById('videoPreview')
+  document.getElementById('noCameraMsg').classList.add('hidden')
+  
+  // Show auto-detect status
+  showAutoDetectStatus('🔍 Mencari kamera yang aktif...', 'pending')
+  
+  // Try cameras in REVERSE order on Android (USB capture cards are often listed last)
+  // But also try forward order as fallback
+  const order = []
+  for (let i = videoDevices.length - 1; i >= 0; i--) order.push(i)
+  // Also add forward order in case USB is listed first
+  for (let i = 0; i < videoDevices.length; i++) {
+    if (!order.includes(i)) order.push(i)
+  }
+  
+  let bestCamera = null
+  let bestDeviceId = null
+  
+  for (const camIdx of order) {
+    if (autoDetectAborted) break
+    
+    const device = videoDevices[camIdx]
+    if (!device) continue
+    
+    const label = device.label || `Kamera ${'$'}{camIdx + 1}`
+    showAutoDetectStatus(`🔍 Mencoba ${'$'}{label}...`, 'pending')
+    console.log(`[OP] Auto-detect: trying camera ${'$'}{camIdx} "${'$'}{label}" (id: ${'$'}{device.deviceId?.slice(0,8)})`)
+    
+    // Try to open this camera
+    let stream = null
+    
+    // Strategy 1: exact deviceId with high res
+    const strategies = [
+      { name: 'exact+1080p', c: { video: { deviceId: { exact: device.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false } },
+      { name: 'exact+720p', c: { video: { deviceId: { exact: device.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false } },
+      { name: 'exact+480p', c: { video: { deviceId: { exact: device.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false } },
+      { name: 'exact+nores', c: { video: { deviceId: { exact: device.deviceId } }, audio: false } },
+    ]
+    
+    for (const strategy of strategies) {
+      if (autoDetectAborted) break
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(strategy.c)
+        console.log(`[OP]   Opened with strategy: ${'$'}{strategy.name}`)
+        break
+      } catch(e) {
+        // try next strategy
+      }
+    }
+    
+    if (!stream) {
+      console.log(`[OP]   Failed to open camera ${'$'}{camIdx} "${'$'}{label}"`)
+      // Update probedCameras
+      const probed = probedCameras.find(c => c.deviceId === device.deviceId)
+      if (probed) { probed.probed = true; probed.isBlack = true }
+      continue
+    }
+    
+    // We got a stream! Stop previous stream and attach this one
+    if (currentStream) {
+      currentStream.getTracks().forEach(t => t.stop())
+    }
+    currentStream = stream
+    video.srcObject = stream
+    video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+    
+    // Wait for video to actually start playing
+    try {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('video play timeout')), 5000)
+        video.onloadeddata = () => { clearTimeout(timeout); resolve() }
+        video.play().then(() => {}).catch(() => {})
+        // Also resolve on playing event
+        video.onplaying = () => { clearTimeout(timeout); resolve() }
+      })
+    } catch(e) {
+      console.warn(`[OP]   Video play timeout for camera ${'$'}{camIdx}`)
+    }
+    
+    // Wait a bit more for the camera to stabilize (important for USB capture cards)
+    await new Promise(r => setTimeout(r, 1500))
+    
+    if (autoDetectAborted) {
+      stream.getTracks().forEach(t => t.stop())
+      break
+    }
+    
+    // Get track info
+    const track = stream.getVideoTracks()[0]
+    const settings = track?.getSettings()
+    const trackLabel = track?.label || ''
+    console.log(`[OP]   Track: "${'$'}{trackLabel}" ${'$'}{settings?.width}x${'$'}{settings?.height} facing=${'$'}{settings?.facingMode}`)
+    
+    // Check if frame is black
+    const black = isFrameBlack(video)
+    
+    // Update probedCameras
+    const probed = probedCameras.find(c => c.deviceId === device.deviceId)
+    if (probed) {
+      probed.probed = true
+      probed.isBlack = black
+      probed.facingMode = settings?.facingMode || null
+      probed.width = settings?.width || null
+      probed.height = settings?.height || null
+      probed.frameRate = settings?.frameRate || null
+    }
+    
+    if (!black) {
+      // This camera has actual content!
+      console.log(`[OP]   ✅ Camera ${'$'}{camIdx} "${'$'}{label}" has VIDEO CONTENT!`)
+      workingCameras.push({
+        deviceId: device.deviceId,
+        label: trackLabel || label,
+        index: camIdx,
+        width: settings?.width,
+        height: settings?.height,
+        facingMode: settings?.facingMode,
+      })
+      
+      if (!bestCamera) {
+        // First working camera found — use it!
+        bestCamera = stream
+        bestDeviceId = device.deviceId
+        selectedDeviceId = device.deviceId
+        currentCameraIndex = camIdx
+        cameraAvailable = true
+        
+        showAutoDetectStatus(`✅ Kamera aktif: ${'$'}{trackLabel || label}`, 'ok')
+        
+        // Don't stop this stream — it's our active camera!
+        // But continue checking other cameras in background
+        // Actually, let's stop here — we found a working camera
+        break
+      }
+    } else {
+      console.log(`[OP]   ⬛ Camera ${'$'}{camIdx} "${'$'}{label}" shows BLACK frame — skipping`)
+      stream.getTracks().forEach(t => t.stop())
+    }
+    
+    // Delay before trying next camera (Android camera release)
+    await new Promise(r => setTimeout(r, 500))
+  }
+  
+  // Clean up
+  isAutoDetecting = false
+  
+  if (bestCamera) {
+    // Ensure stream is attached
+    if (currentStream !== bestCamera) {
+      if (currentStream) currentStream.getTracks().forEach(t => t.stop())
+      currentStream = bestCamera
+      video.srcObject = bestCamera
+      video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+      try { await video.play() } catch(e) {}
+    }
+    
+    document.getElementById('noCameraMsg').classList.add('hidden')
+    updateCameraSelector()
+    renderProbeResults()
+    
+    const track = bestCamera.getVideoTracks()[0]
+    const label = track?.label || 'Kamera'
+    console.log(`[OP] ═══ AUTO-DETECT COMPLETE: Using "${'$'}{label}" ═══`)
+    
+    return bestDeviceId
+  }
+  
+  // No working camera found — keep the last one we tried
+  console.warn('[OP] Auto-detect: No camera with content found. Trying to use any available camera.')
+  
+  // Last resort: just try the first camera without black frame check
+  if (videoDevices.length > 0) {
+    const fallbackDevice = videoDevices[videoDevices.length - 1] // last one = often USB on Android
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: fallbackDevice.deviceId } },
+        audio: false
+      })
+      if (currentStream) currentStream.getTracks().forEach(t => t.stop())
+      currentStream = stream
+      selectedDeviceId = fallbackDevice.deviceId
+      video.srcObject = stream
+      video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+      try { await video.play() } catch(e) {}
+      cameraAvailable = true
+      document.getElementById('noCameraMsg').classList.add('hidden')
+      updateCameraSelector()
+      showAutoDetectStatus('⚠️ Kamera aktif (mungkin hitam — coba ganti)', 'warn')
+      return fallbackDevice.deviceId
+    } catch(e) {
+      console.error('[OP] Fallback camera also failed:', e)
+    }
+  }
+  
+  showAutoDetectStatus('❌ Tidak ada kamera yang bisa dibuka', 'err')
+  document.getElementById('noCameraMsg').classList.remove('hidden')
+  return null
+}
+
+// ── Show auto-detect status in the operator screen ──────────────────────
+function showAutoDetectStatus(text, type) {
+  let el = document.getElementById('autoDetectStatus')
+  if (!el) return
+  el.textContent = text
+  el.className = 'auto-detect-status ' + (type || '')
+  el.style.display = text ? 'flex' : 'none'
+}
+
+// ── Switch to Next Camera ────────────────────────────────────────────────
+// Quick switch to the next camera in the list
+async function switchToNextCamera() {
+  if (isAutoDetecting) return
+  
+  // Stop current stream
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop())
+    currentStream = null
+  }
+  
+  await enumerateCameras()
+  
+  if (videoDevices.length === 0) return
+  
+  // Move to next camera index
+  currentCameraIndex = (currentCameraIndex + 1) % videoDevices.length
+  const nextDevice = videoDevices[currentCameraIndex]
+  
+  console.log(`[OP] Switching to camera ${'$'}{currentCameraIndex}: "${'$'}{nextDevice.label || 'Kamera ' + (currentCameraIndex+1)}"`)
+  
+  selectedDeviceId = nextDevice.deviceId
+  
+  // Try to open this camera
+  const video = document.getElementById('videoPreview')
+  let stream = null
+  
+  const strategies = [
+    { video: { deviceId: { exact: nextDevice.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+    { video: { deviceId: { exact: nextDevice.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+    { video: { deviceId: { exact: nextDevice.deviceId } }, audio: false },
+  ]
+  
+  for (const c of strategies) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(c)
+      break
+    } catch(e) {}
+  }
+  
+  if (stream) {
+    currentStream = stream
+    video.srcObject = stream
+    video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+    try { await video.play() } catch(e) {}
+    cameraAvailable = true
+    document.getElementById('noCameraMsg').classList.add('hidden')
+    
+    // Check if black after a brief delay
+    setTimeout(() => {
+      const black = isFrameBlack(video)
+      const track = stream.getVideoTracks()[0]
+      const label = track?.label || nextDevice.label || `Kamera ${'$'}{currentCameraIndex+1}`
+      if (black) {
+        showAutoDetectStatus(`⬛ ${'$'}{label} — layar hitam, coba ganti`, 'warn')
+      } else {
+        showAutoDetectStatus(`✅ ${'$'}{label} — kamera aktif`, 'ok')
+      }
+    }, 2000)
+  } else {
+    cameraAvailable = false
+    showAutoDetectStatus('❌ Gagal membuka kamera ini', 'err')
+  }
+  
+  updateCameraSelector()
+}
+
+// ── Deep Probe — Open each camera briefly to get detailed info ──────────
+// Use this ONLY when the user explicitly requests it.
+// Adds delays between probes to avoid locking cameras on Android.
+async function deepProbeCameras() {
+  console.log('[OP] Deep probing cameras (opening each one)...')
+  
+  // Stop current stream first
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop())
+    currentStream = null
+  }
+  
+  try {
+    // Re-enumerate to get fresh device list
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    videoDevices = devices.filter(d => d.kind === 'videoinput')
+    
+    probedCameras = []
+    
+    for (let i = 0; i < videoDevices.length; i++) {
+      const device = videoDevices[i]
+      const probeInfo = {
+        deviceId: device.deviceId,
+        label: device.label || `Kamera ${'$'}{i+1}`,
+        groupId: device.groupId || '',
+        isLikelyUsb: false,
+        usbScore: 0,
+        facingMode: null,
+        width: null,
+        height: null,
+        frameRate: null,
+        probed: false,
+        index: i,
+      }
+      
+      // Label-based USB detection (same as enumerateCameras)
+      const label = (device.label || '').toLowerCase()
+      if (label.includes('usb')) probeInfo.usbScore += 5
+      if (label.includes('capture')) probeInfo.usbScore += 5
+      if (label.includes('uvc')) probeInfo.usbScore += 5
+      if (label.includes('external')) probeInfo.usbScore += 3
+      if (label.includes('video capture')) probeInfo.usbScore += 5
+      if (label.includes('hdmi')) probeInfo.usbScore += 5
+      if (label.includes('webcam')) probeInfo.usbScore += 3
+      if (label.includes('cam link')) probeInfo.usbScore += 5
+      if (label.includes('elgato')) probeInfo.usbScore += 5
+      if (label.includes('avermedia')) probeInfo.usbScore += 5
+      if (label.includes('magewell')) probeInfo.usbScore += 5
+      if (label.includes('obs')) probeInfo.usbScore += 3
+      if (label.match(/camera\s*[2-9]/)) probeInfo.usbScore += 3
+      
+      // Try to open this specific camera with MULTIPLE constraint strategies
+      let probeSuccess = false
+      
+      // Strategy 1: exact deviceId with high resolution
+      try {
+        const probeStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false
+        })
+        const track = probeStream.getVideoTracks()[0]
+        if (track) {
+          const settings = track.getSettings()
+          probeInfo.facingMode = settings.facingMode || null
+          probeInfo.width = settings.width || null
+          probeInfo.height = settings.height || null
+          probeInfo.frameRate = settings.frameRate || null
+          probeInfo.probed = true
+          probeSuccess = true
+          
+          const trackLabel = (track.label || '').toLowerCase()
+          if (trackLabel.includes('usb')) probeInfo.usbScore += 5
+          if (trackLabel.includes('capture')) probeInfo.usbScore += 5
+          if (trackLabel.includes('uvc')) probeInfo.usbScore += 5
+          if (trackLabel.includes('hdmi')) probeInfo.usbScore += 5
+          
+          // USB capture cards often have NO facingMode
+          if (!settings.facingMode) probeInfo.usbScore += 4
+          
+          console.log(`[OP] Deep probed camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height} facing=${'$'}{settings.facingMode} score=${'$'}{probeInfo.usbScore}`)
+        }
+        probeStream.getTracks().forEach(t => t.stop())
+      } catch(e1) {
+        console.warn(`[OP] Deep probe strategy 1 failed for camera ${'$'}{i}: ${'$'}{e1.message}`)
+      }
+      
+      // Strategy 2: exact deviceId with lower resolution (some USB cards only support lower res)
+      if (!probeSuccess) {
+        try {
+          const probeStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: device.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false
+          })
+          const track = probeStream.getVideoTracks()[0]
+          if (track) {
+            const settings = track.getSettings()
+            probeInfo.facingMode = settings.facingMode || null
+            probeInfo.width = settings.width || null
+            probeInfo.height = settings.height || null
+            probeInfo.frameRate = settings.frameRate || null
+            probeInfo.probed = true
+            probeSuccess = true
+            
+            if (!settings.facingMode) probeInfo.usbScore += 4
+            console.log(`[OP] Deep probe strategy 2 for camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height}`)
+          }
+          probeStream.getTracks().forEach(t => t.stop())
+        } catch(e2) {
+          console.warn(`[OP] Deep probe strategy 2 failed for camera ${'$'}{i}: ${'$'}{e2.message}`)
+        }
+      }
+      
+      // Strategy 3: exact deviceId with NO resolution constraints
+      if (!probeSuccess) {
+        try {
+          const probeStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: device.deviceId } },
+            audio: false
+          })
+          const track = probeStream.getVideoTracks()[0]
+          if (track) {
+            const settings = track.getSettings()
+            probeInfo.facingMode = settings.facingMode || null
+            probeInfo.width = settings.width || null
+            probeInfo.height = settings.height || null
+            probeInfo.frameRate = settings.frameRate || null
+            probeInfo.probed = true
+            probeSuccess = true
+            
+            if (!settings.facingMode) probeInfo.usbScore += 4
+            console.log(`[OP] Deep probe strategy 3 for camera ${'$'}{i}: "${'$'}{device.label}" → ${'$'}{settings.width}x${'$'}{settings.height}`)
+          }
+          probeStream.getTracks().forEach(t => t.stop())
+        } catch(e3) {
+          console.warn(`[OP] Deep probe strategy 3 failed for camera ${'$'}{i}: ${'$'}{e3.message}`)
+        }
+      }
+      
+      if (!probeSuccess) {
+        console.warn(`[OP] All probe strategies failed for camera ${'$'}{i} "${'$'}{device.label}" — may be inaccessible`)
+      }
+      
+      // IMPORTANT: Add delay between probes to let Android release the camera
+      if (i < videoDevices.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+      
+      // Determine if likely USB
+      probeInfo.isLikelyUsb = probeInfo.usbScore >= 4
+      probedCameras.push(probeInfo)
+    }
+    
+    // Post-processing: mark last camera as potential USB if none found
+    const usbCount = probedCameras.filter(c => c.isLikelyUsb).length
+    if (probedCameras.length >= 2 && usbCount === 0) {
+      const lastCam = probedCameras[probedCameras.length - 1]
+      lastCam.isLikelyUsb = true
+      console.log(`[OP] No USB detected — marking last camera "${'$'}{lastCam.label}" as potential USB`)
+    }
+    
+    // Update USB detection status
+    usbCameraDetected = probedCameras.some(c => c.isLikelyUsb)
+    
+    // Show probe results
+    renderProbeResults()
+    updateUsbStatus()
+    
+    // Auto-select USB camera if found and none selected
+    if (usbCameraDetected && !selectedDeviceId) {
+      const usbCam = probedCameras.find(c => c.isLikelyUsb)
+      if (usbCam) {
+        selectedDeviceId = usbCam.deviceId
+      }
+    }
+    
+    return probedCameras
+    
+  } catch(err) {
+    console.error('[OP] deepProbeCameras failed:', err)
+    return []
+  }
+}
+
+// ── Cycle All Cameras — Try each camera one by one so user can pick ─────
+// This is the MOST RELIABLE way to find the USB capture card on Android.
+// It opens each camera for 3 seconds, letting the user see the feed,
+// and they can tap "Pilih Kamera Ini" to select the current one.
+async function cycleAllCameras() {
+  if (isCyclingCameras) {
+    // Abort cycling
+    isCyclingCameras = false
+    if (cycleAbortController) cycleAbortController.abort()
+    return
+  }
+  
+  // Stop current stream
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop())
+    currentStream = null
+  }
+  
+  // Enumerate fresh
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  videoDevices = devices.filter(d => d.kind === 'videoinput')
+  
+  if (videoDevices.length === 0) {
+    alert('Tidak ada kamera ditemukan. Pastikan izin kamera sudah diberikan.')
+    return
+  }
+  
+  isCyclingCameras = true
+  cycleAbortController = new AbortController()
+  const signal = cycleAbortController.signal
+  
+  const video = document.getElementById('videoPreview')
+  document.getElementById('noCameraMsg').classList.add('hidden')
+  
+  // Show cycling UI
+  showCycleUI(true)
+  
+  for (let i = 0; i < videoDevices.length; i++) {
+    if (!isCyclingCameras || signal.aborted) break
+    
+    const device = videoDevices[i]
+    const label = device.label || `Kamera ${'$'}{i+1}`
+    
+    updateCycleUI(i + 1, videoDevices.length, label, device.deviceId)
+    
+    // Try to open this camera with multiple strategies
+    let stream = null
+    
+    // Strategy 1: exact deviceId, high res
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: device.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      })
+    } catch(e) {
+      // Strategy 2: exact deviceId, low res
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        })
+      } catch(e2) {
+        // Strategy 3: exact deviceId, no res constraint
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: device.deviceId } },
+            audio: false
+          })
+        } catch(e3) {
+          // Strategy 4: ideal deviceId
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { ideal: device.deviceId } },
+              audio: false
+            })
+          } catch(e4) {
+            console.warn(`[OP] Cannot open camera ${'$'}{i} "${'$'}{label}": all strategies failed`)
+            updateCycleUI(i + 1, videoDevices.length, label + ' (GAGAL)', device.deviceId)
+            await new Promise(resolve => setTimeout(resolve, 1500))
+            continue
+          }
+        }
+      }
+    }
+    
+    if (stream) {
+      // Stop previous stream
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop())
+      }
+      currentStream = stream
+      video.srcObject = stream
+      
+      // Log camera info
+      const track = stream.getVideoTracks()[0]
+      const settings = track?.getSettings()
+      console.log(`[OP] Cycling camera ${'$'}{i}: "${'$'}{track?.label || label}" → ${'$'}{settings?.width}x${'$'}{settings?.height} facing=${'$'}{settings?.facingMode}`)
+      
+      // Wait 4 seconds for user to see the feed (or until they select)
+      await new Promise(resolve => setTimeout(resolve, 4000))
+      
+      // If user selected this camera, stop cycling
+      if (selectedDeviceId === device.deviceId && !isCyclingCameras) {
+        break
+      }
+    }
+  }
+  
+  // Done cycling
+  isCyclingCameras = false
+  showCycleUI(false)
+  
+  // If no camera was selected during cycling, keep the last one
+  if (!selectedDeviceId && currentStream) {
+    const track = currentStream.getVideoTracks()[0]
+    selectedDeviceId = track?.getSettings()?.deviceId
+  }
+  
+  updateCameraSelector()
+}
+
+function selectCycledCamera(deviceId) {
+  console.log('[OP] User selected camera during cycling:', deviceId?.slice(0,8))
+  selectedDeviceId = deviceId
+  isCyclingCameras = false
+  if (cycleAbortController) cycleAbortController.abort()
+  showCycleUI(false)
+  updateCameraSelector()
+}
+
+function showCycleUI(show) {
+  let overlay = document.getElementById('cycleOverlay')
+  if (!overlay) {
+    // Create the overlay
+    overlay = document.createElement('div')
+    overlay.id = 'cycleOverlay'
+    overlay.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7); z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 20px; gap: 12px;
+    `
+    overlay.innerHTML = `
+      <div style="font-size:18px;font-weight:700;color:#d4af37;text-align:center;">🔌 Mencoba Semua Kamera</div>
+      <div id="cycleProgress" style="font-size:14px;color:#c4b5fd;text-align:center;">Mempersiapkan...</div>
+      <div id="cycleCameraName" style="font-size:12px;color:#fff;text-align:center;padding:8px 16px;background:rgba(59,34,99,0.8);border-radius:8px;border:1px solid #533485;max-width:90%;word-break:break-all;"></div>
+      <button id="cycleSelectBtn" onclick="selectCycledCamera(document.getElementById('cycleCameraName').dataset.deviceId)" style="
+        padding: 14px 32px; border-radius: 12px; font-weight: 700; font-size: 16px;
+        background: linear-gradient(135deg, #d4af37, #f5e6a3); color: #1a0b2e;
+        border: none; cursor: pointer; box-shadow: 0 4px 20px rgba(212,175,55,0.4);
+      ">✅ Pilih Kamera Ini</button>
+      <button onclick="cycleAllCameras()" style="
+        padding: 8px 20px; border-radius: 8px; font-size: 12px;
+        background: #3b2263; color: #c4b5fd; border: 1px solid #533485; cursor: pointer;
+      ">⏹️ Berhenti Mencari</button>
+      <div style="font-size:10px;color:rgba(196,181,253,0.5);text-align:center;max-width:300px;">
+        Setiap kamera akan ditampilkan selama 4 detik. Tekan "Pilih Kamera Ini" saat kamera USB capture card muncul.
+      </div>
+    `
+    document.body.appendChild(overlay)
+  }
+  overlay.style.display = show ? 'flex' : 'none'
+}
+
+function updateCycleUI(current, total, cameraName, deviceId) {
+  const progress = document.getElementById('cycleProgress')
+  const nameEl = document.getElementById('cycleCameraName')
+  if (progress) progress.textContent = `Kamera ${'$'}{current} dari ${'$'}{total}`
+  if (nameEl) {
+    nameEl.textContent = cameraName
+    nameEl.dataset.deviceId = deviceId || ''
+  }
+}
+
+function renderProbeResults() {
+  const section = document.getElementById('probeSection')
+  const list = document.getElementById('probeList')
+  
+  if (probedCameras.length === 0) {
+    section.style.display = 'none'
+    return
+  }
+  
+  section.style.display = 'block'
+  list.innerHTML = ''
+  
+  // Sort: working cameras first, then by USB score
+  const sorted = [...probedCameras].sort((a, b) => {
+    // Working (non-black) cameras first
+    const aWork = a.isBlack === false ? 0 : 1
+    const bWork = b.isBlack === false ? 0 : 1
+    if (aWork !== bWork) return aWork - bWork
+    return b.usbScore - a.usbScore
+  })
+  
+  sorted.forEach(cam => {
+    const item = document.createElement('div')
+    item.className = 'probe-item'
+    if (cam.deviceId === selectedDeviceId) {
+      item.style.borderColor = 'var(--gold)'
+    }
+    
+    // Better icon logic based on black frame detection
+    let icon = '📱' // phone camera by default
+    let badgeClass = 'phone'
+    let badgeText = '?'
+    
+    if (cam.isBlack === false) {
+      // Has actual content!
+      icon = cam.isLikelyUsb ? '🔌' : '📹'
+      badgeClass = 'usb'
+      badgeText = cam.isLikelyUsb ? 'USB ✅' : 'AKTIF'
+    } else if (cam.isBlack === true) {
+      // Shows black
+      icon = '⬛'
+      badgeClass = 'unknown'
+      badgeText = 'HITAM'
+    } else {
+      // Not tested yet
+      icon = cam.isLikelyUsb ? '🔌' : '📱'
+      badgeClass = cam.isLikelyUsb ? 'usb' : (cam.facingMode ? 'phone' : 'unknown')
+      badgeText = cam.isLikelyUsb ? 'USB' : (cam.facingMode === 'user' ? 'Depan' : cam.facingMode === 'environment' ? 'Belakang' : '?')
+    }
+    
+    let detail = ''
+    if (cam.probed) {
+      detail = `${'$'}{cam.width || '?'}×${'$'}{cam.height || '?'}`
+      if (cam.frameRate) detail += ` @${'$'}{Math.round(cam.frameRate)}fps`
+      if (cam.isBlack === true) detail += ' ⬛ HITAM'
+      if (cam.isBlack === false) detail += ' ✅'
+    } else {
+      detail = 'Belum diperiksa'
+    }
+    
+    item.innerHTML = `
+      <span class="pi-icon">${'$'}{icon}</span>
+      <div class="pi-info">
+        <div class="pi-label">${'$'}{cam.label}</div>
+        <div class="pi-detail">${'$'}{detail}${'$'}{cam.deviceId === selectedDeviceId ? ' ✅ Dipilih' : ''}</div>
+      </div>
+      <span class="pi-badge ${'$'}{badgeClass}">${'$'}{badgeText}</span>
+    `
+    
+    item.onclick = () => {
+      selectedDeviceId = cam.deviceId
+      startCamera(cam.deviceId)
+      renderProbeResults()
+    }
+    
+    list.appendChild(item)
+  })
+}
+
+function updateUsbStatus() {
+  const usbVal = document.getElementById('usbValue')
+  
+  if (probedCameras.length === 0) {
+    usbVal.textContent = 'Belum diperiksa'
+    usbVal.className = 'usb-value'
+    return
+  }
+  
+  const workingCount = probedCameras.filter(c => c.isBlack === false).length
+  const blackCount = probedCameras.filter(c => c.isBlack === true).length
+  const untestedCount = probedCameras.filter(c => c.isBlack === null).length
+  
+  if (workingCount > 0) {
+    usbVal.textContent = `✅ ${'$'}{workingCount} kamera aktif, ${'$'}{blackCount} hitam`
+    usbVal.className = 'usb-value ok'
+  } else if (usbCameraDetected) {
+    const usbCams = probedCameras.filter(c => c.isLikelyUsb)
+    usbVal.textContent = `🔌 ${'$'}{usbCams.length} USB (belum diperiksa)`
+    usbVal.className = 'usb-value ok'
+  } else {
+    usbVal.textContent = `${'$'}{probedCameras.length} kamera — gunakan "🔄 Cari" untuk mencari`
+    usbVal.className = 'usb-value warn'
+  }
+}
+
+async function startCamera(deviceId) {
+  console.log('[OP] Starting camera, deviceId:', deviceId?.slice(0,8) || 'none')
+  
+  // Stop existing stream and add delay for Android to release the camera
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop())
+    currentStream = null
+    await new Promise(resolve => setTimeout(resolve, 300))
+  }
+  
+  const video = document.getElementById('videoPreview')
+  
+  // Define multiple constraint strategies to try
+  const strategies = []
+  
+  if (deviceId) {
+    strategies.push({
+      name: 'exact+1080p',
+      constraints: { video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }
+    })
+    strategies.push({
+      name: 'exact+720p',
+      constraints: { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
+    })
+    strategies.push({
+      name: 'exact+480p',
+      constraints: { video: { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false }
+    })
+    strategies.push({
+      name: 'exact+nores',
+      constraints: { video: { deviceId: { exact: deviceId } }, audio: false }
+    })
+    strategies.push({
+      name: 'ideal',
+      constraints: { video: { deviceId: { ideal: deviceId } }, audio: false }
+    })
+  } else {
+    // No specific device — trigger auto-detect instead
+    console.log('[OP] No deviceId specified — triggering auto-detect')
+    return autoDetectBestCamera()
+  }
+  
+  // Try each strategy until one works
+  for (const strategy of strategies) {
+    try {
+      console.log(`[OP] Trying camera strategy: ${'$'}{strategy.name}`)
+      const stream = await navigator.mediaDevices.getUserMedia(strategy.constraints)
+      currentStream = stream
+      selectedDeviceId = deviceId || stream.getVideoTracks()[0]?.getSettings()?.deviceId
+      cameraAvailable = true
+      
+      video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+      video.srcObject = stream
+      
+      // IMPORTANT: Explicitly play the video (some browsers require it)
+      try { await video.play() } catch(playErr) {
+        console.warn('[OP] video.play() failed, will auto-play:', playErr.message)
+      }
+      
+      const track = stream.getVideoTracks()[0]
+      const trackSettings = track.getSettings()
+      console.log('[OP] Camera stream active (via ' + strategy.name + '):', {
+        label: track.label,
+        deviceId: trackSettings?.deviceId?.slice(0,8),
+        width: trackSettings?.width,
+        height: trackSettings?.height,
+        facingMode: trackSettings?.facingMode
+      })
+      
+      const trackLabel = (track.label || '').toLowerCase()
+      const isUsbStream = trackLabel.includes('usb') || trackLabel.includes('capture') || 
+                          trackLabel.includes('uvc') || trackLabel.includes('hdmi') ||
+                          trackLabel.includes('video capture') || !trackSettings?.facingMode
+      
+      if (isUsbStream) {
+        console.log('[OP] ✅ USB capture card camera is active!')
+      }
+      
+      document.getElementById('noCameraMsg').classList.add('hidden')
+      updateCameraSelector()
+      
+      // Check if black frame after a brief delay (camera needs time to warm up)
+      setTimeout(() => {
+        const black = isFrameBlack(video)
+        const label = track?.label || 'Kamera'
+        if (black) {
+          showAutoDetectStatus(`⬛ ${'$'}{label} — layar hitam, coba "▶ Ganti"`, 'warn')
+        } else {
+          showAutoDetectStatus(`✅ ${'$'}{label}`, 'ok')
+          // Auto-hide after 3 seconds
+          setTimeout(() => {
+            const el = document.getElementById('autoDetectStatus')
+            if (el && el.classList.contains('ok')) el.style.display = 'none'
+          }, 3000)
+        }
+        
+        // Update probedCameras
+        const probed = probedCameras.find(c => c.deviceId === (deviceId || selectedDeviceId))
+        if (probed) {
+          probed.probed = true
+          probed.isBlack = black
+          probed.facingMode = trackSettings?.facingMode || null
+          probed.width = trackSettings?.width || null
+          probed.height = trackSettings?.height || null
+          renderProbeResults()
+        }
+      }, 2000)
+      
+      return
+      
+    } catch(err) {
+      console.warn(`[OP] Strategy "${'$'}{strategy.name}" failed: ${'$'}{err.message}`)
+    }
+  }
+  
+  // ALL strategies failed
+  console.error('[OP] All camera start strategies failed')
+  cameraAvailable = false
+  document.getElementById('noCameraMsg').classList.remove('hidden')
+  showAutoDetectStatus('❌ Gagal membuka kamera', 'err')
+}
+
+function updateCameraSelector() {
+  const select = document.getElementById('cameraSelect')
+  select.innerHTML = ''
+  
+  if (videoDevices.length === 0) {
+    select.innerHTML = '<option value="">Tidak ada kamera</option>'
+    return
+  }
+  
+  videoDevices.forEach((d, i) => {
+    const opt = document.createElement('option')
+    opt.value = d.deviceId
+    const label = d.label || `Kamera ${'$'}{i+1}`
+    
+    // Check probed info
+    const probed = probedCameras.find(c => c.deviceId === d.deviceId)
+    const isUSB = probed?.isLikelyUsb || false
+    
+    // Show camera type, status, and resolution
+    let prefix = '📱'
+    let suffix = ''
+    if (probed?.isBlack === false) {
+      prefix = isUSB ? '🔌' : '📹'
+      suffix = ' ✅'
+    } else if (probed?.isBlack === true) {
+      prefix = '⬛'
+      suffix = ' (hitam)'
+    } else if (isUSB) {
+      prefix = '🔌'
+    }
+    
+    let displayLabel = `${'$'}{prefix} ${'$'}{label}${'$'}{suffix}`
+    if (probed?.probed && probed?.width) {
+      displayLabel += ` (${'$'}{probed.width}×${'$'}{probed.height})`
+    }
+    
+    opt.textContent = displayLabel
+    if (d.deviceId === selectedDeviceId) opt.selected = true
+    select.appendChild(opt)
+  })
+}
+
+function handleCameraChange() {
+  const select = document.getElementById('cameraSelect')
+  const deviceId = select.value
+  if (deviceId && deviceId !== selectedDeviceId) {
+    selectedDeviceId = deviceId
+    startCamera(deviceId)
+  }
+}
+
+async function rescanCameras() {
+  console.log('[OP] Rescanning cameras with auto-detect...')
+  await autoDetectBestCamera()
+}
+
+function toggleMirror() {
+  isMirrored = !isMirrored
+  const video = document.getElementById('videoPreview')
+  video.style.transform = isMirrored ? 'scaleX(-1)' : 'none'
+  // Update new switch
+  const mirrorSwitch = document.getElementById('mirrorSwitch')
+  if (mirrorSwitch) mirrorSwitch.classList.toggle('on', isMirrored)
+}
+
+// ── Device change listener (USB hot-plug) ────────────────────────────────
+navigator.mediaDevices?.addEventListener('devicechange', async () => {
+  console.log('[OP] Device change detected — running auto-detect...')
+  await autoDetectBestCamera()
+})
+
+// ── Troubleshooting toggle ───────────────────────────────────────────────
+function toggleTroubleshoot(btn) {
+  btn.classList.toggle('open')
+  const body = document.getElementById('troubleshootBody')
+  body.classList.toggle('open')
+}
+
+// ── Connection Functions ─────────────────────────────────────────────────
+function selectChannel(ch) {
+  myChannel = ch
+  document.querySelectorAll('.channel-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.ch) === ch)
+  })
+}
+
+function setConnectionState(state, errorMsg) {
+  connectionState = state
+  const badge = document.getElementById('connectionStatus')
+  const errorCard = document.getElementById('errorCard')
+  const connectBtn = document.getElementById('connectBtn')
+  
+  badge.style.display = 'inline-flex'
+  badge.className = 'status-badge ' + state
+  
+  if (state === 'connecting') {
+    badge.innerHTML = '<div class="status-dot"></div><span>Menghubungkan...</span>'
+    connectBtn.disabled = true
+    connectBtn.textContent = 'Menghubungkan...'
+    errorCard.style.display = 'none'
+  } else if (state === 'connected') {
+    badge.innerHTML = '<div class="status-dot"></div><span>Terautentikasi ✓</span>'
+    badge.className = 'status-badge connected'
+    connectBtn.disabled = false
+    connectBtn.textContent = 'Hubungkan'
+  } else if (state === 'disconnected') {
+    badge.innerHTML = '<div class="status-dot"></div><span>Terputus</span>'
+    connectBtn.disabled = false
+    connectBtn.textContent = 'Hubungkan'
+    if (errorMsg) {
+      errorCard.textContent = errorMsg
+      errorCard.style.display = 'block'
+    }
+  }
+}
+
+// ── Connection Test (diagnostics) ────────────────────────────────────────
+async function testConnection() {
+  const ip = document.getElementById('serverIp').value.trim()
+  const errorCard = document.getElementById('errorCard')
+  const testBtn = document.getElementById('testBtn')
+  
+  if (!ip) {
+    errorCard.textContent = 'Masukkan alamat IP server terlebih dahulu'
+    errorCard.style.display = 'block'
+    return
+  }
+  
+  testBtn.disabled = true
+  testBtn.textContent = '🔍 Menguji koneksi...'
+  errorCard.style.display = 'none'
+  
+  const SOCKET_PORT = 3003
+  const results = []
+  
+  // Test 1: Check if Socket.io library is loaded
+  if (typeof io === 'undefined') {
+    results.push('❌ Socket.io library TIDAK termuat — halaman perlu internet saat pertama kali dibuka')
+  } else {
+    results.push('✅ Socket.io library termuat (v' + io.version + ')')
+  }
+  
+  // Test 2: HTTP connectivity test to port 3003
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 8000)
+    
+    const testUrl = `http://${'$'}{ip}:${'$'}{SOCKET_PORT}/`
+    
+        results.push('📡 Menguji HTTP ke: ' + testUrl)
+    
+    const resp = await fetch(testUrl, { 
+      signal: controller.signal,
+      mode: 'cors',
+    })
+    clearTimeout(timeoutId)
+    
+    if (resp.ok) {
+      results.push('✅ Server SAATIRIL BERJALAN di ' + ip + ':' + SOCKET_PORT)
+    } else {
+      results.push('❌ Server merespons dengan HTTP ' + resp.status)
+    }
+    } catch(err) {
+    if (err.name === 'AbortError') {
+      results.push('❌ Koneksi TIMEOUT ke ' + ip + ':' + SOCKET_PORT + ' — server tidak merespons dalam 8 detik')
+    } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+      results.push('❌ TIDAK DAPAT terhubung ke ' + ip + ':' + SOCKET_PORT)
+      results.push('   Kemungkinan: (1) Server tidak berjalan, (2) IP salah, (3) Bukan di WiFi yang sama, (4) Firewall blokir')
+    } else {
+      results.push('❌ Error: ' + err.message)
+    }
+  }
+  
+  // Test 3: Check current page origin info
+  results.push('ℹ️ Halaman diakses dari: ' + window.location.origin)
+  results.push('ℹ️ Port halaman: ' + (window.location.port || 'default(80/443)'))
+  
+  // Test 4: Camera status
+  results.push('ℹ️ Kamera ditemukan: ' + probedCameras.length)
+  results.push('ℹ️ USB capture card: ' + (usbCameraDetected ? '✅ Terdeteksi' : '❌ Tidak terdeteksi'))
+  if (!usbCameraDetected && probedCameras.length > 0) {
+    results.push('⚠️ Kamera USB tidak terdeteksi otomatis. Gunakan tombol "🔌 Coba Semua" di halaman kamera untuk mencari manual.')
+  }
+  if (probedCameras.length >= 2) {
+    results.push('ℹ️ Ditemukan ' + probedCameras.length + ' kamera — salah satunya mungkin USB capture card')
+  }
+  
+  // Show results
+  errorCard.innerHTML = results.join('<br>')
+  errorCard.style.display = 'block'
+  errorCard.style.textAlign = 'left'
+  errorCard.style.fontSize = '11px'
+  errorCard.style.lineHeight = '1.6'
+  
+  testBtn.disabled = false
+  testBtn.textContent = '🔍 Test Koneksi Server'
+}
+
+async function handleConnect() {
+  const ip = document.getElementById('serverIp').value.trim()
+  const password = document.getElementById('sessionPassword').value.trim()
+  
+  if (!ip) {
+    document.getElementById('errorCard').textContent = 'Masukkan alamat IP server'
+    document.getElementById('errorCard').style.display = 'block'
+    return
+  }
+  
+  // Save IP for later
+  localStorage.setItem('saatiril_server_ip', ip)
+  
+  // Hash password if provided
+  if (password) {
+    sessionPasswordHash = await sha256(password)
+    console.log('[OP] Session password hashed:', sessionPasswordHash?.slice(0,8) + '...')
+  } else {
+    sessionPasswordHash = null
+  }
+  
+  setConnectionState('connecting')
+  connectToServer(ip)
+}
+
+function connectToServer(ip) {
+  if (socket) {
+    socket.disconnect()
+    socket = null
+  }
+  
+  const SOCKET_PORT = 3003
+
+  // Android ktor server: single-port architecture. The page is served from
+  // http://<phone-ip>:3003/operator, and the WebSocket connects to the same
+  // host:port. Use window.location.origin (which includes the port).
+  // The ip parameter is kept for error messages and diagnostics.
+  const serverUrl = (window.location.origin && window.location.origin !== 'null')
+    ? window.location.origin
+    : `http://${'$'}{ip}:${'$'}{SOCKET_PORT}`
+
+  const socketOptions = {
+    path: '/',
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+    timeout: 10000,
+  }
+
+  console.log('[OP] Connecting to server:', serverUrl, 'options:', JSON.stringify(socketOptions))
+  
+  // The EIO3 shim (inline above) always defines io — no external dependency needed.
+  socket = io(serverUrl, socketOptions)
+  
+  socket.on('connect', () => {
+    console.log('[OP] Socket connected:', socket.id)
+    // Identify ourselves immediately
+    socket.emit('identify', {
+      role: 'operator',
+      channel: myChannel,
+      sessionPasswordHash: sessionPasswordHash
+    })
+    console.log('[OP] Sent identify with hash:', sessionPasswordHash ? sessionPasswordHash.slice(0,8) + '...' : 'null')
+  })
+  
+  socket.on('auth-requirement', (data) => {
+    console.log('[OP] Auth requirement received:', data)
+    if (data.passwordRequired) {
+      if (!sessionPasswordHash) {
+        // Show password prompt - we don't have a hash yet
+        document.getElementById('passwordOverlay').classList.remove('hidden')
+        document.getElementById('authError').classList.remove('show')
+      }
+      // If we already have a hash, the identify was already sent in connect handler
+      // The server will respond with auth-success or auth-failed
+    }
+  })
+  
+  socket.on('auth-success', (data) => {
+    console.log('[OP] ✅ Auth success:', data)
+    setConnectionState('connected')
+    document.getElementById('passwordOverlay').classList.add('hidden')
+    document.getElementById('authError').classList.remove('show')
+    
+    // Transition to operator screen
+    showOperatorScreen()
+    
+    // Request current state from admin
+    socket.emit('lan-message', { event: 'REQUEST_STATE', data: { channel: myChannel } })
+    
+    // Start latency ping
+    startLatencyPing()
+
+    // ── Periodic REQUEST_STATE safety net ──
+    // Ensures the Operator always has fresh data even if it misses a relayed
+    // MC_CALL (fixes "MC called but Operator didn't receive" issue).
+    // Every 5 seconds, re-request the full project state from the server.
+    if (window.__stateRefreshTimer) clearInterval(window.__stateRefreshTimer)
+    window.__stateRefreshTimer = setInterval(function() {
+      if (socket && socket.connected) {
+        socket.emit('lan-message', { event: 'REQUEST_STATE', data: { role: 'operator', channel: myChannel } })
+      }
+    }, 5000)
+  })
+
+    socket.on('auth-failed', (data) => {
+    console.log('[OP] ❌ Auth failed:', data)
+    // Show password overlay with error
+    document.getElementById('passwordOverlay').classList.remove('hidden')
+    document.getElementById('authError').classList.add('show')
+    
+    // Clear the stored hash since it's wrong
+    sessionPasswordHash = null
+  })
+  
+  socket.on('lan-message', (payload) => {
+    handleLanMessage(payload)
+  })
+  
+  socket.on('disconnect', (reason) => {
+    console.log('[OP] Socket disconnected:', reason)
+    stopLatencyPing()
+    if (window.__stateRefreshTimer) { clearInterval(window.__stateRefreshTimer); window.__stateRefreshTimer = null; }
+    if (reason === 'io server disconnect') {
+      setConnectionState('disconnected', 'Server memutuskan koneksi. Mencoba menyambung ulang...')
+      setTimeout(function() {
+        console.log('[SAATIRIL] Manual reconnect after server disconnect...')
+        socket.connect()
+      }, 2000)
+    } else if (reason === 'transport close') {
+      setConnectionState('disconnected', 'Koneksi terputus. Mencoba menyambung ulang...')
+    } else {
+      setConnectionState('disconnected', 'Koneksi terputus: ' + reason)
+    }
+  })
+  
+  socket.on('connect_error', (err) => {
+    console.error('[OP] Connection error:', err.message, 'description:', err.description?.message)
+    stopLatencyPing()
+    let errorMsg = 'Gagal terhubung ke server'
+    const msg = (err.message || '').toLowerCase()
+    const desc = (err.description?.message || '').toLowerCase()
+    
+    if (msg.includes('websocket error') || msg.includes('websocket') || desc.includes('websocket')) {
+      console.log('[OP] WebSocket failed, waiting for polling fallback...')
+      return
+    } else if (msg.includes('timeout') || desc.includes('timeout')) {
+      errorMsg = 'Koneksi timeout (10 detik). Pastikan: (1) Server SAATIRIL berjalan, (2) IP benar, (3) HP dan server di jaringan WiFi yang sama, (4) Port 3003 tidak diblokir firewall.'
+    } else if (msg.includes('refused') || desc.includes('refused') || msg.includes('econnrefused')) {
+      errorMsg = 'Koneksi ditolak (port 3003). Server SAATIRIL tidak berjalan di IP ini. Pastikan aplikasi admin sudah dibuka dan server aktif.'
+    } else if (msg.includes('cors') || desc.includes('cors')) {
+      errorMsg = 'Koneksi diblokir oleh kebijakan CORS. Coba akses langsung via http://' + ip + ':3003'
+    } else if (msg.includes('transport unknown') || msg.includes('transport not')) {
+      errorMsg = 'Versi Socket.io tidak cocok. Coba buka ulang halaman (hard refresh: Ctrl+Shift+R).'
+    } else {
+      errorMsg = 'Gagal terhubung: ' + err.message + '. Pastikan server SAATIRIL berjalan di ' + ip + ':3003'
+    }
+    setConnectionState('disconnected', errorMsg)
+  })
+
+  socket.on('reconnect_failed', function() {
+    console.error('[SAATIRIL] Reconnection failed — starting manual retry')
+    var manualRetry = setInterval(function() {
+      if (socket.connected) {
+        clearInterval(manualRetry)
+        return
+      }
+      console.log('[SAATIRIL] Manual reconnection attempt...')
+      socket.connect()
+    }, 3000)
+    setConnectionState('disconnected', 'Koneksi terputus. Mencoba menyambung ulang...')
+  })
+
+  socket.on('reconnect_attempt', function(attemptNumber) {
+    console.log('[SAATIRIL] Reconnection attempt #' + attemptNumber)
+    setConnectionState('connecting', 'Menyambung ulang... (' + attemptNumber + ')')
+  })
+
+  socket.on('reconnect', function(attemptNumber) {
+    console.log('[SAATIRIL] Reconnected after ' + attemptNumber + ' attempts')
+    setConnectionState('connected', 'Terhubung kembali!')
+  })
+}
+
+async function handleAuthSubmit() {
+  const password = document.getElementById('authPassword').value.trim()
+  if (!password) return
+  
+  const btn = document.getElementById('authSubmitBtn')
+  btn.disabled = true
+  btn.textContent = 'Memverifikasi...'
+  document.getElementById('authError').classList.remove('show')
+  
+  try {
+    sessionPasswordHash = await sha256(password)
+    console.log('[OP] Auth submit - hashed password:', sessionPasswordHash?.slice(0,8) + '...')
+    
+    socket.emit('identify', {
+      role: 'operator',
+      channel: myChannel,
+      sessionPasswordHash: sessionPasswordHash
+    })
+    
+    // Re-enable button after a delay (in case auth-failed is received)
+    setTimeout(() => {
+      btn.disabled = false
+      btn.textContent = 'Lanjutkan'
+    }, 3000)
+    
+  } catch(err) {
+    console.error('[OP] Auth hash failed:', err)
+    btn.disabled = false
+    btn.textContent = 'Lanjutkan'
+    document.getElementById('authError').textContent = 'Gagal memproses password'
+    document.getElementById('authError').classList.add('show')
+  }
+}
+
+function handleDisconnect() {
+  if (socket) {
+    socket.disconnect()
+    socket = null
+  }
+  stopLatencyPing()
+  mcCallBuffer = [] // Clear buffer on disconnect
+  photoHistory = [] // Clear photo history on disconnect
+  document.getElementById('connectionScreen').classList.remove('hidden')
+  document.getElementById('operatorScreen').classList.remove('active')
+  setConnectionState('disconnected')
+}
+
+// ── Screen Transitions ───────────────────────────────────────────────────
+function showOperatorScreen() {
+  document.getElementById('connectionScreen').classList.add('hidden')
+  document.getElementById('operatorScreen').classList.add('active')
+  
+  // Start camera with AUTO-DETECT (tries all cameras, picks the one with actual content)
+  if (!cameraAvailable) {
+    autoDetectBestCamera()
+  }
+}
+
+// ── LAN Message Handler ──────────────────────────────────────────────────
+function handleLanMessage(payload) {
+  if (!payload || !payload.event) return
+  
+  switch (payload.event) {
+    case 'MC_CALL': {
+      const data = payload.data
+      console.log('[OP] MC_CALL received:', data)
+      const mode = currentProject?.config?.mode
+      const isPs = isPhotoshootMode(mode)
+      
+      // In photoshoot mode: accept MC_CALL from ANY channel (both operators see it)
+      // In non-photoshoot mode: only accept MC_CALL for our channel
+      if (!isPs && data.channel !== myChannel) break
+      
+      // If camera is not available, try auto-detect
+      if (!cameraAvailable || !currentStream) {
+        console.log('[OP] Camera not ready when MC_CALL received — triggering auto-detect')
+        autoDetectBestCamera()
+      }
+      
+      if (isPs) {
+        // Photoshoot mode: add to buffer — operator selects manually
+        const student = data.student || data
+        if (student && student.id) {
+          // Remove duplicate, then add to front
+          const buffer = mcCallBuffer.filter(s => s.id !== student.id)
+          mcCallBuffer = [student, ...buffer]
+          console.log('[OP] MC_CALL added to mcCallBuffer, buffer size:', mcCallBuffer.length)
+        }
+      } else {
+        // Non-photoshoot mode: auto-set target
+        currentTarget = data.student || data
+        capturedPhotos = []
+        capturePhase = 'ready-1'
+      }
+      updateQueueList()
+      updateTargetDisplay()
+      updateCaptureButton()
+      break
+    }
+    
+    case 'STUDENT_RESET': {
+      const data = payload.data
+      console.log('[OP] STUDENT_RESET received:', data)
+      const mode = currentProject?.config?.mode
+      const isPs = isPhotoshootMode(mode)
+      
+      // In photoshoot mode: accept from any channel
+      // In non-photoshoot mode: only accept for our channel
+      if (!isPs && data.channel !== myChannel) break
+      
+      if (currentTarget && currentTarget.id === data.studentId) {
+        currentTarget = null
+        capturedPhotos = []
+        capturePhase = 'standby'
+      }
+      
+      // Remove from mcCallBuffer
+      mcCallBuffer = mcCallBuffer.filter(s => s.id !== data.studentId)
+      
+      // Update local DB status
+      if (currentProject?.database) {
+        const student = currentProject.database.find(s => s.id === data.studentId)
+        if (student) student.status = 'pending'
+      }
+      
+      updateQueueList()
+      updateTargetDisplay()
+      updateCaptureButton()
+      break
+    }
+    
+    case 'SYNC_DB': {
+      const data = payload.data
+      console.log('[OP] SYNC_DB received, project:', data?.project?.name || data?.name)
+      // Data structure: { project: {...} } — the actual project is nested
+      const project = data?.project || data
+      if (project) {
+        currentProject = project
+        if (project.config?.frame) {
+          frameData = project.config.frame
+          const frameImg = document.getElementById('frameOverlay')
+          if (frameData && frameData !== '__FRAME_SAVED__') {
+            frameImg.src = frameData
+            frameImg.classList.remove('hidden')
+          } else {
+            frameImg.classList.add('hidden')
+          }
+        }
+        
+        // Clean mcCallBuffer: only keep students that still exist in DB with 'sent' status
+        if (project.database) {
+          const dbIds = new Set(project.database.map(s => s.id))
+          mcCallBuffer = mcCallBuffer.filter(s => dbIds.has(s.id))
+          // Also remove students already done or already photographed
+          mcCallBuffer = mcCallBuffer.filter(s => {
+            const dbStudent = project.database.find(db => db.id === s.id)
+            if (!dbStudent) return false
+            if (dbStudent.status === 'done') return false
+            if (photoHistory.some(ph => ph.studentId === s.id)) return false
+            return true
+          })
+        }
+        
+        updateQueueList()
+        
+        // Recover target if there's an active student on our channel (NON-PHOTOSHOOT only)
+        if (!isPhotoshootMode(project.config?.mode)) {
+          const activeStudent = project.database?.find(s => 
+            s.assignedChannel === myChannel && isActiveStatus(s.status)
+          )
+          if (activeStudent && !currentTarget) {
+            currentTarget = activeStudent
+            capturedPhotos = []
+            capturePhase = 'ready-1'
+            updateTargetDisplay()
+            updateCaptureButton()
+          }
+        }
+      }
+      break
+    }
+    
+    case 'PHOTOS_SAVED': {
+      console.log('[OP] PHOTOS_SAVED ack received')
+      break
+    }
+    
+    case 'SERVER_SHUTDOWN': {
+      console.log('[OP] Server shutting down')
+      handleDisconnect()
+      break
+    }
+  }
+}
+
+// ── Target Display ───────────────────────────────────────────────────────
+function updateTargetDisplay() {
+  const info = document.getElementById('targetInfo')
+  const dots = document.getElementById('photoDots')
+  const isPs = isPhotoshootMode(currentProject?.config?.mode)
+  
+  if (currentTarget && capturePhase !== 'standby') {
+    info.classList.remove('hidden')
+    document.getElementById('targetNama').textContent = currentTarget.nama || '-'
+    document.getElementById('targetNim').textContent = currentTarget.nim || '-'
+    const phaseEl = document.getElementById('targetPhase')
+    // In photoshoot mode: just "SIAP FOTO", non-photoshoot: "SIAP FOTO 1/2"
+    if (isPs) {
+      phaseEl.textContent = capturePhase === 'ready-1' ? 'SIAP FOTO' :
+                            capturePhase === 'sending' ? 'MENGIRIM...' : 'STANDBY'
+    } else {
+      phaseEl.textContent = capturePhase === 'ready-1' ? 'SIAP FOTO 1' : 
+                            capturePhase === 'ready-2' ? 'SIAP FOTO 2' : 
+                            capturePhase === 'sending' ? 'MENGIRIM...' : 'STANDBY'
+    }
+    phaseEl.className = 'target-phase ' + capturePhase
+  } else {
+    info.classList.add('hidden')
+  }
+  
+  if (currentTarget && !isPs && capturePhase !== 'standby') {
+    dots.classList.remove('hidden')
+    document.getElementById('dot1').className = 'photo-dot' + (capturedPhotos.length >= 1 ? ' done' : (capturePhase === 'ready-1' ? ' current' : ''))
+    document.getElementById('dot2').className = 'photo-dot' + (capturedPhotos.length >= 2 ? ' done' : (capturePhase === 'ready-2' ? ' current' : ''))
+  } else {
+    dots.classList.add('hidden')
+  }
+  
+  // Update target info panel (bottom panels)
+  updateTargetInfoPanel()
+  // Update top bar mode + target display (like APK)
+  updateTopBarDisplay()
+}
+
+// ── Top Bar Display (mode + target, like APK) ─────────────────────────────
+function updateTopBarDisplay() {
+  const modeEl = document.getElementById('topBarMode')
+  const targetEl = document.getElementById('topBarTarget')
+  if (!modeEl || !targetEl) return
+  
+  const mode = currentProject?.config?.mode || ''
+  const modeNames = {
+    'single': 'single',
+    'dual': 'dual shot',
+    'single-photoshoot': 'single shot',
+    'dual-photoshoot': 'dual shot'
+  }
+  modeEl.textContent = modeNames[mode] || mode
+  
+  if (currentTarget && capturePhase !== 'standby') {
+    const isPs = isPhotoshootMode(mode)
+    const phaseText = isPs ? 'Siap Foto' : 
+                     (capturePhase === 'ready-1' ? 'Toga' : 
+                      capturePhase === 'ready-2' ? 'Ijazah' : 
+                      capturePhase === 'sending' ? 'Kirim' : '')
+    targetEl.textContent = `${'$'}{currentTarget.nama || ''} ${'$'}{phaseText}`
+  } else {
+    targetEl.textContent = ''
+  }
+}
+
+// ── Capture Logic ────────────────────────────────────────────────────────
+function updateCaptureButton() {
+  // Capture bar button
+  const barBtn = document.getElementById('captureBarBtn')
+  if (!barBtn) return
+  
+  const isPs = isPhotoshootMode(currentProject?.config?.mode)
+  const progressDots = document.getElementById('progressDots')
+  
+  // Show progress dots for non-photoshoot modes
+  if (!isPs && capturePhase !== 'standby') {
+    progressDots.style.display = 'flex'
+    document.getElementById('pdot1').className = 'progress-dot' + (capturedPhotos.length >= 1 ? ' done' : (capturePhase === 'ready-1' ? ' current' : ''))
+    document.getElementById('pdot2').className = 'progress-dot' + (capturedPhotos.length >= 2 ? ' done' : (capturePhase === 'ready-2' ? ' current' : ''))
+  } else {
+    progressDots.style.display = 'none'
+  }
+  
+  if (capturePhase === 'standby') {
+    barBtn.className = 'capture-bar-btn standby'
+    barBtn.textContent = 'STANDBY'
+    barBtn.disabled = true
+  } else if (timerCountdown > 0) {
+    barBtn.className = 'capture-bar-btn cancel-timer'
+    barBtn.innerHTML = '✕ BATAL (' + timerCountdown + ')'
+    barBtn.disabled = false
+  } else if (capturePhase === 'ready-1') {
+    const isPsReady = isPhotoshootMode(currentProject?.config?.mode)
+    barBtn.className = 'capture-bar-btn ready-1'
+    const label = isPsReady ? '📷 FOTO' : '📷 FOTO 1 — TOGA'
+    barBtn.textContent = label
+    barBtn.disabled = false
+    // In photoshoot mode, make the button green (like APK)
+    if (isPsReady) {
+      barBtn.style.background = '#22c55e'
+      barBtn.style.color = '#fff'
+    } else {
+      barBtn.style.background = ''
+      barBtn.style.color = ''
+    }
+  } else if (capturePhase === 'ready-2') {
+    barBtn.className = 'capture-bar-btn ready-2'
+    barBtn.textContent = '📷 FOTO 2 — IJAZAH'
+    barBtn.disabled = false
+  } else if (capturePhase === 'sending') {
+    barBtn.className = 'capture-bar-btn sending'
+    barBtn.innerHTML = '⏳ MENGIRIM...'
+    barBtn.disabled = true
+  }
+}
+
+function handleCaptureClick() {
+  if (!currentTarget) return
+  if (capturePhase !== 'ready-1' && capturePhase !== 'ready-2') return
+  
+  if (shutterMode.startsWith('timer-')) {
+    if (timerInterval) {
+      cancelTimer()
+    } else {
+      startTimer(parseInt(shutterMode.split('-')[1]))
+    }
+  } else {
+    doCapture()
+  }
+}
+
+function startTimer(seconds) {
+  timerCountdown = seconds
+  document.getElementById('timerOverlay').classList.remove('hidden')
+  document.getElementById('timerNumber').textContent = seconds
+  updateCaptureButton()
+  
+  timerInterval = setInterval(() => {
+    timerCountdown--
+    if (timerCountdown <= 0) {
+      cancelTimer()
+      doCapture()
+    } else {
+      document.getElementById('timerNumber').textContent = timerCountdown
+      updateCaptureButton()
+    }
+  }, 1000)
+}
+
+function cancelTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval)
+    timerInterval = null
+  }
+  timerCountdown = 0
+  document.getElementById('timerOverlay').classList.add('hidden')
+  updateCaptureButton()
+}
+
+function doCapture() {
+  const canvas = document.getElementById('captureCanvas')
+  const video = document.getElementById('videoPreview')
+  
+  if (!video || video.readyState < 2) {
+    console.warn('[OP] Video not ready for capture — trying to re-initialize camera')
+    // Try to reinitialize camera
+    if (currentStream) {
+      video.srcObject = currentStream
+      video.play().catch(() => {})
+    }
+    return
+  }
+  
+  // Check if frame is black — warn but still capture (user might have lens cap on)
+  const black = isFrameBlack(video)
+  if (black) {
+    console.warn('[OP] WARNING: Video frame appears black — capture may produce black image')
+    showAutoDetectStatus('⚠️ Kamera hitam — coba ganti kamera!', 'warn')
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+      const el = document.getElementById('autoDetectStatus')
+      if (el && el.textContent.includes('hitam')) el.style.display = 'none'
+    }, 3000)
+  }
+  
+  const ratioMap = { '4:3': 4/3, '16:9': 16/9, '3:4': 3/4, '2:3': 2/3, '1:1': 1 }
+  const ratio = ratioMap[currentProject?.config?.ratio] || 4/3
+  
+  const targetWidth = 1920
+  const targetHeight = Math.round(targetWidth / ratio)
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, targetWidth, targetHeight)
+  
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  const videoRatio = vw / vh
+  let sx = 0, sy = 0, sw = vw, sh = vh
+  if (videoRatio > ratio) {
+    sw = vh * ratio
+    sx = (vw - sw) / 2
+  } else {
+    sh = vw / ratio
+    sy = (vh - sh) / 2
+  }
+  
+  if (isMirrored) {
+    ctx.translate(targetWidth, 0)
+    ctx.scale(-1, 1)
+  }
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
+  if (isMirrored) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+  }
+  
+  const frameImg = document.getElementById('frameOverlay')
+  if (frameImg && frameImg.src && !frameImg.classList.contains('hidden') && frameImg.complete) {
+    ctx.drawImage(frameImg, 0, 0, targetWidth, targetHeight)
+  }
+  
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
+  
+  triggerFlash()
+  
+  const mode = currentProject?.config?.mode
+  const isPsCapture = isPhotoshootMode(mode)
+  const pps = photosPerSession(mode)  // Match APK: CameraModes.photosPerSession()
+  const label = isPsCapture ? 'photo' : 
+                (capturePhase === 'ready-1' ? 'toga' : 'ijazah')
+  
+  capturedPhotos.push({ label, dataUrl })
+  
+  // After capture: if non-photoshoot and only first photo done, advance to READY_2
+  // In photoshoot mode, always finalize after 1 photo
+  if (pps > 1 && capturePhase === 'ready-1') {
+    capturePhase = 'ready-2'
+    updateTargetDisplay()
+    updateCaptureButton()
+  } else {
+    capturePhase = 'sending'
+    updateTargetDisplay()
+    updateCaptureButton()
+    sendPhotos()
+  }
+}
+
+function triggerFlash() {
+  const flash = document.getElementById('flashOverlay')
+  flash.classList.add('active')
+  setTimeout(() => flash.classList.remove('active'), 150)
+}
+
+async function sendPhotos() {
+  if (!socket || !currentTarget) return
+  
+  const nim = currentTarget.nim || currentTarget.id
+  const nama = currentTarget.nama || 'Unknown'
+  const mode = currentProject?.config?.mode
+  const isPsSend = isPhotoshootMode(mode)
+  const channel = myChannel
+  
+  const photos = capturedPhotos.map((p, i) => {
+    let filename
+    if (isPsSend) {
+      filename = channel === 1 ? `${'$'}{nim}_${'$'}{nama}.jpg` : `${'$'}{nim}_${'$'}{nama}_Ch${'$'}{channel}.jpg`
+    } else {
+      const suffix = p.label === 'toga' ? '1_Toga' : '2_Ijazah'
+      filename = `${'$'}{nim}_${'$'}{nama}_${'$'}{suffix}.jpg`
+    }
+    return { filename, data: p.dataUrl, label: p.label }
+  })
+  
+  console.log('[OP] Sending photos:', photos.map(p => p.filename))
+  
+  socket.emit('lan-message', {
+    event: 'STUDENT_DONE',
+    data: { 
+      studentId: currentTarget.id, 
+      channel: channel,
+      timestamp: Date.now()
+    }
+  })
+  
+  socket.emit('lan-message', {
+    event: 'PHOTOS_SAVED',
+    data: {
+      studentId: currentTarget.id,
+      nim: nim,
+      nama: nama,
+      channel: channel,
+      photos: photos,
+      timestamp: Date.now()
+    }
+  })
+  
+  socket.emit('lan-message', {
+    event: 'SYNC_DB',
+    data: {
+      ...currentProject,
+      photoHistory: [
+        ...(currentProject?.photoHistory || []),
+        {
+          studentId: currentTarget.id,
+          nim: nim,
+          nama: nama,
+          channel: channel,
+          photos: photos.map(p => ({ filename: p.filename, label: p.label })),
+          timestamp: Date.now()
+        }
+      ]
+    }
+  })
+  
+  // Update photoHistory
+  photoHistory.push({
+    studentId: currentTarget.id,
+    nim: nim,
+    nama: nama,
+    channel: channel,
+    timestamp: Date.now()
+  })
+  
+  // Remove from mcCallBuffer
+  mcCallBuffer = mcCallBuffer.filter(s => s.id !== currentTarget.id)
+  
+  // Update local DB status to done
+  if (currentProject?.database) {
+    const dbStudent = currentProject.database.find(s => s.id === currentTarget.id)
+    if (dbStudent) dbStudent.status = 'done'
+  }
+  
+  capturedPhotos = []
+  currentTarget = null
+  capturePhase = 'standby'
+  updateQueueList()
+  updateTargetDisplay()
+  updateCaptureButton()
+}
+
+// ── Shutter Mode ─────────────────────────────────────────────────────────
+function setShutterMode(mode) {
+  shutterMode = mode
+  document.querySelectorAll('.shutter-chip').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode)
+  })
+  cancelTimer()
+}
+
+// ── Gridline ─────────────────────────────────────────────────────────────
+function toggleGridline() {
+  gridlineEnabled = !gridlineEnabled
+  // Update new switch
+  const gridSwitch = document.getElementById('gridlineSwitch')
+  if (gridSwitch) gridSwitch.classList.toggle('on', gridlineEnabled)
+  const overlay = document.getElementById('gridlineOverlay')
+  
+  if (gridlineEnabled) {
+    overlay.classList.remove('hidden')
+    renderGridline()
+  } else {
+    overlay.classList.add('hidden')
+  }
+}
+
+function renderGridline() {
+  const svg = document.getElementById('gridlineOverlay')
+  const color = 'rgba(212,175,55,0.6)'
+  const props = `stroke="${'$'}{color}" stroke-width="0.3"`
+  const propsSub = `stroke="${'$'}{color}" stroke-width="0.15" opacity="0.4"`
+  
+  svg.innerHTML = `
+    <line x1="33.333" y1="0" x2="33.333" y2="100" ${'$'}{props} />
+    <line x1="66.666" y1="0" x2="66.666" y2="100" ${'$'}{props} />
+    <line x1="0" y1="33.333" x2="100" y2="33.333" ${'$'}{props} />
+    <line x1="0" y1="66.666" x2="100" y2="66.666" ${'$'}{props} />
+    <line x1="0" y1="0" x2="100" y2="100" ${'$'}{propsSub} />
+    <line x1="100" y1="0" x2="0" y2="100" ${'$'}{propsSub} />
+  `
+}
+
+// ── Queue List ───────────────────────────────────────────────────────────
+function updateQueueList() {
+  if (!currentProject?.database) return
+  
+  const mode = currentProject.config?.mode
+  const isPs = isPhotoshootMode(mode)
+  
+  let relevant = []
+  
+  if (isPs) {
+    // Photoshoot mode: combine "sent" students from DB + mcCallBuffer
+    // Exclude already-photographed (photoHistory) and done students
+    const sentStudents = currentProject.database.filter(s => {
+      if (s.status === 'done') return false
+      if (photoHistory.some(ph => ph.studentId === s.id)) return false
+      // Include students with 'sent' status (MC called them)
+      return s.status === 'sent' || isActiveStatus(s.status)
+    })
+    // Add mcCallBuffer students (may overlap with DB — dedupe)
+    const sentIds = new Set(sentStudents.map(s => s.id))
+    const bufferOnly = mcCallBuffer.filter(s => !sentIds.has(s.id))
+    // Merge: DB students first, then buffer-only
+    relevant = [...sentStudents, ...bufferOnly]
+  } else {
+    // Non-photoshoot mode: just show channel students
+    relevant = currentProject.database.filter(s => 
+      s.assignedChannel === myChannel || s.status === `active_${'$'}{myChannel}`
+    )
+  }
+  
+  const statusPriority = { active_1: 0, active_2: 0, sent: 1, pending: 2, done: 3 }
+  relevant.sort((a, b) => (statusPriority[a.status] ?? 9) - (statusPriority[b.status] ?? 9))
+  
+  // Update queue panel title
+  const titleEl = document.getElementById('queuePanelTitle')
+  if (titleEl) {
+    const remaining = relevant.filter(s => s.status !== 'done').length
+    if (isPs) {
+      titleEl.textContent = `Antre dari MC (${'$'}{mcCallBuffer.length + relevant.filter(s => s.status === 'sent').length})`
+    } else {
+      titleEl.textContent = `Cari Antrean (${'$'}{remaining}) • Ch.${'$'}{myChannel}`
+    }
+  }
+  
+  // Render tabular queue (like APK)
+  const tableEl = document.getElementById('queueTable')
+  if (tableEl) {
+    if (relevant.length === 0) {
+      tableEl.innerHTML = '<div class="queue-empty">Tidak ada mahasiswa</div>'
+    } else {
+      tableEl.innerHTML = relevant.slice(0, 30).map((s, idx) => {
+        const isActive = s.status?.startsWith('active')
+        const isDone = s.status === 'done'
+        const isSent = s.status === 'sent'
+        
+        let rowClass = ''
+        if (isActive) rowClass = 'active-row'
+        else if (isSent) rowClass = 'sent-row'
+        else if (isDone) rowClass = 'done-row'
+        
+        let nameClass = 'q-nama-col'
+        if (isActive) nameClass += ' active-name'
+        if (isDone) nameClass += ' done-name'
+        
+        let statusLabel, statusColor
+        if (isActive) { statusLabel = 'Foto'; statusColor = 'var(--gold)' }
+        else if (isSent) { statusLabel = 'Kirim'; statusColor = 'rgba(212,175,55,0.6)' }
+        else if (isDone) { statusLabel = 'Selesai'; statusColor = 'var(--muted)' }
+        else { statusLabel = 'Tunggu'; statusColor = 'var(--border)' }
+        
+        return `<div class="queue-row ${'$'}{rowClass}" onclick="selectQueueItem('${'$'}{s.id}')">
+          <span class="q-idx">${'$'}{idx + 1}</span>
+          <span class="q-nim-col">${'$'}{s.nim || '-'}</span>
+          <span class="${'$'}{nameClass}">${'$'}{s.nama || '-'}</span>
+          <span class="q-status-col" style="color:${'$'}{statusColor}">${'$'}{statusLabel}</span>
+        </div>`
+      }).join('')
+    }
+  }
+  
+  // Also update OP search results
+  renderOpSearchResults()
+}
+
+// ── Tab Switching System ────────────────────────────────────────────────
+function switchTab(tabName) {
+  // Update tab buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabName)
+  })
+  // Update tab pages
+  document.querySelectorAll('.tab-page').forEach(page => {
+    page.classList.toggle('active', page.id === 'tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1))
+  })
+  // Tab name mapping: queue → tabQueue, search → tabSearch, settings → tabSettings
+  const tabMap = { queue: 'tabQueue', search: 'tabSearch', settings: 'tabSettings' }
+  document.querySelectorAll('.tab-page').forEach(page => {
+    page.classList.toggle('active', page.id === tabMap[tabName])
+  })
+}
+
+// Legacy togglePanel — now redirects to tab switching
+function togglePanel(panelId) {
+  const tabMap = { 'queue-list': 'queue', 'op-search': 'search', 'target-info': 'queue', 'shutter-mode': 'settings', 'gridline': 'settings' }
+  const tab = tabMap[panelId]
+  if (tab) switchTab(tab)
+}
+
+// ── Draggable Divider ─────────────────────────────────────────────────
+function initDragDivider() {
+  const divider = document.getElementById('dragDivider')
+  const cameraArea = document.getElementById('cameraArea')
+  const bottomArea = document.getElementById('bottomArea')
+  const operatorScreen = document.getElementById('operatorScreen')
+  
+  if (!divider || !cameraArea || !bottomArea || !operatorScreen) return
+  
+  let isDragging = false
+  let startY = 0
+  let startBottomHeight = 0
+  
+  // Default: bottom area = 40% of screen
+  const defaultPercent = 40
+  const minPercent = 15
+  const maxPercent = 65
+  let currentPercent = defaultPercent
+  
+  function setLayout(percent) {
+    currentPercent = Math.max(minPercent, Math.min(maxPercent, percent))
+    const screenH = operatorScreen.offsetHeight
+    const topBarH = operatorScreen.querySelector('.top-bar').offsetHeight
+    const dividerH = divider.offsetHeight
+    const availH = screenH - topBarH - dividerH
+    const bottomH = Math.round(availH * currentPercent / 100)
+    bottomArea.style.height = bottomH + 'px'
+    cameraArea.style.flex = '1'
+  }
+  
+  // Set initial layout
+  setLayout(defaultPercent)
+  
+  divider.addEventListener('touchstart', (e) => {
+    isDragging = true
+    startY = e.touches[0].clientY
+    startBottomHeight = bottomArea.offsetHeight
+    e.preventDefault()
+  }, { passive: false })
+  
+  divider.addEventListener('mousedown', (e) => {
+    isDragging = true
+    startY = e.clientY
+    startBottomHeight = bottomArea.offsetHeight
+    e.preventDefault()
+  })
+  
+  document.addEventListener('touchmove', (e) => {
+    if (!isDragging) return
+    const dy = startY - e.touches[0].clientY
+    const screenH = operatorScreen.offsetHeight
+    const topBarH = operatorScreen.querySelector('.top-bar').offsetHeight
+    const dividerH = divider.offsetHeight
+    const availH = screenH - topBarH - dividerH
+    const newBottomH = startBottomHeight + dy
+    const newPercent = (newBottomH / availH) * 100
+    setLayout(newPercent)
+  }, { passive: true })
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return
+    const dy = startY - e.clientY
+    const screenH = operatorScreen.offsetHeight
+    const topBarH = operatorScreen.querySelector('.top-bar').offsetHeight
+    const dividerH = divider.offsetHeight
+    const availH = screenH - topBarH - dividerH
+    const newBottomH = startBottomHeight + dy
+    const newPercent = (newBottomH / availH) * 100
+    setLayout(newPercent)
+  })
+  
+  document.addEventListener('touchend', () => { isDragging = false })
+  document.addEventListener('mouseup', () => { isDragging = false })
+  
+  // Handle resize
+  window.addEventListener('resize', () => setLayout(currentPercent))
+}
+
+// ── OP Search ─────────────────────────────────────────────────────────
+let opSearchQuery = ''
+
+function handleOpSearch(query) {
+  opSearchQuery = query.toLowerCase().trim()
+  renderOpSearchResults()
+}
+
+function renderOpSearchResults() {
+  const container = document.getElementById('opSearchResults')
+  if (!container) return
+  if (!currentProject?.database) {
+    container.innerHTML = '<div class="opsearch-empty">Belum ada peserta dikirim MC</div>'
+    return
+  }
+  
+  const mode = currentProject.config?.mode
+  const isPsSearch = isPhotoshootMode(mode)
+  let students = currentProject.database.filter(s => {
+    if (isPsSearch) {
+      // In photoshoot mode, show all students except done
+      if (s.status === 'done') return false
+      if (photoHistory.some(ph => ph.studentId === s.id)) return false
+      return true
+    }
+    return s.assignedChannel === myChannel || s.status === `active_${'$'}{myChannel}`
+  })
+  
+  // Filter by search query
+  if (opSearchQuery) {
+    students = students.filter(s => 
+      (s.nama && s.nama.toLowerCase().includes(opSearchQuery)) || 
+      (s.nim && s.nim.toLowerCase().includes(opSearchQuery))
+    )
+  }
+  
+  if (students.length === 0) {
+    container.innerHTML = '<div class="opsearch-empty">' + (opSearchQuery ? 'Tidak ditemukan' : 'Belum ada peserta dikirim MC') + '</div>'
+    return
+  }
+  
+  container.innerHTML = students.slice(0, 20).map(s => {
+    const isCurrent = currentTarget && currentTarget.id === s.id
+    const isActive = s.status?.startsWith('active')
+    const isDone = s.status === 'done'
+    const isSent = s.status === 'sent'
+    
+    let statusLabel = ''
+    let statusColor = 'var(--muted)'
+    if (!isPsSearch) {
+      if (isActive) { statusLabel = 'Foto'; statusColor = 'var(--gold)' }
+      else if (isSent) { statusLabel = 'Kirim'; statusColor = 'rgba(212,175,55,0.7)' }
+      else if (isDone) { statusLabel = 'OK'; statusColor = 'var(--success)' }
+    }
+    
+    return `<div class="opsearch-item" onclick="selectOpSearchItem('${'$'}{s.id}')">
+      <span class="os-nim">${'$'}{s.nim || '-'}</span>
+      <span class="os-nama ${'$'}{isCurrent ? 'active' : ''}">${'$'}{s.nama || '-'}</span>
+      ${'$'}{statusLabel ? `<span class="os-status" style="color:${'$'}{statusColor}">${'$'}{statusLabel}</span>` : ''}
+      ${'$'}{isCurrent ? '📷' : ''}
+    </div>`
+  }).join('')
+}
+
+function selectOpSearchItem(studentId) {
+  if (!currentProject?.database) return
+  const student = currentProject.database.find(s => s.id === studentId)
+  if (student && student.status !== 'done') {
+    // Remove from mcCallBuffer when selected (like APK)
+    mcCallBuffer = mcCallBuffer.filter(s => s.id !== studentId)
+    currentTarget = student
+    capturedPhotos = []
+    capturePhase = 'ready-1'
+    updateQueueList()
+    updateTargetDisplay()
+    updateCaptureButton()
+    updateTargetInfoPanel()
+  }
+}
+
+// ── Target Info Panel ─────────────────────────────────────────────────
+function updateTargetInfoPanel() {
+  // Update the always-visible target bar (APK-style)
+  const tbName = document.getElementById('tbName')
+  const tbNim = document.getElementById('tbNim')
+  const tbBadge = document.getElementById('tbBadge')
+  
+  if (currentTarget && capturePhase !== 'standby') {
+    if (tbName) tbName.textContent = currentTarget.nama || '-'
+    if (tbNim) tbNim.textContent = currentTarget.nim || '-'
+    
+    const isPsPanel = isPhotoshootMode(currentProject?.config?.mode)
+    
+    if (capturePhase === 'ready-1') {
+      if (tbBadge) { tbBadge.className = 'tb-badge toga'; tbBadge.textContent = isPsPanel ? 'Siap Foto' : 'Toga'; }
+    } else if (capturePhase === 'ready-2') {
+      if (tbBadge) { tbBadge.className = 'tb-badge ijazah'; tbBadge.textContent = 'Ijazah'; }
+    } else if (capturePhase === 'sending') {
+      if (tbBadge) { tbBadge.className = 'tb-badge sending'; tbBadge.textContent = 'Kirim'; }
+    } else {
+      if (tbBadge) { tbBadge.className = 'tb-badge standby'; tbBadge.textContent = 'STANDBY'; }
+    }
+  } else {
+    if (tbName) tbName.textContent = 'Menunggu target...'
+    if (tbNim) tbNim.textContent = ''
+    if (tbBadge) { tbBadge.className = 'tb-badge standby'; tbBadge.textContent = 'STANDBY'; }
+  }
+}
+
+function selectQueueItem(studentId) {
+  if (!currentProject?.database) return
+  const mode = currentProject.config?.mode
+  const isPsQueue = isPhotoshootMode(mode)
+  if (!isPsQueue) return
+  
+  const student = currentProject.database.find(s => s.id === studentId)
+  if (student && student.status !== 'done') {
+    // Remove from mcCallBuffer when selected (like APK)
+    mcCallBuffer = mcCallBuffer.filter(s => s.id !== studentId)
+    currentTarget = student
+    capturedPhotos = []
+    capturePhase = 'ready-1'
+    updateQueueList()
+    updateTargetDisplay()
+    updateCaptureButton()
+  }
+}
+
+// ── Latency Ping ─────────────────────────────────────────────────────────
+function startLatencyPing() {
+  stopLatencyPing()
+  pingInterval = setInterval(() => {
+    if (socket?.connected) {
+      const start = Date.now()
+      socket.emit('saatiril-ping', start)
+      socket.once('saatiril-pong', (ts) => {
+        latencyMs = Date.now() - ts
+        document.getElementById('latencyBadge').textContent = latencyMs + 'ms'
+      })
+    }
+  }, 5000)
+}
+
+function stopLatencyPing() {
+  if (pingInterval) {
+    clearInterval(pingInterval)
+    pingInterval = null
+  }
+}
+
+// ── Keyboard Shortcuts ───────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault()
+    handleCaptureClick()
+  } else if (e.code === 'Escape') {
+    cancelTimer()
+  }
+})
+
+// ── Initialize ───────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  // Restore saved server IP
+  const savedIp = localStorage.getItem('saatiril_server_ip')
+  if (savedIp) document.getElementById('serverIp').value = savedIp
+  
+  // Auto-detect server IP from current URL
+  if (window.location.hostname && window.location.hostname !== 'localhost' && 
+      window.location.hostname !== '127.0.0.1' && !window.location.hostname.startsWith('[')) {
+    document.getElementById('serverIp').value = window.location.hostname
+  }
+  
+  // Update Chrome Flag URL in troubleshooting section
+  const currentHost = window.location.hostname || '192.168.x.x'
+  const currentPort = window.location.port || '3000'
+  const flagUrlEl = document.getElementById('flagUrl')
+  if (flagUrlEl) {
+    flagUrlEl.textContent = `http://${'$'}{currentHost}:${'$'}{currentPort}`
+  }
+  const flagUrlPcEl = document.getElementById('flagUrlPc')
+  if (flagUrlPcEl) {
+    flagUrlPcEl.textContent = `http://${'$'}{currentHost}:${'$'}{currentPort}`
+  }
+  
+  // Mirror toggle default (new switch)
+  const mirrorSwitch = document.getElementById('mirrorSwitch')
+  if (mirrorSwitch) mirrorSwitch.classList.add('on')
+  
+  // Initialize drag divider
+  initDragDivider()
+  
+  // Check if camera permission is already granted
+  checkExistingPermission()
+})
+
+async function checkExistingPermission() {
+  try {
+    // Check permission status
+    if (navigator.permissions) {
+      const result = await navigator.permissions.query({ name: 'camera' })
+      console.log('[OP] Camera permission status:', result.state)
+      
+      if (result.state === 'granted') {
+        cameraPermissionGranted = true
+        const btn = document.getElementById('permBtn')
+        btn.textContent = '✅ Izin Kamera Diberikan'
+        btn.classList.add('granted')
+        document.getElementById('permStatus').textContent = 'Izin kamera sudah diberikan'
+        document.getElementById('permStatus').style.color = '#4ade80'
+        
+        // Just enumerate to show camera list — auto-detect will happen when entering operator screen
+        await enumerateCameras()
+      }
+      
+      // Listen for permission changes
+      result.addEventListener('change', async () => {
+        if (result.state === 'granted') {
+          cameraPermissionGranted = true
+          const btn = document.getElementById('permBtn')
+          btn.textContent = '✅ Izin Kamera Diberikan'
+          btn.classList.add('granted')
+          await enumerateCameras()
+        }
+      })
+    }
+  } catch(err) {
+    console.warn('[OP] Permission check failed:', err)
+  }
+}
+
+// ── Auto-connect (Android ktor server: /operator?channel=1&password=...) ──
+// The Android server serves the operator page at /operator?channel=X&password=Y
+// Auto-connect using the channel and password from the URL. Also supports the
+// Electron-style ?role=operator URL for backward compatibility.
+(async function() {
+  const params = new URLSearchParams(window.location.search)
+  const roleParam = params.get('role')
+  const channel = parseInt(params.get('channel') || '1')
+  const password = params.get('password') || ''
+
+  // Set channel
+  selectChannel(channel)
+
+  // Auto-detect server IP from current URL (the page is served from the ktor server)
+  const ip = window.location.hostname
+  if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
+    const ipInput = document.getElementById('serverIp')
+    if (ipInput) ipInput.value = ip
+  }
+
+  // Hash password from URL if provided (Android: ?password=secret)
+  if (password) {
+    try {
+      sessionPasswordHash = await sha256(password)
+      const pwdInput = document.getElementById('sessionPassword')
+      if (pwdInput) pwdInput.value = password
+      console.log('[OP] Password from URL hashed:', sessionPasswordHash ? sessionPasswordHash.slice(0,8) + '...' : 'null')
+    } catch(e) {
+      console.error('[OP] Failed to hash URL password:', e)
+    }
+  }
+
+  // Auto-connect if: (1) role=operator (Electron style) OR (2) channel param present (Android style)
+  if (roleParam === 'operator' || params.has('channel')) {
+    setTimeout(() => handleConnect(), 500)
+  }
+})()
+</script>})()
+</script>
+
 </body>
-</html>"""
+</html>
+"""
