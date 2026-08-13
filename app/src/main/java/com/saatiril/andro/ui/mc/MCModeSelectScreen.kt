@@ -73,8 +73,8 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
         ModeCard(
             icon = Icons.Default.Bluetooth,
             title = "BLE REMOTE",
-            subtitle = "Bluetooth — Untuk Admin HP",
-            description = "MC = Client, Admin HP = Server\n100% immune interferensi WiFi\nCocok untuk 3000+ orang",
+            subtitle = "Bluetooth — Untuk Admin HP (APK)",
+            description = "MC = Client, Admin HP = Server\n100% immune interferensi WiFi\nCocok untuk 3000+ orang\n⚠️ Admin HARUS HP (bukan Laptop)",
             colors = listOf(Color(0xFF3b82f6), Color(0xFF1d4ed8)),
             borderColor = Color(0xFF3b82f6),
             onClick = { viewModel.selectMcRemoteRole() }
@@ -85,8 +85,8 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
         ModeCard(
             icon = Icons.Default.BluetoothConnected,
             title = "BLE SERVER",
-            subtitle = "Bluetooth — Untuk Admin Laptop",
-            description = "MC = Server, Electron = Client\n100% immune interferensi WiFi\nCocok untuk Laptop Electron",
+            subtitle = "Bluetooth — Untuk Admin Laptop Electron",
+            description = "MC = Server, Electron = Client\n100% immune interferensi WiFi\nCocok untuk Laptop Electron\n⚠️ Admin buka /admin-ble di Electron",
             colors = listOf(Color(0xFF8b5cf6), Color(0xFF6d28d9)),
             borderColor = Color(0xFF8b5cf6),
             onClick = { viewModel.selectMcRemoteServerRole() }
@@ -98,12 +98,35 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
             icon = Icons.Default.Wifi,
             title = "WIFI / LAN",
             subtitle = "WiFi atau Kabel LAN",
-            description = "Untuk Admin Electron (Laptop)\nConnect via WiFi atau wired LAN\nCocok untuk wired LAN setup",
+            description = "Untuk Admin HP atau Laptop\nConnect via WiFi atau wired LAN\nPaling mudah — tanpa Bluetooth\n⚠️ Pastikan satu jaringan WiFi/LAN",
             colors = listOf(Color(0xFF06b6d4), Color(0xFF0891b2)),
             borderColor = Color(0xFF06b6d4),
             onClick = { viewModel.selectMcRole() }
         )
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
+
+        // Help hint
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = PANEL.copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Text(
+                    "💡 Cara memilih mode:",
+                    style = TextStyle(color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "• Admin di HP (APK Saatiril) → BLE REMOTE atau WIFI\n" +
+                    "• Admin di Laptop (Electron) → BLE SERVER atau WIFI\n" +
+                    "• Admin di Laptop + MC di HP lain → WIFI (paling stabil)\n" +
+                    "• Tidak yakin? Pilih WIFI / LAN",
+                    style = TextStyle(color = MUTED, fontSize = 10.sp)
+                )
+            }
+        }
+        Spacer(Modifier.height(16.dp))
 
         Text(
             "v${com.saatiril.andro.BuildConfig.VERSION_NAME}",

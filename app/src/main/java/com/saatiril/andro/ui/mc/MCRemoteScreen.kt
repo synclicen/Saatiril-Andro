@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -72,6 +73,8 @@ fun MCRemoteScreen(adminViewModel: AdminViewModel) {
     var isScanning by remember { mutableStateOf(false) }
     var isConnected by remember { mutableStateOf(false) }
     var foundDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
+    var scanStartTime by remember { mutableStateOf(0L) }
+    var showTimeoutHint by remember { mutableStateOf(false) }
 
     // Data from Admin
     var nextStudent by remember { mutableStateOf<JSONObject?>(null) }
@@ -139,6 +142,19 @@ fun MCRemoteScreen(adminViewModel: AdminViewModel) {
         }
     }
 
+    // Timeout hint: if scanning for >15s with no results, show a helpful hint
+    LaunchedEffect(isScanning, foundDevices) {
+        if (isScanning && foundDevices.isEmpty() && scanStartTime > 0) {
+            showTimeoutHint = false
+            delay(15000)
+            if (isScanning && foundDevices.isEmpty()) {
+                showTimeoutHint = true
+            }
+        } else {
+            showTimeoutHint = false
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().background(BG)
     ) {
@@ -203,9 +219,11 @@ fun MCRemoteScreen(adminViewModel: AdminViewModel) {
                 bleClient = bleClient,
                 isScanning = isScanning,
                 foundDevices = foundDevices,
+                showTimeoutHint = showTimeoutHint,
                 onStartScan = {
                     if (bleClient.isBluetoothAvailable()) {
                         foundDevices = emptyList()
+                        scanStartTime = System.currentTimeMillis()
                         isScanning = bleClient.startScan()
                     }
                 },
@@ -237,6 +255,7 @@ private fun MCRemoteScanScreen(
     bleClient: BLEClientManager,
     isScanning: Boolean,
     foundDevices: List<BluetoothDevice>,
+    showTimeoutHint: Boolean = false,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
     onConnect: (BluetoothDevice) -> Unit
@@ -310,6 +329,34 @@ private fun MCRemoteScanScreen(
                 }
             } else if (isScanning) {
                 Text("Mencari perangkat Admin...", style = TextStyle(color = MUTED, fontSize = 12.sp))
+            }
+
+            // Timeout hint — shown after 15s of scanning with no results
+            if (showTimeoutHint && foundDevices.isEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AMBER.copy(alpha = 0.1f)),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AMBER)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "⚠️ Tidak menemukan Admin?",
+                            style = TextStyle(color = AMBER, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Mode BLE REMOTE ini hanya untuk Admin HP (APK Saatiril).\n\n" +
+                            "Jika Admin Anda adalah Laptop (Electron):\n" +
+                            "→ Kembali dan pilih mode BLE SERVER atau WIFI / LAN\n\n" +
+                            "Untuk BLE REMOTE, Admin HP harus:\n" +
+                            "• Install APK Saatiril (bukan Electron)\n" +
+                            "• Buka app → buat project → server aktif\n" +
+                            "• Bluetooth Admin HP aktif",
+                            style = TextStyle(color = MUTED, fontSize = 10.sp)
+                        )
+                    }
+                }
             }
         }
     }
