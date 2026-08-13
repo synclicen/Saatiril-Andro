@@ -150,7 +150,8 @@ class SocketManager {
 
         try {
             val options = IO.Options().apply {
-                path = "/"  // MUST match server config
+                path = "/"  // ktor (APK) server uses path '/'
+                // Electron server uses '/socket.io/' — handled by allowEIO3 + path fallback
                 transports = arrayOf("websocket", "polling")
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE  // Never give up during ceremony!
