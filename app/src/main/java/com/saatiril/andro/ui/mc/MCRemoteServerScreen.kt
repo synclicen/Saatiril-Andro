@@ -115,6 +115,22 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
             }
         }
 
+        // CRITICAL: Receive project data pushed from Electron admin via BLE.
+        // Without these callbacks, MC shows "Tidak ada mahasiswa" because
+        // the data written by admin-ble.html is received but never processed.
+        bleServer.onProjectInfoReceived = { json ->
+            try { projectInfo = JSONObject(json) } catch (_: Exception) {}
+        }
+        bleServer.onQueueDataReceived = { json ->
+            try { queueData = JSONObject(json) } catch (_: Exception) {}
+        }
+        bleServer.onNextStudentReceived = { json ->
+            try {
+                val obj = JSONObject(json)
+                nextStudent = if (obj.has("id")) obj else null
+            } catch (_: Exception) {}
+        }
+
         onDispose {
             bleServer.stop()
         }
