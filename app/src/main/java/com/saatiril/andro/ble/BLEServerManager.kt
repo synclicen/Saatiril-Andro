@@ -353,26 +353,38 @@ class BLEServerManager(private val context: Context) {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // CRITICAL: Primary advertisement contains ONLY the service UUID.
-        // Device name goes in scan response to avoid 31-byte overflow.
+        // CRITICAL: BLE advertisement packet is limited to 31 bytes.
+        // A 128-bit service UUID takes ~16 bytes (with header).
+        // Device name can be 10-20 bytes.
+        // Including BOTH in the same packet causes DATA_TOO_LARGE error.
+        //
+        // Solution: put ONLY service UUID in primary advertisement,
+        // put ONLY device name in scan response (another 31 bytes).
+        //
+        // Previous "belt & suspenders" approach (service UUID in BOTH ad + scan response)
+        // caused DATA_TOO_LARGE on Redmi Note 13 5G because device name (17 bytes) +
+        // txPower (2 bytes) + service UUID (16 bytes) > 31 bytes.
+        //
+        // Web Bluetooth filter `services: [UUID]` only needs the UUID in ONE of the
+        // two packets — primary advertisement is sufficient.
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(java.util.UUID.fromString(BLEProtocol.SERVICE_UUID)))
             .build()
 
-        // Scan response: device name + tx power + service UUID again (belt & suspenders).
-        // Some Web Bluetooth implementations (Windows) only look at scan response.
-        // Including the service UUID here too increases discoverability.
+        // Scan response: device name ONLY (no service UUID, no tx power).
+        // This keeps the scan response under 31 bytes even with long device names.
+        // The device name shows in the Web Bluetooth picker so user can identify MC HP.
         val scanResponse = AdvertiseData.Builder()
             .setIncludeDeviceName(true)
-            .setIncludeTxPowerLevel(true)
-            .addServiceUuid(ParcelUuid(java.util.UUID.fromString(BLEProtocol.SERVICE_UUID)))
+            .setIncludeTxPowerLevel(false)
+            // Do NOT add service UUID here — it would overflow with device name
             .build()
 
         advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                Log.i(TAG, "BLE advertising started — LOW_LATENCY, service UUID in ad + scan response")
+                Log.i(TAG, "BLE advertising started — service UUID in ad, device name in scan response")
                 advertisingStatus = "advertising"
                 advertisingError = ""
             }
