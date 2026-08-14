@@ -313,6 +313,35 @@ class BLEServerManager(private val context: Context) {
             return
         }
 
+        // CRITICAL: Check BLUETOOTH_ADVERTISE permission (Android 12+/API 31+).
+        // Without this permission, startAdvertising() throws SecurityException
+        // silently — the callback never fires, advertising never starts.
+        // This was the ROOT CAUSE of "No compatible devices found" on
+        // Redmi Note 13 5G (Android 13) — the permission was missing from
+        // the manifest AND not requested at runtime.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val permGranted = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!permGranted) {
+                Log.e(TAG, "BLUETOOTH_ADVERTISE permission NOT granted — advertising will fail silently!")
+                advertisingStatus = "failed"
+                advertisingError = "Permission BLUETOOTH_ADVERTISE belum diberikan. Buka Settings → Apps → Saatiril MC → Permissions → Nearby devices → Allow."
+                return
+            }
+        }
+
+        // Also check Location permission (required for BLE on Android 6-12)
+        val locationGranted = context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!locationGranted) {
+            Log.e(TAG, "ACCESS_FINE_LOCATION permission NOT granted — BLE advertising may fail!")
+            advertisingStatus = "failed"
+            advertisingError = "Permission Location belum diberikan. Buka Settings → Apps → Saatiril MC → Permissions → Location → Allow."
+            return
+        }
+
+        Log.i(TAG, "All BLE permissions granted. Starting advertising...")
+
         // OPTIMIZATION: Use LOW_LATENCY for maximum discoverability.
         // This uses more battery but ensures the device is found within 1-2 seconds.
         // Combined with setTimeout(0) + auto-restart every 3 min, this is reliable.

@@ -95,6 +95,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
             btPermissionLauncher.launch(arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
                 Manifest.permission.ACCESS_FINE_LOCATION
             ))
         }
@@ -178,12 +179,23 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                 Icon(Icons.Default.Bluetooth, contentDescription = null, tint = GOLD, modifier = Modifier.size(48.dp))
                 Spacer(Modifier.height(12.dp))
                 Text("Izin Bluetooth Diperlukan", style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold))
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "4 izin diperlukan untuk BLE SERVER:\n" +
+                    "• Bluetooth SCAN — mencari perangkat\n" +
+                    "• Bluetooth CONNECT — koneksi GATT\n" +
+                    "• Bluetooth ADVERTISE — advertising (WAJIB!)\n" +
+                    "• Location — untuk BLE di Android",
+                    style = TextStyle(color = MUTED, fontSize = 11.sp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = {
                         btPermissionLauncher.launch(arrayOf(
                             Manifest.permission.BLUETOOTH_SCAN,
                             Manifest.permission.BLUETOOTH_CONNECT,
+                            Manifest.permission.BLUETOOTH_ADVERTISE,
                             Manifest.permission.ACCESS_FINE_LOCATION
                         ))
                     },
