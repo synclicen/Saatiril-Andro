@@ -68,6 +68,11 @@ class BLEServerManager(private val context: Context) {
     // Callback for trigger actions from MC
     var onTriggerReceived: ((action: String, studentId: String?) -> Unit)? = null
 
+    // Callbacks for data pushed from Electron admin (via admin-ble.html)
+    var onNextStudentReceived: ((json: String) -> Unit)? = null
+    var onQueueDataReceived: ((json: String) -> Unit)? = null
+    var onProjectInfoReceived: ((json: String) -> Unit)? = null
+
     /** Check if Bluetooth is supported and enabled. */
     fun isBluetoothAvailable(): Boolean {
         return bluetoothAdapter != null && bluetoothAdapter!!.isEnabled
@@ -230,12 +235,16 @@ class BLEServerManager(private val context: Context) {
             android.bluetooth.BluetoothGattService.SERVICE_TYPE_PRIMARY
         )
 
-        // Characteristic: next_student (READ + NOTIFY)
+        // Characteristic: next_student (READ + WRITE + NOTIFY)
+        // WRITE permission allows Electron admin-ble.html to push next student data
+        // to MC via writeValue(). Without WRITE, the write fails silently.
         nextStudentChar = BluetoothGattCharacteristic(
             java.util.UUID.fromString(BLEProtocol.CHAR_NEXT_STUDENT),
             BluetoothGattCharacteristic.PROPERTY_READ or
+                BluetoothGattCharacteristic.PROPERTY_WRITE or
                 BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_READ
+            BluetoothGattCharacteristic.PERMISSION_READ or
+                BluetoothGattCharacteristic.PERMISSION_WRITE
         ).apply {
             value = nextStudentJson.toByteArray(StandardCharsets.UTF_8)
             addDescriptor(createCCCD())
@@ -248,33 +257,39 @@ class BLEServerManager(private val context: Context) {
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
 
-        // Characteristic: status (NOTIFY)
+        // Characteristic: status (READ + WRITE + NOTIFY)
         statusChar = BluetoothGattCharacteristic(
             java.util.UUID.fromString(BLEProtocol.CHAR_STATUS),
             BluetoothGattCharacteristic.PROPERTY_READ or
+                BluetoothGattCharacteristic.PROPERTY_WRITE or
                 BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_READ
+            BluetoothGattCharacteristic.PERMISSION_READ or
+                BluetoothGattCharacteristic.PERMISSION_WRITE
         ).apply {
             value = statusJson.toByteArray(StandardCharsets.UTF_8)
             addDescriptor(createCCCD())
         }
 
-        // Characteristic: queue_data (READ + NOTIFY)
+        // Characteristic: queue_data (READ + WRITE + NOTIFY)
         queueDataChar = BluetoothGattCharacteristic(
             java.util.UUID.fromString(BLEProtocol.CHAR_QUEUE_DATA),
             BluetoothGattCharacteristic.PROPERTY_READ or
+                BluetoothGattCharacteristic.PROPERTY_WRITE or
                 BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_READ
+            BluetoothGattCharacteristic.PERMISSION_READ or
+                BluetoothGattCharacteristic.PERMISSION_WRITE
         ).apply {
             value = queueDataJson.toByteArray(StandardCharsets.UTF_8)
             addDescriptor(createCCCD())
         }
 
-        // Characteristic: project_info (READ)
+        // Characteristic: project_info (READ + WRITE)
         val projectInfoChar = BluetoothGattCharacteristic(
             java.util.UUID.fromString(BLEProtocol.CHAR_PROJECT_INFO),
-            BluetoothGattCharacteristic.PROPERTY_READ,
-            BluetoothGattCharacteristic.PERMISSION_READ
+            BluetoothGattCharacteristic.PROPERTY_READ or
+                BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_READ or
+                BluetoothGattCharacteristic.PERMISSION_WRITE
         ).apply {
             value = projectInfoJson.toByteArray(StandardCharsets.UTF_8)
         }
@@ -489,6 +504,33 @@ class BLEServerManager(private val context: Context) {
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse trigger JSON: ${e.message}")
                 }
+            } else if (uuid == BLEProtocol.CHAR_NEXT_STUDENT) {
+                // Admin-ble.html pushes next student data to MC
+                val jsonStr = String(value, StandardCharsets.UTF_8)
+                Log.i(TAG, "Next student data received from admin: $jsonStr")
+                nextStudentJson = jsonStr
+                nextStudentChar?.value = value
+                // Notify any subscribed MC UI components
+                onNextStudentReceived?.invoke(jsonStr)
+            } else if (uuid == BLEProtocol.CHAR_QUEUE_DATA) {
+                // Admin-ble.html pushes queue data to MC
+                val jsonStr = String(value, StandardCharsets.UTF_8)
+                Log.i(TAG, "Queue data received from admin: $jsonStr")
+                queueDataJson = jsonStr
+                queueDataChar?.value = value
+                onQueueDataReceived?.invoke(jsonStr)
+            } else if (uuid == BLEProtocol.CHAR_PROJECT_INFO) {
+                // Admin-ble.html pushes project info to MC
+                val jsonStr = String(value, StandardCharsets.UTF_8)
+                Log.i(TAG, "Project info received from admin: $jsonStr")
+                projectInfoJson = jsonStr
+                onProjectInfoReceived?.invoke(jsonStr)
+            } else if (uuid == BLEProtocol.CHAR_STATUS) {
+                // Admin-ble.html pushes status update to MC
+                val jsonStr = String(value, StandardCharsets.UTF_8)
+                Log.i(TAG, "Status data received from admin: $jsonStr")
+                statusJson = jsonStr
+                statusChar?.value = value
             }
 
             if (responseNeeded) {
