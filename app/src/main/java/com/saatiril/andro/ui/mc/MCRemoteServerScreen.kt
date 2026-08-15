@@ -382,11 +382,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                 Button(
                     onClick = {
                         // Send trigger to Electron via BLE notification
-                        val json = JSONObject().apply {
-                            put("action", BLEProtocol.Action.PANGGIL)
-                            nextStudent?.let { put("studentId", it.optString("id")) }
-                        }.toString()
-                        bleServer.updateStatus(json)
+                        bleServer.sendTrigger(BLEProtocol.Action.PANGGIL, nextStudent?.optString("id"))
                         statusPhase = BLEProtocol.Phase.READY
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -405,10 +401,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(
                         onClick = {
-                            val json = JSONObject().apply {
-                                put("action", BLEProtocol.Action.NEXT)
-                            }.toString()
-                            bleServer.updateStatus(json)
+                            bleServer.sendTrigger(BLEProtocol.Action.NEXT)
                         },
                         modifier = Modifier.weight(1f).height(44.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = CYAN),
@@ -421,10 +414,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                     }
                     OutlinedButton(
                         onClick = {
-                            val json = JSONObject().apply {
-                                put("action", BLEProtocol.Action.RESET)
-                            }.toString()
-                            bleServer.updateStatus(json)
+                            bleServer.sendTrigger(BLEProtocol.Action.RESET)
                         },
                         modifier = Modifier.weight(1f).height(44.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AMBER),
