@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import com.saatiril.andro.ble.BLEClientManager
 import com.saatiril.andro.ble.BLEServerManager
 import com.saatiril.andro.ble.BLEProtocol
@@ -103,32 +104,38 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
 
     // Set up BLE server callbacks
     DisposableEffect(Unit) {
-        // When Electron writes to trigger characteristic
-        bleServer.onTriggerReceived = { action, studentId ->
-            // Electron sends actions to MC — but in this reversed mode,
-            // MC is the one sending triggers. So this callback handles
-            // status updates from Electron (e.g., "DONE" when photo saved)
-            if (action == "STATUS_DONE") {
-                statusPhase = BLEProtocol.Phase.DONE
-            } else if (action == "STATUS_READY") {
-                statusPhase = BLEProtocol.Phase.READY
-            }
-        }
-
         // CRITICAL: Receive project data pushed from Electron admin via BLE.
         // Without these callbacks, MC shows "Tidak ada mahasiswa" because
         // the data written by admin-ble.html is received but never processed.
+        // IMPORTANT: BLE callbacks run on a BACKGROUND THREAD. Compose state
+        // updates must happen on the MAIN THREAD to trigger recomposition.
+        // Without Dispatchers.Main, the state is set but UI never updates.
         bleServer.onProjectInfoReceived = { json ->
-            try { projectInfo = JSONObject(json) } catch (_: Exception) {}
+            try {
+                val obj = JSONObject(json)
+                android.os.Handler(android.os.Looper.getMainLooper()).post { projectInfo = obj }
+            } catch (_: Exception) {}
         }
         bleServer.onQueueDataReceived = { json ->
-            try { queueData = JSONObject(json) } catch (_: Exception) {}
+            try {
+                val obj = JSONObject(json)
+                android.os.Handler(android.os.Looper.getMainLooper()).post { queueData = obj }
+            } catch (_: Exception) {}
         }
         bleServer.onNextStudentReceived = { json ->
             try {
                 val obj = JSONObject(json)
-                nextStudent = if (obj.has("id")) obj else null
+                android.os.Handler(android.os.Looper.getMainLooper()).post { nextStudent = if (obj.has("id")) obj else null }
             } catch (_: Exception) {}
+        }
+        bleServer.onTriggerReceived = { action, studentId ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (action == "STATUS_DONE") {
+                    statusPhase = BLEProtocol.Phase.DONE
+                } else if (action == "STATUS_READY") {
+                    statusPhase = BLEProtocol.Phase.READY
+                }
+            }
         }
 
         onDispose {
