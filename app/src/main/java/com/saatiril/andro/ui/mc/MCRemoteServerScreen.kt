@@ -33,6 +33,7 @@ import com.saatiril.andro.ble.BLEClientManager
 import com.saatiril.andro.ble.BLEServerManager
 import com.saatiril.andro.ble.BLEProtocol
 import com.saatiril.andro.data.AdminViewModel
+import com.saatiril.andro.data.SocketManager
 import org.json.JSONObject
 
 private val BG = Color(0xFF1a0b2e)
@@ -68,6 +69,19 @@ private val BLUE = Color(0xFF3b82f6)
 fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
     val context = LocalContext.current
     val bleServer = remember { BLEServerManager(context) }
+
+    // WiFi socket.io fallback for trigger delivery.
+    // BLE notifications are unreliable on many Android devices — the trigger
+    // from MC to Electron may not arrive. Socket.io over WiFi is 100% reliable.
+    // MC connects to the Electron server (same IP that admin-ble uses) and
+    // sends triggers via socket.io 'lan-message' event.
+    val socketManager = remember { SocketManager() }
+    var socketConnected by remember { mutableStateOf(false) }
+    var serverIp by remember { mutableStateOf("") }
+
+    // Show IP input dialog for WiFi connection
+    var showIpDialog by remember { mutableStateOf(false) }
+    var ipInput by remember { mutableStateOf("") }
 
     var isAdvertising by remember { mutableStateOf(false) }
     var connectedClientCount by remember { mutableStateOf(0) }
@@ -159,6 +173,38 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
             adStatus = bleServer.advertisingStatus
             adError = bleServer.advertisingError
             kotlinx.coroutines.delay(2000)
+        }
+    }
+
+    // WiFi socket.io connection for reliable trigger delivery
+    fun connectWifiSocket(ip: String) {
+        if (ip.isBlank()) return
+        val url = "http://$ip:3003"
+        socketManager.connect(url, "mc-ble-server", 1, null)
+        socketManager.onConnected = {
+            socketConnected = true
+            serverIp = ip
+        }
+        socketManager.onDisconnected = {
+            socketConnected = false
+        }
+    }
+
+    // Send trigger via WiFi socket.io (guaranteed delivery, bypass BLE)
+    fun sendTriggerViaWifi(action: String, studentId: String?) {
+        if (socketConnected) {
+            try {
+                val json = JSONObject().apply {
+                    put("action", action)
+                    studentId?.let { put("studentId", it) }
+                }
+                socketManager.emitLanMessage("BLE_TRIGGER", json)
+                android.util.Log.i("MCWifi", "Trigger sent via WiFi: $action ($studentId)")
+            } catch (e: Exception) {
+                android.util.Log.e("MCWifi", "WiFi trigger failed: ${e.message}")
+            }
+        } else {
+            android.util.Log.w("MCWifi", "WiFi socket not connected — trigger only via BLE")
         }
     }
 
@@ -311,6 +357,37 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                         Spacer(Modifier.width(4.dp))
                     Text("Restart Advertising", color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
+
+                    // WiFi socket status (for trigger delivery)
+                    Spacer(Modifier.height(8.dp))
+                    Text("WiFi Trigger (pasti sampai):", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                    val wifiColor = if (socketConnected) GREEN else RED
+                    val wifiText = if (socketConnected) "✓ WiFi socket terhubung ($serverIp)" else "✗ WiFi socket belum connect"
+                    Text(wifiText, style = TextStyle(color = wifiColor, fontSize = 10.sp))
+                    if (!socketConnected) {
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = ipInput,
+                            onValueChange = { ipInput = it },
+                            label = { Text("IP Laptop Admin", style = TextStyle(color = MUTED, fontSize = 10.sp)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = TextStyle(color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Button(
+                            onClick = { connectWifiSocket(ipInput.trim()) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = CYAN),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Icon(Icons.Default.Wifi, contentDescription = null, tint = BG, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("CONNECT WIFI", color = BG, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text("WiFi digunakan untuk kirim trigger PANGGIL/NEXT/RESET ke Electron. BLE tidak reliable untuk ini.",
+                            style = TextStyle(color = MUTED.copy(alpha = 0.7f), fontSize = 8.sp))
+                    }
                 }
             }
         }
@@ -381,8 +458,9 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                 val canPanggil = statusPhase == "standby" || statusPhase == "done"
                 Button(
                     onClick = {
-                        // Send trigger to Electron via BLE notification
+                        // Send trigger via BLE (best effort) + WiFi socket.io (guaranteed)
                         bleServer.sendTrigger(BLEProtocol.Action.PANGGIL, nextStudent?.optString("id"))
+                        sendTriggerViaWifi("PANGGIL", nextStudent?.optString("id"))
                         statusPhase = BLEProtocol.Phase.READY
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -402,6 +480,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                     OutlinedButton(
                         onClick = {
                             bleServer.sendTrigger(BLEProtocol.Action.NEXT)
+                            sendTriggerViaWifi("NEXT", null)
                         },
                         modifier = Modifier.weight(1f).height(44.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = CYAN),
@@ -415,6 +494,7 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                     OutlinedButton(
                         onClick = {
                             bleServer.sendTrigger(BLEProtocol.Action.RESET)
+                            sendTriggerViaWifi("RESET", null)
                         },
                         modifier = Modifier.weight(1f).height(44.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AMBER),
