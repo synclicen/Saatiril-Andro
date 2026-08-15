@@ -202,6 +202,24 @@ class BLEServerManager(private val context: Context) {
         notifyCharacteristic(statusChar, json)
     }
 
+    /**
+     * Send a trigger action (PANGGIL/NEXT/RESET) to the connected Electron admin.
+     * This writes the action JSON directly to the status characteristic and notifies
+     * all subscribed clients. The JSON format is {"action":"PANGGIL","studentId":"..."}.
+     *
+     * IMPORTANT: Do NOT use updateStatus() for triggers — updateStatus wraps the data
+     * in {"phase": ...} format which admin-ble.html cannot parse as a trigger.
+     */
+    fun sendTrigger(action: String, studentId: String? = null) {
+        val json = JSONObject().apply {
+            put("action", action)
+            studentId?.let { put("studentId", it) }
+        }.toString()
+        Log.i(TAG, "Sending trigger to Electron: $json")
+        statusJson = json
+        notifyCharacteristic(statusChar, json)
+    }
+
     /** Update the queue data and notify MC. */
     fun updateQueueData(queueJson: String) {
         queueDataJson = queueJson
