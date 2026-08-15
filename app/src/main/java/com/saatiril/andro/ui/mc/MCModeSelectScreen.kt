@@ -81,18 +81,6 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
         )
         Spacer(Modifier.height(12.dp))
 
-        // BLE Server card — for Admin Electron (Laptop)
-        ModeCard(
-            icon = Icons.Default.BluetoothConnected,
-            title = "BLE SERVER",
-            subtitle = "Bluetooth — Untuk Admin Laptop Electron",
-            description = "MC = Server, Electron = Client\n100% immune interferensi WiFi\nCocok untuk Laptop Electron\n⚠️ Admin buka /admin-ble di Electron",
-            colors = listOf(Color(0xFF8b5cf6), Color(0xFF6d28d9)),
-            borderColor = Color(0xFF8b5cf6),
-            onClick = { viewModel.selectMcRemoteServerRole() }
-        )
-        Spacer(Modifier.height(12.dp))
-
         // WiFi card — for Admin Electron (Laptop) via wired LAN
         ModeCard(
             icon = Icons.Default.Wifi,
@@ -119,8 +107,7 @@ fun MCModeSelectScreen(viewModel: AdminViewModel) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "• Admin di HP (APK Saatiril) → BLE REMOTE atau WIFI\n" +
-                    "• Admin di Laptop (Electron) → BLE SERVER atau WIFI\n" +
-                    "• Admin di Laptop + MC di HP lain → WIFI (paling stabil)\n" +
+                    "• Admin di Laptop (Electron) → WIFI / LAN\n" +
                     "• Tidak yakin? Pilih WIFI / LAN",
                     style = TextStyle(color = MUTED, fontSize = 10.sp)
                 )
