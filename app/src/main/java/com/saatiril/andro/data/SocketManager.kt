@@ -31,6 +31,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - Comprehensive logging at every stage of data flow
  */
 class SocketManager {
+    var onConnected: (() -> Unit)? = null
+    var onDisconnected: (() -> Unit)? = null
 
     companion object {
         private const val TAG = "SocketManager"
@@ -236,6 +238,7 @@ class SocketManager {
                 connectionState = ConnectionState.CONNECTED
                 notifyListenersOnUiThread("state_changed", connectionState)
                 identify()
+                onConnected?.invoke()
             } catch (e: Exception) {
                 Log.e(TAG, "Error in CONNECT handler: ${e.message}", e)
             }
@@ -247,6 +250,7 @@ class SocketManager {
                 connectionState = ConnectionState.DISCONNECTED
                 stopPingInterval()
                 notifyListenersOnUiThread("state_changed", connectionState)
+                onDisconnected?.invoke()
 
                 // If server initiated disconnect, schedule manual reconnect
                 val reason = args?.firstOrNull()?.toString() ?: ""
@@ -783,7 +787,7 @@ class SocketManager {
 
     // ─── Critical Event Queue ────────────────────────────────────
 
-    private fun emitLanMessage(event: String, data: Any) {
+    fun emitLanMessage(event: String, data: Any) {
         try {
             val dataJsonStr = gson.toJson(data)
             val payload = JSONObject().apply {
