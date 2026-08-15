@@ -57,7 +57,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val projectStore = ProjectStore(application)
     val photoSaver = PhotoSaver(application)
     val driveBackupManager = com.saatiril.andro.backup.DriveBackupManager(application)
-    val bleServerManager = com.saatiril.andro.ble.BLEServerManager(application)
 
     // ─── Navigation ─────────────────────────────────────────────
     enum class Screen { LOADING, LICENSE, ROLE_SELECT, HUB, SETUP, MAIN, GENERATOR, OPERATOR_CONNECT, OPERATOR_CAMERA, MC_CONNECT, MC_PANEL, MC_REMOTE, MC_MODE_SELECT, MC_REMOTE_SERVER }
@@ -203,9 +202,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** User chose MC Remote Server (BLE Server for Electron) — go to MC_REMOTE_SERVER. */
-    fun selectMcRemoteServerRole() {
-        _screen.value = Screen.MC_REMOTE_SERVER
-    }
 
     /** Go back to role selection from operator/MC screens. */
     fun backToRoleSelect() {
@@ -570,7 +566,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 decodeFrameBitmap()
 
                 // Start BLE server for MC Remote (no WiFi needed for MC trigger)
-                startBLEServer()
             } catch (e: Exception) {
                 Log.e(TAG, "createAndStartProject FAILED", e)
                 _startupError.value = "Gagal memulai server: ${e.message ?: e.javaClass.simpleName}"
@@ -671,7 +666,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         SaatirilServer.stop()
         ServerService.stop(app)
         SaatirilServer.onLanMessage = null
-        stopBLEServer()
         _project.value = null
         _screen.value = Screen.HUB
         refreshProjects()
@@ -679,46 +673,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── BLE Server for MC Remote ─────────────────────────────
     /** Start BLE GATT server for MC Remote trigger. */
-    private fun startBLEServer() {
-        try {
-            val proj = _project.value ?: return
-
-            // Set up trigger callback
-            bleServerManager.onTriggerReceived = { action, studentId ->
-                handleBLETrigger(action, studentId)
-            }
-
-            // Send initial project info
-            bleServerManager.updateProjectInfo(
-                projectName = proj.name,
-                mode = proj.config.mode,
-                ratio = proj.config.ratio
-            )
-
-            // Start BLE server
-            bleServerManager.start()
-
-            // Send initial queue data
-            pushBLEQueueData()
-            pushBLENextStudent()
-            bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.STANDBY)
-
-            Log.i(TAG, "BLE Server started for MC Remote")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to start BLE server: ${e.message}")
-        }
-    }
 
     /** Stop BLE GATT server. */
-    private fun stopBLEServer() {
-        try {
-            bleServerManager.stop()
-            bleServerManager.onTriggerReceived = null
-            Log.i(TAG, "BLE Server stopped")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to stop BLE server: ${e.message}")
-        }
-    }
 
     /** Handle trigger from MC Remote (via BLE). */
     private fun handleBLETrigger(action: String, studentId: String?) {
@@ -761,79 +717,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Update BLE data after action
-        pushBLEQueueData()
-        pushBLENextStudent()
     }
 
     /** Push current queue data to MC via BLE. */
-    fun pushBLEQueueData() {
-        try {
-            val proj = _project.value ?: return
-            val db = proj.database
-            val myChannel = 1
-
-            val pending = db.filter { it.status == "pending" }
-            val active = db.filter { isActiveStatus(it.status) }
-            val done = db.filter { it.status == "done" }
-
-            // Build JSON: summary + next 10 students
-            val json = org.json.JSONObject().apply {
-                put("total", db.size)
-                put("pending", pending.size)
-                put("done", done.size)
-                put("active", active.size)
-
-                val studentsArray = org.json.JSONArray()
-                // Active student first (if any)
-                active.forEach { s ->
-                    studentsArray.put(org.json.JSONObject().apply {
-                        put("id", s.id)
-                        put("nim", s.nim)
-                        put("nama", s.nama)
-                        put("status", s.status)
-                    })
-                }
-                // Next 10 pending
-                pending.take(10).forEach { s ->
-                    studentsArray.put(org.json.JSONObject().apply {
-                        put("id", s.id)
-                        put("nim", s.nim)
-                        put("nama", s.nama)
-                        put("status", s.status)
-                    })
-                }
-                put("students", studentsArray)
-            }
-
-            bleServerManager.updateQueueData(json.toString())
-        } catch (e: Exception) {
-            Log.w(TAG, "pushBLEQueueData error: ${e.message}")
-        }
-    }
 
     /** Push next/active student to MC via BLE. */
-    fun pushBLENextStudent() {
-        try {
-            val proj = _project.value ?: return
-            val active = proj.database.firstOrNull { isActiveStatus(it.status) }
-            val nextPending = proj.database.firstOrNull { it.status == "pending" }
-
-            val student = active ?: nextPending
-            if (student != null) {
-                val json = org.json.JSONObject().apply {
-                    put("id", student.id)
-                    put("nim", student.nim)
-                    put("nama", student.nama)
-                    put("status", student.status)
-                }
-                bleServerManager.updateNextStudent(json.toString())
-            } else {
-                bleServerManager.updateNextStudent("{}")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "pushBLENextStudent error: ${e.message}")
-        }
-    }
 
     /**
      * Handle a photo captured locally by the admin's own phone camera (the
@@ -984,9 +872,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         pushSyncDb()
 
         // Update BLE MC Remote — photo done, ready for next
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.DONE, student.id)
-        pushBLEQueueData()
-        pushBLENextStudent()
 
         // Reset capture state for the next student
         resetCaptureState()
@@ -1023,9 +908,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, channel))
         pushSyncDb()
         // Update BLE MC Remote
-        pushBLEQueueData()
-        pushBLENextStudent()
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.READY, student.id)
     }
 
     /**
@@ -1061,9 +943,6 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
         pushSyncDb()
         // Update BLE MC Remote
-        pushBLEQueueData()
-        pushBLENextStudent()
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.STANDBY, studentId)
     }
 
     /** markStudentDone is now ONLY called automatically by handlePhotosSaved/handleLocalCapture.
