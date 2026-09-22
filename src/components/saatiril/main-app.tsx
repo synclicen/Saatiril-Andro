@@ -55,7 +55,7 @@ type MobileTab = 'admin' | 'mc' | 'operator'
 // ─── Component ────────────────────────────────────────────────────────────────
 export function MainApp() {
   // ── License gate ─────────────────────────────────────────────────────────
-  const [licenseValid, setLicenseValid] = useState(false)
+  const [licenseValid, setLicenseValid] = useState(true)  // true because page.tsx already checked license
 
   // ── Store bindings ─────────────────────────────────────────────────────────
   const currentProject = useSaatirilStore((s) => s.currentProject)
