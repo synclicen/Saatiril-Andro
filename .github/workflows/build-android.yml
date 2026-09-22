@@ -89,14 +89,14 @@ jobs:
         run: |
           mkdir -p artifacts
           # Product flavors: APKs are in flavor-scoped subdirectories
-          DEBUG_APK=$(find app/build/outputs/apk/full/debug -name "*.apk" 2>/dev/null | head -1)
+          DEBUG_APK=$(find android-app/build/outputs/apk/full/debug -name "*.apk" 2>/dev/null | head -1)
           if [ -z "$DEBUG_APK" ]; then
-            DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
+            DEBUG_APK=$(find android-app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
           fi
           cp "$DEBUG_APK" artifacts/saatiril-andro-debug.apk
-          RELEASE_APK=$(find app/build/outputs/apk/full/release -name "*.apk" 2>/dev/null | head -1)
+          RELEASE_APK=$(find android-app/build/outputs/apk/full/release -name "*.apk" 2>/dev/null | head -1)
           if [ -z "$RELEASE_APK" ]; then
-            RELEASE_APK=$(find app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
+            RELEASE_APK=$(find android-app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
           fi
           if [ -n "$RELEASE_APK" ]; then
             cp "$RELEASE_APK" artifacts/saatiril-andro.apk

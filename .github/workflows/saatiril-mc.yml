@@ -9,8 +9,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/saatiril-mc.yml'
-      - 'app/src/**'
-      - 'app/build.gradle.kts'
+      - 'android-app/src/**'
+      - 'android-app/build.gradle.kts'
   workflow_dispatch:
 
 permissions:
@@ -82,14 +82,14 @@ jobs:
       - name: Rename APKs
         run: |
           # Find MC debug APK
-          MC_DEBUG=$(find app/build/outputs/apk/mc/debug -name "*.apk" 2>/dev/null | head -1)
+          MC_DEBUG=$(find android-app/build/outputs/apk/mc/debug -name "*.apk" 2>/dev/null | head -1)
           if [ -n "$MC_DEBUG" ]; then
             cp "$MC_DEBUG" saatiril-mc-debug.apk
             echo "Debug APK: $(ls -lh saatiril-mc-debug.apk)"
           fi
 
           # Find MC release APK (if signed)
-          MC_RELEASE=$(find app/build/outputs/apk/mc/release -name "*.apk" 2>/dev/null | head -1)
+          MC_RELEASE=$(find android-app/build/outputs/apk/mc/release -name "*.apk" 2>/dev/null | head -1)
           if [ -n "$MC_RELEASE" ]; then
             cp "$MC_RELEASE" saatiril-mc.apk
             echo "Release APK: $(ls -lh saatiril-mc.apk)"

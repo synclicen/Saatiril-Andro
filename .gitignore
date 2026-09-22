@@ -1,31 +1,28 @@
-# Gradle
+# Android
 .gradle/
 build/
-
-# Local config
 local.properties
-
-# Build outputs
 *.apk
 *.aab
-*.ap_
-*.dex
-
-# Keystores (never commit — these contain the release signing key)
 *.jks
 *.keystore
 keystore.properties
-
-# Android Studio / IntelliJ
 *.iml
 .idea/
-captures/
-.cxx/
-
+# Node.js / Next.js / Electron
+node_modules
+/.next/
+/out/
+/dist-electron/
+/electron/main.js
+/electron/preload.js
+/db/
+/download/
+/upload/
+/skills/
+*.log
+dev.log
+worklog.md
 # OS
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-test-harness/

@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="saatiril-version" content="v11-rebuild">
+<title>Saatiril MC v11-rebuild</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+.header { background:#2a164a; padding:10px 14px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #533485; position:sticky; top:0; z-index:10; }
+.header .dot { width:10px; height:10px; border-radius:50%; background:#fbbf24; flex-shrink:0; }
+.header .dot.connecting { background:#fbbf24; }
+.header .dot.authenticating { background:#06b6d4; }
+.header .dot.connected { background:#4ade80; }
+.header .dot.disconnected { background:#ef4444; }
+.header h1 { font-size:15px; color:#d4af37; letter-spacing:0.5px; }
+.header .ver { font-size:9px; color:#c4b5fd; padding:2px 6px; border:1px solid #533485; border-radius:4px; background:#1a0b2e; font-family:monospace; }
+.header .ch { font-size:11px; color:#c4b5fd; margin-left:auto; padding:2px 8px; border:1px solid #533485; border-radius:4px; background:#1a0b2e; }
+
+.container { padding:10px; max-width:600px; margin:0 auto; }
+
+/* ── Mode badge ──────────────────────────────────────────────────────── */
+.mode-badge { display:inline-block; padding:4px 10px; border-radius:6px; font-size:10px; font-weight:900; margin-bottom:8px; letter-spacing:0.5px; }
+.mode-badge.single { background:rgba(212,175,55,0.18); color:#d4af37; border:1px solid rgba(212,175,55,0.5); }
+.mode-badge.dual { background:rgba(6,182,212,0.18); color:#06b6d4; border:1px solid rgba(6,182,212,0.5); }
+.mode-badge.photoshoot { background:rgba(74,222,128,0.18); color:#4ade80; border:1px solid rgba(74,222,128,0.5); }
+
+/* ── Search input ────────────────────────────────────────────────────── */
+.search-wrap { position:relative; margin-bottom:8px; }
+.search-input { width:100%; padding:12px 12px 12px 36px; border-radius:8px; border:1px solid #533485; background:#2a164a; color:#fff; font-size:14px; outline:none; }
+.search-input:focus { border-color:#4ade80; box-shadow:0 0 0 2px rgba(74,222,128,0.2); }
+.search-input::placeholder { color:#533485; }
+.search-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:#c4b5fd; font-size:14px; pointer-events:none; }
+
+/* ── Stats grid ──────────────────────────────────────────────────────── */
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px; }
+.stats.triple { grid-template-columns:repeat(3,1fr); }
+.stat-card { background:#2a164a; border:1px solid #533485; border-radius:8px; padding:6px 4px; text-align:center; }
+.stat-card .label { font-size:9px; color:#c4b5fd; text-transform:uppercase; letter-spacing:0.3px; }
+.stat-card .value { font-size:18px; font-weight:900; margin-top:2px; }
+.stat-card.pending .value { color:#d4af37; }
+.stat-card.sent .value { color:#06b6d4; }
+.stat-card.done .value { color:#4ade80; }
+.stat-card.total .value { color:#fff; }
+
+/* ── KIRIM button (photoshoot) ───────────────────────────────────────── */
+.kirim-btn { width:100%; height:54px; border:2px solid #533485; border-radius:12px; background:#2a164a; color:#c4b5fd; font-size:14px; font-weight:900; cursor:not-allowed; margin-bottom:8px; letter-spacing:0.5px; }
+.kirim-btn.ready { background:#4ade80; color:#1a0b2e; border-color:#4ade80; cursor:pointer; box-shadow:0 0 20px rgba(74,222,128,0.3); }
+
+/* ── Student list (photoshoot) ───────────────────────────────────────── */
+.list-title { font-size:11px; color:#c4b5fd; font-weight:bold; margin:10px 0 4px; display:flex; justify-content:space-between; align-items:center; }
+.list-title .count { color:#d4af37; font-family:monospace; }
+.list-container { max-height:60vh; overflow-y:auto; border:1px solid #533485; border-radius:8px; background:#2a164a; }
+.list-container::-webkit-scrollbar { width:5px; }
+.list-container::-webkit-scrollbar-track { background:#1a0b2e; }
+.list-container::-webkit-scrollbar-thumb { background:#533485; border-radius:3px; }
+
+.student-row { display:grid; grid-template-columns:24px 70px 1fr auto; gap:6px; padding:8px 10px; border-bottom:1px solid #3b2263; cursor:pointer; align-items:center; transition:background 0.15s; }
+.student-row:last-child { border-bottom:none; }
+.student-row:hover { background:#3b2263; }
+.student-row.selected { background:rgba(74,222,128,0.18); box-shadow:inset 4px 0 0 #4ade80; }
+.student-row.sent { background:rgba(6,182,212,0.08); box-shadow:inset 4px 0 0 #06b6d4; }
+.student-row.done { opacity:0.5; box-shadow:inset 4px 0 0 #4ade8066; }
+.student-row.done .name { text-decoration:line-through; color:#c4b5fd; }
+.student-row .num { font-family:monospace; color:#c4b5fd; font-size:10px; text-align:center; }
+.student-row .nim { font-family:monospace; color:#c4b5fd; font-size:10px; overflow:hidden; text-overflow:ellipsis; }
+.student-row .name { font-size:12px; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.student-row .badge { font-size:9px; padding:2px 5px; border-radius:3px; font-weight:bold; white-space:nowrap; }
+.student-row .badge.pending { background:#3b2263; color:#c4b5fd; border:1px solid #533485; }
+.student-row .badge.sent { background:rgba(6,182,212,0.25); color:#06b6d4; border:1px solid rgba(6,182,212,0.5); }
+.student-row .badge.done { background:rgba(74,222,128,0.18); color:#4ade80; border:1px solid rgba(74,222,128,0.5); }
+.student-row .badge.active { background:rgba(212,175,55,0.25); color:#d4af37; border:1px solid rgba(212,175,55,0.5); }
+
+.list-footer { text-align:center; padding:6px; font-size:10px; color:#c4b5fd; background:#1a0b2e; }
+
+/* ── Wisuda: name card ───────────────────────────────────────────────── */
+.name-card { background:#2a164a; border:1px solid #533485; border-radius:10px; padding:14px; margin-bottom:8px; }
+.name-card.active { border-color:#d4af37; background:#3b2263; box-shadow:0 0 20px rgba(212,175,55,0.15); }
+.name-card .label { font-size:10px; color:#c4b5fd; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
+.name-card .name { font-size:22px; font-weight:900; line-height:1.2; word-break:break-word; }
+.name-card .name.gold { color:#d4af37; }
+.name-card .name.white { color:#fff; }
+.name-card .name.muted { color:#c4b5fd; font-style:italic; font-size:18px; }
+.name-card .nim { font-size:12px; color:#c4b5fd; font-family:monospace; margin-top:4px; }
+
+/* ── Wisuda: PANGGIL button ──────────────────────────────────────────── */
+.panggil-btn { width:100%; height:54px; border:none; border-radius:12px; font-size:16px; font-weight:900; cursor:pointer; margin-bottom:8px; letter-spacing:0.5px; }
+.panggil-btn.ready { background:#4ade80; color:#1a0b2e; box-shadow:0 0 20px rgba(74,222,128,0.3); }
+.panggil-btn.waiting { background:#533485; color:#d4af37; cursor:wait; }
+.panggil-btn.disabled { background:#2a164a; color:#c4b5fd; cursor:default; }
+.reset-btn { width:100%; height:42px; border:1px solid #fbbf24; background:transparent; color:#fbbf24; border-radius:10px; font-size:13px; cursor:pointer; margin-bottom:8px; font-weight:bold; }
+
+/* ── Wisuda: queue list ──────────────────────────────────────────────── */
+.queue-title { font-size:11px; color:#c4b5fd; font-weight:bold; margin:8px 0 4px; }
+.queue-item { background:#2a164a; border:1px solid #533485; border-radius:6px; padding:6px 8px; margin-bottom:2px; display:flex; align-items:center; gap:6px; }
+.queue-item.active { border-color:#d4af37; background:#3b2263; }
+.queue-item.done { opacity:0.4; }
+.queue-item .num { color:#c4b5fd; font-size:10px; font-family:monospace; width:14px; text-align:right; }
+.queue-item .dot { width:6px; height:6px; border-radius:50%; background:#c4b5fd; flex-shrink:0; }
+.queue-item .dot.active { background:#d4af37; }
+.queue-item .dot.done { background:#4ade80; }
+.queue-item .n { font-size:11px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.queue-item .badge { font-size:10px; color:#d4af37; }
+
+/* ── Misc ────────────────────────────────────────────────────────────── */
+.loading { text-align:center; padding:40px; color:#c4b5fd; }
+.error-box { background:#ef4444; color:#fff; padding:12px; border-radius:8px; margin:8px 0; font-size:13px; }
+.pwd-box { text-align:center; padding:40px 20px; }
+.pwd-box .icon { font-size:48px; margin-bottom:16px; }
+.pwd-box h2 { color:#fff; font-size:18px; margin-bottom:8px; }
+.pwd-box p { color:#c4b5fd; font-size:13px; margin-bottom:16px; }
+.pwd-input { width:100%; max-width:300px; padding:12px; border-radius:8px; border:1px solid #533485; background:#2a164a; color:#fff; font-size:16px; text-align:center; margin:0 auto 12px; display:block; }
+.pwd-input:focus { border-color:#d4af37; outline:none; }
+.pwd-btn { width:100%; max-width:300px; height:44px; border:none; border-radius:8px; background:#d4af37; color:#1a0b2e; font-size:14px; font-weight:900; cursor:pointer; display:block; margin:0 auto; }
+.pwd-btn:disabled { opacity:0.6; cursor:wait; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="dot connecting" id="status-dot"></div>
+  <h1>SAATIRIL MC</h1>
+  <span class="ver" id="ver-label">v11-rebuild</span>
+  <span class="ch" id="ch-label">Ch.1</span>
+</div>
+<div class="container" id="app">
+  <div class="loading">Menghubungkan ke server&#8230;</div>
+</div>
+<script src="/js/socket.io.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════════
+// SHA-256 — async, with crypto.subtle + correct pure-JS fallback.
+// MUST match the algorithm used by the admin (src/lib/socket.ts) and
+// operator.html exactly, otherwise session-password auth fails.
+// ═══════════════════════════════════════════════════════════════
+function rotR(x, n) { return (x >>> n) | (x << (32 - n)); }
+
+function sha256Fallback(data) {
+  var K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ]);
+  var msgLen = data.length;
+  var bitLen = msgLen * 8;
+  var paddedLen = msgLen + 1;
+  while (paddedLen % 64 !== 56) paddedLen++;
+  paddedLen += 8;
+  var padded = new Uint8Array(paddedLen);
+  padded.set(data);
+  padded[msgLen] = 0x80;
+  var view = new DataView(padded.buffer);
+  view.setUint32(paddedLen - 8, 0, false);
+  view.setUint32(paddedLen - 4, bitLen, false);
+  var h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+  var h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+  for (var offset = 0; offset < paddedLen; offset += 64) {
+    var w = new Uint32Array(64);
+    for (var i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false);
+    for (var i2 = 16; i2 < 64; i2++) {
+      var s0 = rotR(w[i2 - 15], 7) ^ rotR(w[i2 - 15], 18) ^ (w[i2 - 15] >>> 3);
+      var s1 = rotR(w[i2 - 2], 17) ^ rotR(w[i2 - 2], 19) ^ (w[i2 - 2] >>> 10);
+      w[i2] = (w[i2 - 16] + s0 + w[i2 - 7] + s1) | 0;
+    }
+    var a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for (var j = 0; j < 64; j++) {
+      var S1 = rotR(e, 6) ^ rotR(e, 11) ^ rotR(e, 25);
+      var ch = (e & f) ^ (~e & g);
+      var temp1 = (h + S1 + ch + K[j] + w[j]) | 0;
+      var S0 = rotR(a, 2) ^ rotR(a, 13) ^ rotR(a, 22);
+      var maj = (a & b) ^ (a & c) ^ (b & c);
+      var temp2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + temp1) | 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) | 0;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+  }
+  function hex(x) { return (x >>> 0).toString(16).padStart(8, '0'); }
+  return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4) + hex(h5) + hex(h6) + hex(h7);
+}
+
+async function sha256(text) {
+  var encoder = new TextEncoder();
+  var data = encoder.encode(text);
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    try {
+      var buf = await crypto.subtle.digest('SHA-256', data);
+      var arr = Array.from(new Uint8Array(buf));
+      return arr.map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+    } catch(e) { /* fall through */ }
+  }
+  return sha256Fallback(data);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MC Web Page — v11-rebuild — main logic
+//
+// Mode detection:
+//   - single           → wisuda, single channel, sequential calling
+//   - dual             → wisuda, dual channel, sequential calling
+//   - single-photoshoot → photoshoot, all students, send to channel 1
+//   - dual-photoshoot  → photoshoot, all students, send to BOTH channels
+//
+// callStudent mirrors mc-panel.tsx handleCallNow (wisuda) /
+// handleSendToOperator (photoshoot) EXACTLY:
+//   - Wisuda: status='active_<channel>', emit MC_CALL to channel, emit SYNC_DB
+//   - single-photoshoot: status='sent', emit MC_CALL to ch1, emit SYNC_DB
+//   - dual-photoshoot: status='sent', emit MC_CALL to ch1 AND ch2 (with assignedChannel), emit SYNC_DB
+//
+// MC_CALL handler uses data.student.status (NOT hardcoded) so the receiver
+// mirrors whatever status the sender set.
+//
+// SYNC_DB handler REPLACES project (MC is a thin client — no merge).
+// ═══════════════════════════════════════════════════════════════
+var VERSION = 'v11-rebuild';
+var params = new URLSearchParams(window.location.search);
+var channel = parseInt(params.get('channel') || '1');
+var password = params.get('password') || '';
+var socketPort = params.get('socketPort') || '3003';
+var socket = null;
+var authenticated = false;
+var project = null;
+var sessionPasswordHash = null;
+var searchQuery = '';
+var selectedStudent = null;
+
+console.log('[MC] Saatiril MC ' + VERSION + ' booting — channel=' + channel + ' socketPort=' + socketPort + ' hasPassword=' + (!!password));
+
+document.getElementById('ch-label').textContent = 'Ch.' + channel;
+document.getElementById('ver-label').textContent = VERSION;
+
+var socketUrl = 'http://' + window.location.hostname + ':' + socketPort;
+console.log('[MC] socketUrl=' + socketUrl);
+
+function connect() {
+  if (typeof io === 'undefined') {
+    document.getElementById('app').innerHTML = '<div class="error-box">Library Socket.io tidak dapat dimuat. Pastikan server berjalan dan <code>/js/socket.io.min.js</code> tersedia.</div>';
+    setTimeout(connect, 3000);
+    return;
+  }
+
+  try {
+    socket = io(socketUrl, {
+      path: '/',
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 10000
+    });
+  } catch(e) {
+    showError('Tidak bisa connect: ' + e.message);
+    setTimeout(connect, 3000);
+    return;
+  }
+
+  // On every connect (incl. reconnect), identify ourselves.
+  socket.on('connect', async function() {
+    setStatus('authenticating');
+    console.log('[MC] socket connected id=' + socket.id);
+    try {
+      if (!sessionPasswordHash && password) {
+        sessionPasswordHash = await sha256(password);
+        console.log('[MC] hashed URL password: ' + (sessionPasswordHash || '').slice(0, 8) + '...');
+      }
+    } catch(e) {
+      console.error('[MC] sha256 failed:', e);
+    }
+    socket.emit('identify', {
+      role: 'mc',
+      channel: channel,
+      sessionPasswordHash: sessionPasswordHash
+    });
+    console.log('[MC] emitted identify with hash=' + (sessionPasswordHash ? sessionPasswordHash.slice(0,8)+'...' : 'null'));
+  });
+
+  socket.on('auth-success', function(data) {
+    authenticated = true;
+    setStatus('connected');
+    console.log('[MC] auth-success', data);
+    socket.emit('lan-message', { event: 'REQUEST_STATE', data: { role: 'mc', channel: channel } });
+  });
+
+  socket.on('auth-failed', function(data) {
+    console.warn('[MC] auth-failed', data);
+    var hadHash = !!sessionPasswordHash;
+    sessionPasswordHash = null;
+    password = '';
+    showPasswordPrompt(hadHash ? 'session_password_required' : null);
+  });
+
+  socket.on('auth-requirement', function(data) {
+    console.log('[MC] auth-requirement', data);
+    if (data && data.passwordRequired && !sessionPasswordHash) {
+      showPasswordPrompt();
+    }
+  });
+
+  socket.on('lan-message', function(msg) {
+    if (msg && msg.event) {
+      handleLanMessage(msg.event, msg.data);
+    }
+  });
+
+  socket.on('disconnect', function(reason) {
+    authenticated = false;
+    setStatus('disconnected');
+    console.log('[MC] disconnected:', reason);
+  });
+
+  socket.on('connect_error', function(err) {
+    setStatus('disconnected');
+    var msg = (err && err.message) ? err.message : 'unknown';
+    var desc = (err && err.description && err.description.message) ? err.description.message : '';
+    console.warn('[MC] connect_error:', msg, desc);
+    if (msg.indexOf('refused') >= 0 || desc.indexOf('refused') >= 0 || msg.indexOf('ECONNREFUSED') >= 0) {
+      showError('Koneksi ditolak. Pastikan server SAATIRIL berjalan di ' + socketUrl + ' dan port ' + socketPort + ' tidak diblokir firewall.');
+    } else if (msg.indexOf('timeout') >= 0 || desc.indexOf('timeout') >= 0) {
+      showError('Koneksi timeout. Pastikan HP/server di WiFi yang sama dan IP benar: ' + socketUrl);
+    }
+  });
+}
+
+function handleLanMessage(event, data) {
+  if (event === 'SYNC_DB') {
+    // REPLACE project (MC is a thin client — no merge logic needed).
+    project = data.project || data;
+    render();
+  } else if (event === 'MC_CALL') {
+    // Use data.student.status (NOT hardcoded 'active_channel') so the
+    // receiver mirrors whatever status the sender set:
+    //   - wisuda sender sets 'active_<channel>'
+    //   - photoshoot sender sets 'sent'
+    if (project && data && data.student) {
+      var sid = data.student.id;
+      var callStatus = data.student.status || 'sent';
+      project.database = project.database.map(function(s){
+        if (s.id === sid) return Object.assign({}, s, { status: callStatus });
+        return s;
+      });
+      render();
+    }
+  } else if (event === 'STUDENT_DONE') {
+    if (project && data && data.studentId) {
+      project.database = project.database.map(function(s){
+        if (s.id === data.studentId) return Object.assign({}, s, { status: 'done' });
+        return s;
+      });
+      render();
+    }
+  } else if (event === 'PHOTOS_SAVED') {
+    if (project && data && data.student) {
+      var psid = data.student.id;
+      project.database = project.database.map(function(s){
+        if (s.id === psid) return Object.assign({}, s, { status: 'done' });
+        return s;
+      });
+      render();
+    }
+  } else if (event === 'STUDENT_RESET') {
+    if (project && data && data.studentId) {
+      project.database = project.database.map(function(s){
+        if (s.id === data.studentId) return Object.assign({}, s, { status: 'pending' });
+        return s;
+      });
+      render();
+    }
+  }
+}
+
+// ── Mode detection ───────────────────────────────────────────────────
+function getMode() {
+  return project && project.config ? project.config.mode : 'single';
+}
+function isPhotoshoot() {
+  var m = getMode();
+  return m === 'single-photoshoot' || m === 'dual-photoshoot';
+}
+function isDualPhotoshoot() {
+  return getMode() === 'dual-photoshoot';
+}
+
+// ── callStudent — mirrors mc-panel.tsx handleCallNow / handleSendToOperator ─
+function callStudent(student) {
+  if (!student || !socket || !socket.connected) {
+    console.warn('[MC] callStudent: missing student or socket not connected');
+    return;
+  }
+  var photoshoot = isPhotoshoot();
+  var dualPhotoshoot = isDualPhotoshoot();
+
+  var newStatus;
+  if (photoshoot) {
+    newStatus = 'sent';
+  } else {
+    newStatus = 'active_' + channel;
+  }
+
+  // Update local DB first (mirrors React updateStudentStatus)
+  if (project && project.database) {
+    project.database = project.database.map(function(s){
+      if (s.id === student.id) return Object.assign({}, s, { status: newStatus });
+      return s;
+    });
+  }
+
+  // Emit MC_CALL(s)
+  if (dualPhotoshoot) {
+    // Send to BOTH channels with assignedChannel set on student
+    socket.emit('lan-message', { event: 'MC_CALL', data: {
+      student: Object.assign({}, student, { status: newStatus, assignedChannel: 1 }),
+      channel: 1
+    }});
+    socket.emit('lan-message', { event: 'MC_CALL', data: {
+      student: Object.assign({}, student, { status: newStatus, assignedChannel: 2 }),
+      channel: 2
+    }});
+  } else if (photoshoot) {
+    // Single photoshoot: send to channel 1
+    socket.emit('lan-message', { event: 'MC_CALL', data: {
+      student: Object.assign({}, student, { status: newStatus }),
+      channel: 1
+    }});
+  } else {
+    // Wisuda: send to my channel
+    socket.emit('lan-message', { event: 'MC_CALL', data: {
+      student: Object.assign({}, student, { status: newStatus }),
+      channel: channel
+    }});
+  }
+
+  // Emit SYNC_DB for consistency
+  if (project) {
+    socket.emit('lan-message', { event: 'SYNC_DB', data: { project: project } });
+  }
+
+  render();
+}
+
+function resetStudent(studentId) {
+  if (!socket || !socket.connected) return;
+  socket.emit('lan-message', { event: 'STUDENT_RESET', data: { studentId: studentId, channel: channel } });
+  if (project && project.database) {
+    project.database = project.database.map(function(s){
+      if (s.id === studentId) return Object.assign({}, s, { status: 'pending' });
+      return s;
+    });
+    render();
+  }
+}
+
+function isActive(status) { return status && status.indexOf('active') === 0; }
+
+function getChannelStudents() {
+  if (!project || !project.database) return [];
+  var db = project.database;
+  if (isPhotoshoot()) return db;
+  return db.filter(function(s){ return s.assignedChannel === channel; });
+}
+
+// ── render() — branch by mode ─────────────────────────────────────────
+function render() {
+  if (!project) {
+    document.getElementById('app').innerHTML = '<div class="loading">Menunggu data dari server&#8230;</div>';
+    return;
+  }
+  // Save focus + selection so we can restore after innerHTML rebuild
+  var focused = document.activeElement;
+  var focusedId = focused ? focused.id : null;
+  var selStart = (focused && typeof focused.selectionStart === 'number') ? focused.selectionStart : null;
+  var selEnd = (focused && typeof focused.selectionEnd === 'number') ? focused.selectionEnd : null;
+  var scrollMap = {};
+  document.querySelectorAll('[data-scroll-id]').forEach(function(el){
+    scrollMap[el.getAttribute('data-scroll-id')] = el.scrollTop;
+  });
+
+  if (isPhotoshoot()) {
+    renderPhotoshoot();
+  } else {
+    renderWisuda();
+  }
+
+  // Restore focus + cursor position
+  if (focusedId) {
+    var newEl = document.getElementById(focusedId);
+    if (newEl) {
+      try {
+        newEl.focus();
+        if (selStart !== null && selEnd !== null && typeof newEl.setSelectionRange === 'function') {
+          newEl.setSelectionRange(selStart, selEnd);
+        }
+      } catch(e) {}
+    }
+  }
+  // Restore scroll positions
+  Object.keys(scrollMap).forEach(function(id){
+    var el = document.querySelector('[data-scroll-id="' + id + '"]');
+    if (el) el.scrollTop = scrollMap[id];
+  });
+}
+
+// ── renderPhotoshoot() ────────────────────────────────────────────────
+function renderPhotoshoot() {
+  var students = getChannelStudents();
+  var dual = isDualPhotoshoot();
+  var mode = getMode();
+
+  var pendingCount = students.filter(function(s){ return s.status === 'pending'; }).length;
+  var sentCount = students.filter(function(s){ return s.status === 'sent'; }).length;
+  var doneCount = students.filter(function(s){ return s.status === 'done'; }).length;
+  var totalCount = students.length;
+
+  // Filter students by search query
+  var q = searchQuery.toLowerCase().trim();
+  var filtered = q ? students.filter(function(s){
+    return (s.nim && String(s.nim).toLowerCase().indexOf(q) >= 0) ||
+           (s.nama && String(s.nama).toLowerCase().indexOf(q) >= 0);
+  }) : students;
+
+  // Limit to 50 visible
+  var visible = filtered.slice(0, 50);
+
+  var modeBadge, modeClass;
+  if (dual) { modeBadge = 'Dual Photoshoot'; modeClass = 'dual'; }
+  else if (mode === 'single-photoshoot') { modeBadge = 'Single Photoshoot'; modeClass = 'single'; }
+  else { modeBadge = 'Mode Photoshoot'; modeClass = 'photoshoot'; }
+
+  var html = '';
+  html += '<div class="mode-badge ' + modeClass + '">' + escapeHtml(modeBadge) + '</div>';
+
+  // Search input
+  html += '<div class="search-wrap">';
+  html += '<span class="search-icon">\uD83D\uDD0D</span>';
+  html += '<input type="text" id="search-input" class="search-input" placeholder="Cari NIM atau Nama..." value="' + escapeAttr(searchQuery) + '" oninput="window.__search(this.value)" autocomplete="off" />';
+  html += '</div>';
+
+  // Stats: Menunggu / Terkirim / Selesai / Total
+  html += '<div class="stats">';
+  html += '<div class="stat-card pending"><div class="label">Menunggu</div><div class="value">' + pendingCount + '</div></div>';
+  html += '<div class="stat-card sent"><div class="label">Terkirim</div><div class="value">' + sentCount + '</div></div>';
+  html += '<div class="stat-card done"><div class="label">Selesai</div><div class="value">' + doneCount + '</div></div>';
+  html += '<div class="stat-card total"><div class="label">Total</div><div class="value">' + totalCount + '</div></div>';
+  html += '</div>';
+
+  // KIRIM button: green when student selected, disabled when none
+  var hasSel = !!selectedStudent;
+  var btnText = dual ? 'KIRIM KE 2 KAMERA' : 'KIRIM KE OPERATOR';
+  if (hasSel) {
+    html += '<button class="kirim-btn ready" onclick="window.__sendToOperator()">' + escapeHtml(btnText) + '</button>';
+  } else {
+    html += '<button class="kirim-btn" disabled>' + escapeHtml(btnText) + '</button>';
+  }
+
+  // Student list — ALL students, max 50 visible, scrollable
+  html += '<div class="list-title"><span>Daftar Peserta</span><span class="count">' + filtered.length + (filtered.length > 50 ? ' (max 50)' : '') + '</span></div>';
+  html += '<div class="list-container" data-scroll-id="student-list">';
+  if (visible.length === 0) {
+    html += '<div class="loading" style="padding:20px;font-size:12px">Tidak ada peserta</div>';
+  } else {
+    visible.forEach(function(s, i){
+      var isSel = selectedStudent && selectedStudent.id === s.id;
+      var isSent = s.status === 'sent';
+      var isDone = s.status === 'done';
+      var isActiveS = isActive(s.status);
+
+      var rowClass = 'student-row';
+      if (isSel) rowClass += ' selected';
+      else if (isSent) rowClass += ' sent';
+      else if (isDone) rowClass += ' done';
+
+      var badgeText, badgeClass;
+      if (isDone) { badgeText = 'Selesai'; badgeClass = 'done'; }
+      else if (isSent) { badgeText = 'Dikirim'; badgeClass = 'sent'; }
+      else if (isActiveS) { badgeText = 'Aktif'; badgeClass = 'active'; }
+      else { badgeText = 'Tunggu'; badgeClass = 'pending'; }
+
+      html += '<div class="' + rowClass + '" data-student-id="' + escapeAttr(s.id) + '">';
+      html += '<span class="num">' + (i + 1) + '</span>';
+      html += '<span class="nim">' + escapeHtml(s.nim || '') + '</span>';
+      html += '<span class="name">' + escapeHtml(s.nama || '') + '</span>';
+      html += '<span class="badge ' + badgeClass + '">' + badgeText + '</span>';
+      html += '</div>';
+    });
+    if (filtered.length > 50) {
+      html += '<div class="list-footer">+' + (filtered.length - 50) + ' peserta lainnya &#8212; gunakan pencarian</div>';
+    }
+  }
+  html += '</div>';
+
+  document.getElementById('app').innerHTML = html;
+}
+
+// ── renderWisuda() — sequential calling ───────────────────────────────
+function renderWisuda() {
+  var students = getChannelStudents();
+  var pending = students.filter(function(s){ return s.status === 'pending'; });
+  var active = students.filter(function(s){ return isActive(s.status); });
+  var done = students.filter(function(s){ return s.status === 'done'; });
+  var hasActive = active.length > 0;
+  var nextPending = pending.length > 0 ? pending[0] : null;
+
+  var displayName, displayNim, nameClass, prefix;
+  if (hasActive) {
+    displayName = active[0].nama || active[0].nim || '';
+    displayNim = active[0].nim || '';
+    nameClass = 'gold';
+    prefix = '\u25C6 '; // ◆
+  } else if (nextPending) {
+    displayName = nextPending.nama || nextPending.nim || '';
+    displayNim = nextPending.nim || '';
+    nameClass = 'white';
+    prefix = '\u25B6 '; // ▶
+  } else {
+    displayName = 'Antrean Habis';
+    displayNim = '';
+    nameClass = 'muted';
+    prefix = '';
+  }
+
+  var btnClass = 'disabled';
+  var btnText = 'HABIS';
+  if (hasActive) { btnClass = 'waiting'; btnText = 'TUNGGU OPERATOR\u2026'; }
+  else if (nextPending) { btnClass = 'ready'; btnText = 'PANGGIL'; }
+
+  var html = '';
+  html += '<div class="name-card ' + (hasActive ? 'active' : '') + '">';
+  html += '<div class="label">' + (hasActive ? 'Sedang Dipanggil' : 'Berikutnya') + '</div>';
+  html += '<div class="name ' + nameClass + '">' + prefix + escapeHtml(displayName) + '</div>';
+  if (displayNim) html += '<div class="nim">' + escapeHtml(displayNim) + '</div>';
+  html += '</div>';
+
+  if (nextPending && !hasActive) {
+    window.__nextPending = nextPending;
+    html += '<button class="panggil-btn ' + btnClass + '" onclick="window.__call()">' + btnText + '</button>';
+  } else {
+    html += '<button class="panggil-btn ' + btnClass + '" disabled>' + btnText + '</button>';
+  }
+
+  if (hasActive) {
+    window.__activeId = active[0].id;
+    html += '<button class="reset-btn" onclick="window.__reset()">Reset (Ulang)</button>';
+  }
+
+  // Stats: Menunggu / Selesai / Total
+  html += '<div class="stats triple">';
+  html += '<div class="stat-card pending"><div class="label">Menunggu</div><div class="value">' + pending.length + '</div></div>';
+  html += '<div class="stat-card done"><div class="label">Selesai</div><div class="value">' + done.length + '</div></div>';
+  html += '<div class="stat-card total"><div class="label">Total</div><div class="value">' + students.length + '</div></div>';
+  html += '</div>';
+
+  // Queue list (channel-filtered students)
+  html += '<div class="queue-title">Antrean Ch.' + channel + ' (' + pending.length + ' menunggu)</div>';
+  students.forEach(function(s, i){
+    var a = isActive(s.status);
+    var d = s.status === 'done';
+    html += '<div class="queue-item ' + (a ? 'active' : '') + (d ? ' done' : '') + '">';
+    html += '<span class="num">' + (i + 1) + '</span>';
+    html += '<span class="dot ' + (a ? 'active' : '') + (d ? ' done' : '') + '"></span>';
+    html += '<span class="n">' + escapeHtml(s.nama || s.nim || '') + '</span>';
+    if (a) html += '<span class="badge">\u25C6</span>';
+    if (d) html += '<span class="badge" style="color:#4ade80">\u2713</span>';
+    html += '</div>';
+  });
+
+  document.getElementById('app').innerHTML = html;
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function setStatus(state) {
+  document.getElementById('status-dot').className = 'dot ' + state;
+  if (state === 'connected' && !project) {
+    document.getElementById('app').innerHTML = '<div class="loading">Terhubung. Meminta data dari server&#8230;</div>';
+  }
+}
+
+function showError(msg) {
+  document.getElementById('app').innerHTML = '<div class="error-box">' + escapeHtml(msg) + '</div><div class="loading">Mencoba menghubungkan ulang&#8230;</div>';
+}
+
+function showPasswordPrompt(reason) {
+  var errLine = '';
+  if (reason === 'session_password_required') {
+    errLine = '<p style="color:#fbbf24;font-size:12px;margin-bottom:8px">Password salah, coba lagi.</p>';
+  }
+  document.getElementById('app').innerHTML =
+    '<div class="pwd-box">' +
+    '<div class="icon">\uD83D\uDD11</div>' +
+    '<h2>Password Sesi Diperlukan</h2>' +
+    '<p>Masukkan password sesi dari admin</p>' +
+    errLine +
+    '<input type="password" id="pwd-input" class="pwd-input" placeholder="Password" autocomplete="current-password" />' +
+    '<button class="pwd-btn" id="pwd-btn" onclick="window.__submitPwd()">CONNECT</button>' +
+    '</div>';
+  var input = document.getElementById('pwd-input');
+  if (input) {
+    input.focus();
+    input.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') window.__submitPwd();
+    });
+  }
+}
+
+// ── Window functions ─────────────────────────────────────────────────
+window.__search = function(query) {
+  searchQuery = query || '';
+  selectedStudent = null;
+  render();
+};
+
+window.__selectStudent = function(id) {
+  if (!project || !project.database) return;
+  var found = project.database.find(function(s){ return s.id === id; });
+  if (found) {
+    selectedStudent = found;
+    render();
+  }
+};
+
+window.__sendToOperator = function() {
+  if (!selectedStudent) return;
+  var student = selectedStudent;
+  selectedStudent = null;
+  searchQuery = '';
+  callStudent(student);
+  render();
+};
+
+window.__call = function() {
+  var student = window.__nextPending;
+  if (student) callStudent(student);
+};
+
+window.__reset = function() {
+  var studentId = window.__activeId;
+  if (studentId) resetStudent(studentId);
+};
+
+window.__submitPwd = async function() {
+  var input = document.getElementById('pwd-input');
+  var btn = document.getElementById('pwd-btn');
+  if (!input || !input.value) return;
+  password = input.value;
+  if (btn) { btn.disabled = true; btn.textContent = 'Memverifikasi...'; }
+  try {
+    sessionPasswordHash = await sha256(password);
+    console.log('[MC] submitPwd hashed: ' + (sessionPasswordHash || '').slice(0, 8) + '...');
+  } catch(e) {
+    console.error('[MC] submitPwd sha256 failed:', e);
+    if (btn) { btn.disabled = false; btn.textContent = 'CONNECT'; }
+    return;
+  }
+  if (socket && socket.connected) {
+    document.getElementById('app').innerHTML = '<div class="loading">Memverifikasi password&#8230;</div>';
+    socket.emit('identify', {
+      role: 'mc',
+      channel: channel,
+      sessionPasswordHash: sessionPasswordHash
+    });
+    setTimeout(function(){ if (btn) { btn.disabled = false; btn.textContent = 'CONNECT'; } }, 3000);
+  } else {
+    document.getElementById('app').innerHTML = '<div class="loading">Menghubungkan dengan password&#8230;</div>';
+    if (socket) { try { socket.removeAllListeners(); socket.disconnect(); } catch(e) {} socket = null; }
+    connect();
+  }
+};
+
+// ── Event delegation for student row clicks (photoshoot mode) ────────
+// Using delegation so listeners survive innerHTML rebuilds.
+document.addEventListener('click', function(e) {
+  var row = e.target.closest && e.target.closest('[data-student-id]');
+  if (row) {
+    var id = row.getAttribute('data-student-id');
+    if (id) window.__selectStudent(id);
+  }
+});
+
+// ── Periodic sync — REQUEST_STATE every 10 seconds ───────────────────
+// This keeps MC in sync even if some lan-messages are missed (e.g.
+// during reconnect or if admin reloads from storage).
+setInterval(function() {
+  if (socket && socket.connected && authenticated) {
+    socket.emit('lan-message', { event: 'REQUEST_STATE', data: { role: 'mc', channel: channel } });
+  }
+}, 10000);
+
+connect();
+</script>
+</body>
+</html>

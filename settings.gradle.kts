@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "SaatirilAndro"
 include(":app")
+project(":app").projectDir = file("android-app")
