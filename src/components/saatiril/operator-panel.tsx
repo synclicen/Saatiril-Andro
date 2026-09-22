@@ -2373,44 +2373,39 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
               </Select>
             </div>
 
-            {/* Scrollable panels area — uses ScrollArea for minimalist scrollbar matching MC panel */}
-            <ScrollArea className="flex-1 min-h-0">
-              <div className="flex flex-col">
-                {/* Shutter Mode Panel — toggleable */}
-                {showShutterPanel && (
-                  <div className="px-1.5 py-1.5 border-b min-w-0" style={{ borderColor: THEME.border }}>
-                    <Card className="border rounded-lg overflow-hidden min-w-0" style={{ backgroundColor: THEME.card, borderColor: THEME.gold }}>
-                      <CardContent className="p-1.5 min-w-0">
-                        {renderShutterModeSelector(true)}
-                      </CardContent>
-                    </Card>
-                  </div>
-                )}
-
-                {/* Gridline Settings Panel — toggleable */}
-                {showGridlinePanel && (
-                  <div className="px-1.5 py-1.5 border-b min-w-0" style={{ borderColor: THEME.border }}>
-                    <Card className="border rounded-lg overflow-hidden min-w-0" style={{ backgroundColor: THEME.card, borderColor: THEME.gold }}>
-                      <CardContent className="p-1.5 min-w-0">
-                        {renderGridlineSettings(true)}
-                      </CardContent>
-                    </Card>
-                  </div>
-                )}
-
-                {/* Queue Panel — toggleable, fills remaining space */}
-                {showQueuePanel && (
-                  <div className="flex flex-col px-1.5 py-1.5 min-w-0" style={{ borderColor: THEME.border }}>
-                    {/* Operator search (photoshoot only) */}
-                    {renderOpSearch(true)}
-                    {/* Queue list in compact mode */}
-                    <div className="flex-1 min-h-0">
-                      {renderQueueList(true)}
-                    </div>
-                  </div>
-                )}
+            {/* Fixed panels at top — NOT inside scrollable area */}
+            {showShutterPanel && (
+              <div className="shrink-0 px-1.5 py-1.5 border-b min-w-0" style={{ borderColor: THEME.border }}>
+                <Card className="border rounded-lg overflow-hidden min-w-0" style={{ backgroundColor: THEME.card, borderColor: THEME.gold }}>
+                  <CardContent className="p-1.5 min-w-0">
+                    {renderShutterModeSelector(true)}
+                  </CardContent>
+                </Card>
               </div>
-            </ScrollArea>
+            )}
+            {showGridlinePanel && (
+              <div className="shrink-0 px-1.5 py-1.5 border-b min-w-0" style={{ borderColor: THEME.border }}>
+                <Card className="border rounded-lg overflow-hidden min-w-0" style={{ backgroundColor: THEME.card, borderColor: THEME.gold }}>
+                  <CardContent className="p-1.5 min-w-0">
+                    {renderGridlineSettings(true)}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+            {/* MC Call Panel (Antre dari MC) — FIXED, own internal scroll */}
+            {showQueuePanel && (
+              <div className="shrink-0 px-1.5 py-1.5 border-b min-w-0" style={{ borderColor: THEME.border }}>
+                {renderOpSearch(true)}
+              </div>
+            )}
+            {/* Queue Panel (Antrean) — own SEPARATE scroll area */}
+            {showQueuePanel && (
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="px-1.5 py-1.5 min-w-0">
+                  {renderQueueList(true)}
+                </div>
+              </ScrollArea>
+            )}
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
