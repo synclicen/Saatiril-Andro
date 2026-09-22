@@ -573,10 +573,14 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
       // In photoshoot mode: accept MC_CALL from ANY channel (both operators see it)
       // In non-photoshoot mode: only accept MC_CALL for our channel
       if (!photoshoot && data.channel !== myChannelRef.current) return
-      // CRITICAL: Use active_<channel> status, NOT data.student.status.
-      // Browser MC sends the student with OLD status ('pending') because it
-      // updates its own local copy AFTER emitting MC_CALL.
-      const correctedStudent = { ...data.student, status: `active_${data.channel}` as StudentStatus }
+      // CRITICAL FIX v15: Use data.student.status when the sender has set it.
+      // v8 mc.html sends student WITH status='sent' (photoshoot) or 'active_channel' (wisuda).
+      // Old code hardcoded 'active_channel' which OVERWROTE 'sent' in photoshoot mode.
+      // Now: use whatever status the MC sent, fallback to 'active_channel' for old stable MC.
+      const studentStatus = (data.student.status && data.student.status !== 'pending')
+        ? data.student.status
+        : `active_${data.channel}` as StudentStatus
+      const correctedStudent = { ...data.student, status: studentStatus }
       console.log('[SAATIRIL OP] MC_CALL received:', data.student.nama, 'status:', correctedStudent.status, 'Ch.', data.channel)
       if (photoshoot) {
         // REPLACE any existing buffer entry for this student instead of
