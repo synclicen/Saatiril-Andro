@@ -670,7 +670,6 @@ function renderWisuda() {
     else if (d) { wBadge = "Selesai"; wBadgeClass = "done"; }
     html += '<span class="n">' + escapeHtml(s.nama || s.nim || '') + '</span>';
     html += '<span class="badge ' + wBadgeClass + '">' + wBadge + '</span>';
-    if (d) html += '<span class="badge" style="color:#4ade80">\u2713</span>';
     html += '</div>';
   });
 
