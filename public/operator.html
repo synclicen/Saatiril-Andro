@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="saatiril-version" content="v12-separate-panels">
-  <title>SAATIRIL Operator v12-separate-panels</title>
+  <meta name="saatiril-version" content="v13-status-badges">
+  <title>SAATIRIL Operator v13-status-badges</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -2293,7 +2293,7 @@ async function handleConnect() {
 }
 
 function connectToServer(ip) {
-  console.log('[SAATIRIL Operator] v12-separate-panels booting — connecting to ' + ip);
+  console.log('[SAATIRIL Operator] v13-status-badges booting — connecting to ' + ip);
   if (socket) {
     socket.disconnect()
     socket = null
@@ -3127,10 +3127,10 @@ function updateQueueList() {
         if (isDone) nameClass += ' done-name'
         
         let statusLabel, statusColor
-        if (isActive) { statusLabel = 'Foto'; statusColor = 'var(--gold)' }
-        else if (isSent) { statusLabel = 'Kirim'; statusColor = 'rgba(212,175,55,0.6)' }
+        if (isActive) { statusLabel = 'Aktif'; statusColor = 'var(--gold)' }
+        else if (isSent) { statusLabel = 'Proses'; statusColor = 'rgba(6,182,212,0.8)' }
         else if (isDone) { statusLabel = 'Selesai'; statusColor = 'var(--muted)' }
-        else { statusLabel = 'Tunggu'; statusColor = 'var(--border)' }
+        else { statusLabel = 'Belum'; statusColor = 'var(--muted)' }
         
         return `<div class="queue-row ${rowClass}" onclick="selectQueueItem('${s.id}')">
           <span class="q-idx">${idx + 1}</span>

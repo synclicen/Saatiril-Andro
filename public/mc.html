@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="saatiril-version" content="v12-separate-panels">
-<title>Saatiril MC v12-separate-panels</title>
+<meta name="saatiril-version" content="v13-status-badges">
+<title>Saatiril MC v13-status-badges</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
@@ -122,7 +122,7 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 <div class="header">
   <div class="dot connecting" id="status-dot"></div>
   <h1>SAATIRIL MC</h1>
-  <span class="ver" id="ver-label">v12-separate-panels</span>
+  <span class="ver" id="ver-label">v13-status-badges</span>
   <span class="ch" id="ch-label">Ch.1</span>
 </div>
 <div class="container" id="app">
@@ -201,7 +201,7 @@ async function sha256(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MC Web Page — v12-separate-panels — main logic
+// MC Web Page — v13-status-badges — main logic
 //
 // Mode detection:
 //   - single           → wisuda, single channel, sequential calling
@@ -220,7 +220,7 @@ async function sha256(text) {
 //
 // SYNC_DB handler REPLACES project (MC is a thin client — no merge).
 // ═══════════════════════════════════════════════════════════════
-var VERSION = 'v12-separate-panels';
+var VERSION = 'v13-status-badges';
 var params = new URLSearchParams(window.location.search);
 var channel = parseInt(params.get('channel') || '1');
 var password = params.get('password') || '';
@@ -470,7 +470,7 @@ function getChannelStudents() {
 // ── render() — branch by mode ─────────────────────────────────────────
 function render() {
   if (!project) {
-    document.getElementById('app').innerHTML = '<div class="loading">Menunggu data dari server&#8230;</div>';
+    document.getElementById('app').innerHTML = '<div class="loading">Belum data dari server&#8230;</div>';
     return;
   }
   // Save focus + selection so we can restore after innerHTML rebuild
@@ -543,10 +543,10 @@ function renderPhotoshoot() {
   html += '<input type="text" id="search-input" class="search-input" placeholder="Cari NIM atau Nama..." value="' + escapeAttr(searchQuery) + '" oninput="window.__search(this.value)" autocomplete="off" />';
   html += '</div>';
 
-  // Stats: Menunggu / Terkirim / Selesai / Total
+  // Stats: Belum / Proses / Selesai / Total
   html += '<div class="stats">';
-  html += '<div class="stat-card pending"><div class="label">Menunggu</div><div class="value">' + pendingCount + '</div></div>';
-  html += '<div class="stat-card sent"><div class="label">Terkirim</div><div class="value">' + sentCount + '</div></div>';
+  html += '<div class="stat-card pending"><div class="label">Belum</div><div class="value">' + pendingCount + '</div></div>';
+  html += '<div class="stat-card sent"><div class="label">Proses</div><div class="value">' + sentCount + '</div></div>';
   html += '<div class="stat-card done"><div class="label">Selesai</div><div class="value">' + doneCount + '</div></div>';
   html += '<div class="stat-card total"><div class="label">Total</div><div class="value">' + totalCount + '</div></div>';
   html += '</div>';
@@ -579,9 +579,9 @@ function renderPhotoshoot() {
 
       var badgeText, badgeClass;
       if (isDone) { badgeText = 'Selesai'; badgeClass = 'done'; }
-      else if (isSent) { badgeText = 'Dikirim'; badgeClass = 'sent'; }
+      else if (isSent) { badgeText = 'Proses'; badgeClass = 'sent'; }
       else if (isActiveS) { badgeText = 'Aktif'; badgeClass = 'active'; }
-      else { badgeText = 'Tunggu'; badgeClass = 'pending'; }
+      else { badgeText = 'Belum'; badgeClass = 'pending'; }
 
       html += '<div class="' + rowClass + '" data-student-id="' + escapeAttr(s.id) + '">';
       html += '<span class="num">' + (i + 1) + '</span>';
@@ -650,23 +650,26 @@ function renderWisuda() {
     html += '<button class="reset-btn" onclick="window.__reset()">Reset (Ulang)</button>';
   }
 
-  // Stats: Menunggu / Selesai / Total
+  // Stats: Belum / Selesai / Total
   html += '<div class="stats triple">';
-  html += '<div class="stat-card pending"><div class="label">Menunggu</div><div class="value">' + pending.length + '</div></div>';
+  html += '<div class="stat-card pending"><div class="label">Belum</div><div class="value">' + pending.length + '</div></div>';
   html += '<div class="stat-card done"><div class="label">Selesai</div><div class="value">' + done.length + '</div></div>';
   html += '<div class="stat-card total"><div class="label">Total</div><div class="value">' + students.length + '</div></div>';
   html += '</div>';
 
   // Queue list (channel-filtered students)
-  html += '<div class="queue-title">Antrean Ch.' + channel + ' (' + pending.length + ' menunggu)</div>';
+  html += '<div class="queue-title">Antrean Ch.' + channel + ' (' + pending.length + ' belum)</div>';
   students.forEach(function(s, i){
     var a = isActive(s.status);
     var d = s.status === 'done';
     html += '<div class="queue-item ' + (a ? 'active' : '') + (d ? ' done' : '') + '">';
     html += '<span class="num">' + (i + 1) + '</span>';
-    html += '<span class="dot ' + (a ? 'active' : '') + (d ? ' done' : '') + '"></span>';
+    var wBadge = "Belum", wBadgeClass = "pending";
+    if (a) { wBadge = "Aktif"; wBadgeClass = "active"; }
+    else if (s.status === "sent") { wBadge = "Proses"; wBadgeClass = "sent"; }
+    else if (d) { wBadge = "Selesai"; wBadgeClass = "done"; }
     html += '<span class="n">' + escapeHtml(s.nama || s.nim || '') + '</span>';
-    if (a) html += '<span class="badge">\u25C6</span>';
+    html += '<span class="badge ' + wBadgeClass + '">' + wBadge + '</span>';
     if (d) html += '<span class="badge" style="color:#4ade80">\u2713</span>';
     html += '</div>';
   });
