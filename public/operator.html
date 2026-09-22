@@ -2393,6 +2393,14 @@ function connectToServer(ip) {
     // Request current state from admin
     socket.emit('lan-message', { event: 'REQUEST_STATE', data: { channel: myChannel } })
     
+    // Periodic sync every 10s — ensures operator stays synced with admin
+    if (window.__syncInterval) clearInterval(window.__syncInterval)
+    window.__syncInterval = setInterval(() => {
+      if (socket && socket.connected) {
+        socket.emit('lan-message', { event: 'REQUEST_STATE', data: { channel: myChannel } })
+      }
+    }, 10000)
+    
     // Start latency ping
     startLatencyPing()
   })
@@ -2414,6 +2422,7 @@ function connectToServer(ip) {
   socket.on('disconnect', (reason) => {
     console.log('[OP] Socket disconnected:', reason)
     stopLatencyPing()
+    if (window.__syncInterval) { clearInterval(window.__syncInterval); window.__syncInterval = null }
     if (reason === 'io server disconnect') {
       setConnectionState('disconnected', 'Server memutuskan koneksi. Mencoba menyambung ulang...')
       setTimeout(function() {
