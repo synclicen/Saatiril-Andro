@@ -26,3 +26,10 @@ worklog.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Electron clients (MC + Operator apps) — local build artifacts
+/electron-clients/node_modules/
+/electron-clients/dist/
+/electron-clients/dist-mc/
+/electron-clients/dist-operator/
+/electron-clients/*.exe

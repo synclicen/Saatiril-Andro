@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Saatiril Connection</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a0b2e;
+    color: #fff;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  :root {
+    --bg: #1a0b2e;
+    --panel: #2a164a;
+    --card: #3b2263;
+    --border: #533485;
+    --gold: #d4af37;
+    --gold-light: #f5e6a3;
+    --muted: #c4b5fd;
+    --cyan: #06b6d4;
+    --emerald: #4ade80;
+    --red: #ef4444;
+    --warn: #f59e0b;
+  }
+
+  /* ── Layout ────────────────────────────────────────────────────────── */
+  .screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    gap: 18px;
+    overflow-y: auto;
+  }
+
+  /* ── Logo ──────────────────────────────────────────────────────────── */
+  .logo-wrap {
+    text-align: center;
+    margin-bottom: 6px;
+  }
+  .logo-text {
+    font-size: 36px;
+    font-weight: 900;
+    letter-spacing: 5px;
+    background: linear-gradient(135deg, var(--gold), var(--gold-light), var(--gold));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: 0 2px 12px rgba(212,175,55,0.25);
+  }
+  .logo-sub {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 3px;
+    margin-top: 6px;
+    text-transform: uppercase;
+  }
+  .role-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    background: rgba(83,52,133,0.25);
+    color: var(--gold);
+  }
+  .role-badge.operator {
+    border-color: rgba(6,182,212,0.5);
+    background: rgba(6,182,212,0.12);
+    color: var(--cyan);
+  }
+  .role-badge.mc {
+    border-color: rgba(212,175,55,0.5);
+    background: rgba(212,175,55,0.12);
+    color: var(--gold);
+  }
+
+  /* ── Form card ─────────────────────────────────────────────────────── */
+  .form-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 22px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  }
+  .form-group {
+    margin-bottom: 14px;
+  }
+  .form-group:last-of-type {
+    margin-bottom: 0;
+  }
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 6px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .form-input,
+  .form-select {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(26,11,46,0.6);
+    color: #fff;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .form-input:focus,
+  .form-select:focus {
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(212,175,55,0.18);
+  }
+  .form-input::placeholder {
+    color: rgba(196,181,253,0.4);
+  }
+  .form-select {
+    cursor: pointer;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3e%3cpath fill='%23c4b5fd' d='M6 8L1 3h10z'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+  .form-select option {
+    background: var(--panel);
+    color: #fff;
+  }
+
+  /* ── CONNECT button ─────────────────────────────────────────────────── */
+  .connect-btn {
+    width: 100%;
+    height: 52px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--gold), #b8941f);
+    color: #1a0b2e;
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    cursor: pointer;
+    margin-top: 18px;
+    transition: transform 0.12s, opacity 0.15s, box-shadow 0.15s;
+    box-shadow: 0 4px 18px rgba(212,175,55,0.35);
+  }
+  .connect-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 22px rgba(212,175,55,0.5);
+  }
+  .connect-btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .connect-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* ── Status ────────────────────────────────────────────────────────── */
+  .status-row {
+    margin-top: 12px;
+    min-height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .status-row.error { color: var(--red); }
+  .status-row.success { color: var(--emerald); }
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(212,175,55,0.3);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Footer hint ───────────────────────────────────────────────────── */
+  .footer-hint {
+    font-size: 10px;
+    color: rgba(196,181,253,0.55);
+    letter-spacing: 0.5px;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.5;
+  }
+  .footer-hint code {
+    background: rgba(83,52,133,0.4);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: monospace;
+    color: var(--gold);
+    font-size: 10px;
+  }
+</style>
+</head>
+<body>
+  <div class="screen">
+    <div class="logo-wrap">
+      <div class="logo-text">SAATIRIL</div>
+      <div class="logo-sub">Photo Session System</div>
+      <div id="roleBadge" class="role-badge">CLIENT</div>
+    </div>
+
+    <div class="form-card">
+      <div class="form-group">
+        <label class="form-label" for="ipInput">Admin IP Address</label>
+        <input
+          id="ipInput"
+          class="form-input"
+          type="text"
+          inputmode="decimal"
+          placeholder="192.168.100.61"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="passwordInput">Session Password</label>
+        <input
+          id="passwordInput"
+          class="form-input"
+          type="password"
+          placeholder="(leave empty if not required)"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="channelSelect">Channel</label>
+        <select id="channelSelect" class="form-select">
+          <option value="1">Channel 1</option>
+          <option value="2">Channel 2</option>
+        </select>
+      </div>
+
+      <button id="connectBtn" class="connect-btn">CONNECT</button>
+
+      <div id="statusRow" class="status-row"></div>
+    </div>
+
+    <div class="footer-hint">
+      Enter the Admin's LAN IP address. The Admin's
+      <code>portable.exe</code> must be running on the same WiFi network.
+    </div>
+  </div>
+
+<script>
+(function () {
+  // ─── Detect role from URL query (?role=mc | ?role=operator) ────────────
+  var params = new URLSearchParams(window.location.search);
+  var role = params.get('role') || 'mc';
+
+  var roleBadge = document.getElementById('roleBadge');
+  roleBadge.textContent = role === 'operator' ? 'OPERATOR' : 'MC';
+  roleBadge.classList.add(role);
+
+  // ─── DOM ────────────────────────────────────────────────────────────────
+  var ipInput = document.getElementById('ipInput');
+  var passwordInput = document.getElementById('passwordInput');
+  var channelSelect = document.getElementById('channelSelect');
+  var connectBtn = document.getElementById('connectBtn');
+  var statusRow = document.getElementById('statusRow');
+
+  // ─── Status helpers ─────────────────────────────────────────────────────
+  function setStatus(msg, type) {
+    statusRow.className = 'status-row' + (type ? ' ' + type : '');
+    if (type === 'loading') {
+      statusRow.innerHTML = '<span class="spinner"></span><span>' + escapeHtml(msg) + '</span>';
+    } else {
+      statusRow.textContent = msg;
+    }
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  // ─── Build URL & connect ────────────────────────────────────────────────
+  // http://{IP}:3000/{mc|operator}?channel={CH}&socketPort=3003&password={PW}&v=23
+  function buildUrl() {
+    var ip = (ipInput.value || '').trim();
+    var pw = (passwordInput.value || '').trim();
+    var ch = channelSelect.value || '1';
+    var qs = 'channel=' + encodeURIComponent(ch)
+           + '&socketPort=' + encodeURIComponent('3003')
+           + '&password=' + encodeURIComponent(pw)
+           + '&v=23';
+    return 'http://' + ip + ':3000/' + role + '?' + qs;
+  }
+
+  function doConnect() {
+    var ip = (ipInput.value || '').trim();
+    if (!ip) {
+      setStatus('Please enter the Admin IP address.', 'error');
+      ipInput.focus();
+      return;
+    }
+    // Basic IPv4 validation (also allow hostnames)
+    var ipOk = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-zA-Z0-9.\-]+$/.test(ip);
+    if (!ipOk) {
+      setStatus('Invalid IP address: ' + ip, 'error');
+      ipInput.focus();
+      return;
+    }
+
+    var url = buildUrl();
+    console.log('[Saatiril] connect →', url);
+    connectBtn.disabled = true;
+    setStatus('Connecting to ' + ip + '…', 'loading');
+
+    if (!window.saatirilAPI || !window.saatirilAPI.connectToServer) {
+      setStatus('Error: saatirilAPI not available (not in Electron?)', 'error');
+      connectBtn.disabled = false;
+      return;
+    }
+
+    // Send URL to main process → triggers loadURL.
+    // Main process will dispatch saatiril-connect-success / saatiril-connect-error events.
+    window.saatirilAPI.connectToServer(url);
+
+    // Listen for result events from main process
+    var onSuccess = function () {
+      setStatus('Connected! Loading ' + role.toUpperCase() + '…', 'success');
+      window.removeEventListener('saatiril-connect-success', onSuccess);
+      window.removeEventListener('saatiril-connect-error', onError);
+    };
+    var onError = function (e) {
+      setStatus(e.detail || 'Connection failed', 'error');
+      connectBtn.disabled = false;
+      window.removeEventListener('saatiril-connect-success', onSuccess);
+      window.removeEventListener('saatiril-connect-error', onError);
+    };
+    window.addEventListener('saatiril-connect-success', onSuccess);
+    window.addEventListener('saatiril-connect-error', onError);
+
+    // Safety: if neither event fires in 8s, re-enable the button.
+    setTimeout(function () {
+      if (!connectBtn.disabled) return;
+      // Still loading — main process didn't error, keep waiting.
+    }, 8000);
+  }
+
+  connectBtn.addEventListener('click', doConnect);
+
+  // Enter key submits
+  [ipInput, passwordInput].forEach(function (el) {
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') doConnect();
+    });
+  });
+
+  // ─── Auto-fill from command-line args ───────────────────────────────────
+  // window.electronConnectionInfo = { host, port, channel, password } | null
+  // (Exposed by preload via ipcRenderer.sendSync('get-connection-info'))
+  function tryAutoConnect() {
+    var info = window.electronConnectionInfo;
+    if (!info && window.saatirilAPI && window.saatirilAPI.getConnectionInfo) {
+      try { info = window.saatirilAPI.getConnectionInfo(); } catch (e) { info = null; }
+    }
+    if (!info || !info.host) return false;
+
+    ipInput.value = info.host;
+    passwordInput.value = info.password || '';
+    channelSelect.value = String(info.channel || 1);
+
+    console.log('[Saatiril] auto-connect from CLI args:', info);
+    setStatus('Auto-connecting from launch args…', 'loading');
+    // Slight delay so the form paints first
+    setTimeout(doConnect, 350);
+    return true;
+  }
+
+  // Auto-connect if launched with --host=... --channel=... --password=...
+  try { tryAutoConnect(); } catch (e) { console.warn('[Saatiril] auto-connect failed:', e); }
+})();
+</script>
+</body>
+</html>

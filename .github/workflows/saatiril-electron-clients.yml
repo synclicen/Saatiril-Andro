@@ -1,0 +1,122 @@
+name: Saatiril Electron Clients
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'electron-clients/**'
+      - '.github/workflows/saatiril-electron-clients.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install tooling (TypeScript + Electron + electron-builder)
+        working-directory: electron-clients
+        run: |
+          npm install --no-save typescript@5.3.3 @types/node@20.10.0 electron@28.3.3 electron-builder@24.13.3
+          Write-Host "=== tooling versions ==="
+          npx tsc --version
+          node ../electron-clients/node_modules/electron-builder/out/cli/cli.js --version
+
+      - name: Compile TypeScript (mc-main, operator-main, preload)
+        working-directory: electron-clients
+        run: |
+          npx tsc -p tsconfig.json
+          # Stage shared assets into dist/
+          cp connection.html dist/connection.html
+          # Verify
+          if (-not (Test-Path "dist/mc-main.js")) { Write-Error "mc-main.js NOT found!"; exit 1 }
+          if (-not (Test-Path "dist/operator-main.js")) { Write-Error "operator-main.js NOT found!"; exit 1 }
+          if (-not (Test-Path "dist/preload.js")) { Write-Error "preload.js NOT found!"; exit 1 }
+          if (-not (Test-Path "dist/connection.html")) { Write-Error "connection.html NOT found!"; exit 1 }
+          Write-Host "TypeScript compilation OK"
+          Get-ChildItem dist | Format-Table Name,Length
+
+      - name: Build MC Client (.exe)
+        working-directory: electron-clients/dist
+        run: |
+          cp ../package-mc.json package.json
+          # electron-builder is installed at electron-clients/node_modules
+          # Call it directly via node (cross-platform, no PATH needed)
+          node ../node_modules/electron-builder/out/cli/cli.js --win --x64 --config package.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build Operator Client (.exe)
+        working-directory: electron-clients/dist
+        run: |
+          cp ../package-operator.json package.json
+          node ../node_modules/electron-builder/out/cli/cli.js --win --x64 --config package.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify build artifacts
+        working-directory: electron-clients
+        shell: bash
+        run: |
+          echo "=== dist-mc ==="
+          find dist/dist-mc -name "*.exe" 2>/dev/null || echo "(no exe found in dist-mc)"
+          echo "=== dist-operator ==="
+          find dist/dist-operator -name "*.exe" 2>/dev/null || echo "(no exe found in dist-operator)"
+
+      - name: Upload to releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          # Create 'latest' release if it doesn't exist
+          if ! gh release view latest --repo "$REPO" 2>/dev/null; then
+            gh release create latest --title "Saatiril - Latest" --notes "Auto build #${{ github.run_number }}" --prerelease --repo "$REPO"
+          fi
+
+          # Upload MC
+          MC_EXE=$(find electron-clients/dist/dist-mc -name "*.exe" | head -1)
+          if [ -n "$MC_EXE" ]; then
+            cp "$MC_EXE" saatiril-mc-electron.exe
+            echo "Uploading saatiril-mc-electron.exe ($(du -h saatiril-mc-electron.exe | cut -f1))"
+            gh release upload latest saatiril-mc-electron.exe --clobber --repo "$REPO"
+          else
+            echo "ERROR: MC exe not found"
+            exit 1
+          fi
+
+          # Upload Operator
+          OP_EXE=$(find electron-clients/dist/dist-operator -name "*.exe" | head -1)
+          if [ -n "$OP_EXE" ]; then
+            cp "$OP_EXE" saatiril-operator-electron.exe
+            echo "Uploading saatiril-operator-electron.exe ($(du -h saatiril-operator-electron.exe | cut -f1))"
+            gh release upload latest saatiril-operator-electron.exe --clobber --repo "$REPO"
+          else
+            echo "ERROR: Operator exe not found"
+            exit 1
+          fi
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "## Saatiril Electron Clients Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Built and uploaded to releases:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`saatiril-mc-electron.exe\` (small window, loads mc.html)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`saatiril-operator-electron.exe\` (large window, native camera + WASM)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both apps show a connection screen first (enter admin IP + password + channel)," >> $GITHUB_STEP_SUMMARY
+          echo "then loadURL to \`http://{IP}:3000/{mc|operator}?channel=..&socketPort=3003&password=..&v=23\`" >> $GITHUB_STEP_SUMMARY
+          echo "Electron grants camera/WASM permission on HTTP origins." >> $GITHUB_STEP_SUMMARY
