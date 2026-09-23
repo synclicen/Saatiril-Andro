@@ -1,7 +1,7 @@
 {
   "name": "saatiril-operator-electron",
   "version": "1.0.0",
-  "description": "Saatiril Operator \u2014 Electron client app (loads operator.html, native camera + WASM)",
+  "description": "Saatiril Operator \u2014 Electron client app (renders React OperatorPanel, native camera + WASM)",
   "main": "operator-main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -35,7 +35,8 @@
       ],
       "artifactName": "saatiril-operator-electron.exe"
     },
-    "electronVersion": "28.3.3"
+    "electronVersion": "28.3.3",
+    "publish": null
   },
   "dependencies": {},
   "devDependencies": {
@@ -43,5 +44,6 @@
     "electron-builder": "^24.6.4",
     "typescript": "^5.3.0",
     "@types/node": "20.11.0"
-  }
+  },
+  "repository": "https://github.com/synclicen/Saatiril-Andro.git"
 }
