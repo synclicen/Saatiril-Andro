@@ -212,11 +212,28 @@ export default function Home() {
       return
     }
     // Electron — check license via IPC
-    api.getLicenseStatus().then((status: any) => {
+    // CRITICAL: Retry once after 1.5s before showing LicenseGate.
+    // The first IPC call may return isValid=false due to timing
+    // (license file still being read, machine ID not ready, etc).
+    // This prevents the license page from flashing briefly.
+    api.getLicenseStatus().then(async (status: any) => {
       if (status.isValid || status.isGracePeriod) {
         setLicenseState('valid')
       } else {
-        setLicenseState('invalid')
+        // First check returned invalid — RETRY after 1.5s
+        await new Promise(r => setTimeout(r, 1500))
+        try {
+          const retry = await api.getLicenseStatus()
+          if (retry.isValid || retry.isGracePeriod) {
+            setLicenseState('valid')
+          } else {
+            // Genuinely invalid after retry — show activation page
+            setLicenseState('invalid')
+          }
+        } catch {
+          // Retry failed — bypass (safety)
+          setLicenseState('valid')
+        }
       }
     }).catch(() => {
       // IPC error — bypass (safety)

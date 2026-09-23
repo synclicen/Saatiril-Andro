@@ -420,14 +420,14 @@ function startStaticServer(outDir: string): Promise<void> {
 
       // ── MC web page — served at /mc?channel=1 ─────────────────────────
       // MC scans QR code → browser opens this page → connects via Socket.io
-      // v17-no-license-flash: matches mc-panel.tsx for all 4 modes (single, dual,
+      // v18-license-retry: matches mc-panel.tsx for all 4 modes (single, dual,
       // single-photoshoot, dual-photoshoot) + uses data.student.status.
       if (urlPath === '/mc') {
         const mcHtmlPath = getResourcePath('public/mc.html')
         if (fs.existsSync(mcHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v17-no-license-flash',
+            'X-Saatiril-Version': 'v18-license-retry',
           })
           fs.createReadStream(mcHtmlPath).pipe(res)
           return
@@ -441,7 +441,7 @@ function startStaticServer(outDir: string): Promise<void> {
         if (fs.existsSync(opHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v17-no-license-flash',
+            'X-Saatiril-Version': 'v18-license-retry',
           })
           fs.createReadStream(opHtmlPath).pipe(res)
           return
@@ -449,11 +449,11 @@ function startStaticServer(outDir: string): Promise<void> {
       }
 
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
-      // Returns the Saatiril build version (v17-no-license-flash). MC + operator HTML
+      // Returns the Saatiril build version (v18-license-retry). MC + operator HTML
       // also expose this via <meta name="saatiril-version"> + console.log.
       if (urlPath === '/version' || urlPath === '/api/version') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ version: 'v17-no-license-flash', component: 'saatiril-server' }))
+        res.end(JSON.stringify({ version: 'v18-license-retry', component: 'saatiril-server' }))
         return
       }
 

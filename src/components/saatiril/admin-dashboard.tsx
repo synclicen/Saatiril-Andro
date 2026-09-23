@@ -550,11 +550,11 @@ export default function AdminDashboard() {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          return `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=17`
+          return `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=18`
         } catch {
           const hostname = window.location.hostname
           const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
-          return `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=17`
+          return `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=18`
         }
       } else {
         const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
@@ -591,7 +591,7 @@ export default function AdminDashboard() {
           }
         }
 
-        return `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=17`
+        return `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=18`
       }
     },
     [lanInfo],
@@ -730,12 +730,12 @@ export default function AdminDashboard() {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          url = `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=17`
+          url = `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=18`
         } catch {
           const hostname = window.location.hostname
           const params = new URLSearchParams(window.location.search)
           const socketPort = params.get('socketPort') || '3003'
-          url = `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=17`
+          url = `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=18`
         }
       } else {
         // Web/sandbox mode: include socketPort so LAN clients can connect to the Socket.io server
@@ -778,7 +778,7 @@ export default function AdminDashboard() {
           }
         }
 
-        url = `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=17`
+        url = `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=18`
       }
       try {
         if (navigator.clipboard) {
