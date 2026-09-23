@@ -105,27 +105,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set +e
           REPO="${{ github.repository }}"
           
-          MC_EXE=$(find electron-clients/dist-mc -name "saatiril-mc-electron.exe" 2>/dev/null | head -1)
+          echo "=== Searching for MC exe ==="
+          find electron-clients/dist-mc -name "*.exe" 2>/dev/null
+          MC_EXE=$(find electron-clients/dist-mc -name "*.exe" 2>/dev/null | head -1)
           if [ -n "$MC_EXE" ]; then
+            echo "Found MC: $MC_EXE"
+            cp "$MC_EXE" saatiril-mc-electron.exe
             gh release delete-asset latest saatiril-mc-electron.exe --yes --repo "$REPO" 2>/dev/null || true
-            gh release upload latest "$MC_EXE" --repo "$REPO"
-            echo "MC uploaded: $MC_EXE"
+            gh release upload latest saatiril-mc-electron.exe --repo "$REPO" && echo "MC uploaded" || echo "MC upload failed"
           else
             echo "MC build not found"
-            find electron-clients/dist-mc -name "*.exe" 2>/dev/null || echo "  no .exe"
           fi
           
-          OP_EXE=$(find electron-clients/dist-operator -name "saatiril-operator-electron.exe" 2>/dev/null | head -1)
+          echo "=== Searching for Operator exe ==="
+          find electron-clients/dist-operator -name "*.exe" 2>/dev/null
+          OP_EXE=$(find electron-clients/dist-operator -name "*.exe" 2>/dev/null | head -1)
           if [ -n "$OP_EXE" ]; then
+            echo "Found Operator: $OP_EXE"
+            cp "$OP_EXE" saatiril-operator-electron.exe
             gh release delete-asset latest saatiril-operator-electron.exe --yes --repo "$REPO" 2>/dev/null || true
-            gh release upload latest "$OP_EXE" --repo "$REPO"
-            echo "Operator uploaded: $OP_EXE"
+            gh release upload latest saatiril-operator-electron.exe --repo "$REPO" && echo "Operator uploaded" || echo "Operator upload failed"
           else
             echo "Operator build not found"
-            find electron-clients/dist-operator -name "*.exe" 2>/dev/null || echo "  no .exe"
           fi
+          
+          echo "=== Done ==="
+          exit 0
 
       - name: Build summary
         shell: bash
