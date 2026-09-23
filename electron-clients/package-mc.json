@@ -1,49 +1,17 @@
 {
   "name": "saatiril-mc-electron",
   "version": "1.0.0",
-  "description": "Saatiril MC \u2014 Electron client app (renders React McPanel, loads from admin server)",
   "main": "mc-main.js",
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "electron .",
-    "dist": "electron-builder --win --x64 --config package-mc.json"
-  },
-  "author": "Saatiril",
-  "license": "MIT",
   "build": {
     "appId": "com.saatiril.mc.electron",
     "productName": "Saatiril MC",
-    "directories": {
-      "output": "dist-mc"
-    },
+    "directories": { "output": "dist-mc" },
     "asar": true,
-    "files": [
-      "mc-main.js",
-      "preload.js",
-      "connection.html",
-      "package.json"
-    ],
+    "files": ["mc-main.js", "preload.js", "connection.html"],
     "win": {
-      "icon": "../../public/icon.ico",
-      "target": [
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
+      "icon": "../public/icon.ico",
+      "target": [{ "target": "portable", "arch": ["x64"] }],
       "artifactName": "saatiril-mc-electron.exe"
-    },
-    "electronVersion": "28.3.3",
-    "publish": null
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "electron": "28.3.3",
-    "electron-builder": "^24.6.4",
-    "typescript": "^5.3.0",
-    "@types/node": "20.11.0"
-  },
-  "repository": "https://github.com/synclicen/Saatiril-Andro.git"
+    }
+  }
 }

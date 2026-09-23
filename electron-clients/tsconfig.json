@@ -5,12 +5,11 @@
     "moduleResolution": "node",
     "esModuleInterop": true,
     "strict": false,
-    "skipLibCheck": true,
     "outDir": "./dist",
     "rootDir": ".",
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
   "include": ["*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist"]
 }
