@@ -67,7 +67,7 @@ jobs:
         shell: pwsh
         run: |
           $mc = Get-Content "out/mc.html" -Raw
-          if ($mc -match 'v21-operator-settings') { Write-Host "mc.html v11 - OK" }
+          if ($mc -match 'v22-operator-settings') { Write-Host "mc.html v11 - OK" }
           else { Write-Error "mc.html v11 NOT found!"; exit 1 }
           if ($mc -match 'renderPhotoshoot' -and $mc -match 'KIRIM KE OPERATOR') { Write-Host "mc.html photoshoot UI - OK" }
           else { Write-Error "mc.html photoshoot UI NOT found!"; exit 1 }
@@ -77,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $op = Get-Content "out/operator.html" -Raw
-          if ($op -match 'v21-operator-settings') { Write-Host "operator.html v11 - OK" }
+          if ($op -match 'v22-operator-settings') { Write-Host "operator.html v11 - OK" }
           else { Write-Error "operator.html v11 NOT found!"; exit 1 }
       - name: Compile Electron preload
         run: npx tsc -p electron/tsconfig.json
