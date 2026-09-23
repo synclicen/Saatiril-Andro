@@ -87,7 +87,7 @@ export function LicenseGate({ onLicenseValid }: Props) {
         onLicenseValid()
       }
       setLoading(false)
-    }, 5000)
+    }, 500)
 
     return () => clearTimeout(safetyTimer)
   }, [])
@@ -99,10 +99,17 @@ export function LicenseGate({ onLicenseValid }: Props) {
       setStatus(result)
 
       if (result.isValid && !result.isGracePeriod) {
-        // Fully licensed — auto-proceed after brief delay so user sees the status
+        // Fully licensed — auto-proceed after brief delay
         if (!validatedRef.current) {
           validatedRef.current = true
-          setTimeout(() => onLicenseValid(), 800)
+          setTimeout(() => onLicenseValid(), 300)
+        }
+      } else if (!result.isValid) {
+        // License is invalid — bypass immediately (no activation form shown)
+        // The app works regardless (license is informational, not blocking)
+        if (!validatedRef.current) {
+          validatedRef.current = true
+          onLicenseValid()
         }
       }
     } catch (err) {
