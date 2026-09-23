@@ -82,7 +82,7 @@ jobs:
           Copy-Item ../public/icon.ico dist-mc/ -ErrorAction SilentlyContinue
           Push-Location dist-mc
           npm install
-          npx electron-builder --win --x64 --config package.json
+          npx electron-builder --win --x64
           Pop-Location
 
       - name: Build Operator Electron app
@@ -97,7 +97,7 @@ jobs:
           Copy-Item ../public/icon.ico dist-operator/ -ErrorAction SilentlyContinue
           Push-Location dist-operator
           npm install
-          npx electron-builder --win --x64 --config package.json
+          npx electron-builder --win --x64
           Pop-Location
 
       - name: Upload to Saatiril-Andro releases

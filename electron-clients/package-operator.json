@@ -6,10 +6,9 @@
     "appId": "com.saatiril.operator.electron",
     "productName": "Saatiril Operator",
     "directories": { "output": "output" },
-    "asar": true,
     "files": ["operator-main.js", "preload.js", "connection.html"],
     "win": {
-      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "target": "portable",
       "artifactName": "saatiril-operator-electron.exe"
     }
   },

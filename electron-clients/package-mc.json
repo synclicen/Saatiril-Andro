@@ -6,10 +6,9 @@
     "appId": "com.saatiril.mc.electron",
     "productName": "Saatiril MC",
     "directories": { "output": "output" },
-    "asar": true,
     "files": ["mc-main.js", "preload.js", "connection.html"],
     "win": {
-      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "target": "portable",
       "artifactName": "saatiril-mc-electron.exe"
     }
   },
