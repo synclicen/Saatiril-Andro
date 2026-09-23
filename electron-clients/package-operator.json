@@ -1,7 +1,7 @@
 {
   "name": "saatiril-operator-electron",
   "version": "1.0.0",
-  "description": "Saatiril Operator — Electron client app (loads operator.html, native camera + WASM)",
+  "description": "Saatiril Operator \u2014 Electron client app (loads operator.html, native camera + WASM)",
   "main": "operator-main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -11,7 +11,7 @@
   "author": "Saatiril",
   "license": "MIT",
   "build": {
-    "appId": "com.saatiril.operator",
+    "appId": "com.saatiril.operator.electron",
     "productName": "Saatiril Operator",
     "directories": {
       "output": "dist-operator"
@@ -28,10 +28,12 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "artifactName": "saatiril-operator-electron-${version}.${ext}"
+      "artifactName": "saatiril-operator-electron.exe"
     }
   },
   "dependencies": {},

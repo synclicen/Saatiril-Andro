@@ -304,16 +304,17 @@
   }
 
   // ─── Build URL & connect ────────────────────────────────────────────────
-  // http://{IP}:3000/{mc|operator}?channel={CH}&socketPort=3003&password={PW}&v=23
+  // http://{IP}:3000/?role={mc|operator}&channel={CH}&socketPort=3003&password={PW}&v=23
   function buildUrl() {
     var ip = (ipInput.value || '').trim();
     var pw = (passwordInput.value || '').trim();
     var ch = channelSelect.value || '1';
-    var qs = 'channel=' + encodeURIComponent(ch)
+    var qs = 'role=' + role
+           + '&channel=' + encodeURIComponent(ch)
            + '&socketPort=' + encodeURIComponent('3003')
            + '&password=' + encodeURIComponent(pw)
            + '&v=23';
-    return 'http://' + ip + ':3000/' + role + '?' + qs;
+    return 'http://' + ip + ':3000/?' + qs;
   }
 
   function doConnect() {

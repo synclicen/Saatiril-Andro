@@ -4,14 +4,23 @@
  * Small-window Electron app for the Master of Ceremony (MC).
  * It does NOT bundle the Next.js app — instead, after the user enters
  * the admin's IP + password + channel on the connection screen, it
- * calls `loadURL` to load the admin's `mc.html` over HTTP. The admin's
+ * calls `loadURL` to load the admin's Next.js app over HTTP. The admin's
  * portable.exe must already be running and serving on port 3000.
+ *
+ * CRITICAL: This loads the Next.js ROOT page (not mc.html) with a ?role=mc
+ * query parameter. The Next.js page.tsx detects ?role=mc and renders the
+ * React <McPanel /> component directly (no admin dashboard, no license gate,
+ * no hub/setup screens). The same proven React panel used by the admin app
+ * is reused here — only the chrome (license, hub, tabs) is skipped.
  *
  * Flow:
  *   1. App launches → show connection screen (connection.html?role=mc)
  *   2. User enters IP, password, channel → press CONNECT
  *   3. Renderer calls saatirilAPI.connectToServer(url) → IPC → loadURL
- *   4. Window navigates to http://{IP}:3000/mc?channel=..&socketPort=..&password=..&v=23
+ *   4. Window navigates to http://{IP}:3000/?role=mc&channel=..&socketPort=..&password=..&v=23
+ *   5. Next.js page.tsx detects ?role=mc → renders <McPanel /> only
+ *   6. McPanel calls connectSocket() which reads socketPort from URL params
+ *      and connects to http://{IP}:3003 (admin's socket.io server)
  *
  * Auto-connect (QR / link launch):
  *   saatiril-mc-electron.exe --host=192.168.100.61 --port=3003 --channel=1 --password=xxx
@@ -33,8 +42,10 @@ const WIN_W = 420
 const WIN_H = 750
 const WIN_TITLE = 'Saatiril MC'
 
-// URL pattern after connection (matches admin's mc.html — version v23)
-// http://{IP}:3000/mc?channel={CH}&socketPort=3003&password={PW}&v=23
+// URL pattern after connection — loads the Next.js root page with ?role=mc.
+// The admin's portable.exe serves the Next.js static export at http://{IP}:3000/.
+// page.tsx detects ?role=mc and renders <McPanel /> directly (skipping license/hub).
+// http://{IP}:3000/?role=mc&channel={CH}&socketPort=3003&password={PW}&v=23
 const ADMIN_HTTP_PORT = 3000
 const DEFAULT_SOCKET_PORT = 3003
 const URL_VERSION = '23'
@@ -162,6 +173,15 @@ ipcMain.handle('get-lan-info', () => {
   }
 })
 
+// Renderer → main: open URL in default browser (for Web Bluetooth etc.)
+ipcMain.handle('open-in-browser', (_event, url: string) => {
+  if (typeof url === 'string' && url.length > 0) {
+    shell.openExternal(url).catch((e) => console.error('[MC] open-in-browser failed:', e))
+    return true
+  }
+  return false
+})
+
 // ─── Permissions ──────────────────────────────────────────────────────────
 // MC doesn't strictly need camera, but allow media + display-capture
 // just in case the page calls getUserMedia for any reason.
@@ -185,8 +205,9 @@ function setupPermissions() {
   })
 
   // Strip CSP / X-Frame-Options from admin HTTP responses so the
-  // admin's mc.html page can freely run WASM, inline scripts, and
-  // access camera over HTTP without CSP restrictions.
+  // Next.js app (loaded with ?role=mc) can freely run WASM, inline scripts
+  // (Next.js uses inline scripts for hydration), and access camera over HTTP
+  // without CSP restrictions.
   session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
     const headers = details.responseHeaders || {}
     delete headers['content-security-policy']

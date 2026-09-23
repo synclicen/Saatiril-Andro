@@ -8,6 +8,9 @@ import { MainApp } from '@/components/saatiril/main-app'
 import { LicenseGate } from '@/components/saatiril/license-gate'
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, Wrench, Home as HomeIcon } from 'lucide-react'
+import { McPanel } from '@/components/saatiril/mc-panel'
+import OperatorPanel from '@/components/saatiril/operator-panel'
+import { connectSocket, setSessionPassword } from '@/lib/socket'
 
 // ─── Screen-level Error Boundary ──────────────────────────────────────────
 // Catches render errors in individual screens so the entire app doesn't crash.
@@ -127,6 +130,101 @@ class ScreenErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 }
 
+// ─── Client App (MC / Operator) ──────────────────────────────────────────────
+// Renders ONLY the McPanel or OperatorPanel — no license gate, no hub,
+// no setup screen, no admin dashboard. Used by the standalone Electron
+// client apps (saatiril-mc-electron.exe, saatiril-operator-electron.exe)
+// which load the Next.js root page with ?role=mc or ?role=operator.
+//
+// The Electron main process loads:
+//   http://{ADMIN_IP}:3000/?role={mc|operator}&channel=..&socketPort=3003&password=..&v=23
+//
+// page.tsx detects ?role= and renders <ClientApp role={...} /> INSTEAD of the
+// admin flow (license -> hub -> setup -> main-app). The same proven React
+// panels used by the admin app are reused here — only the chrome is skipped.
+//
+// The ClientApp:
+//   1. Reads channel + password from URL params
+//   2. Sets role + channel in the store
+//   3. Connects the socket to the admin server (reads socketPort from URL)
+//   4. Sets the session password (queued as pending until socket connects)
+//   5. Renders <McPanel /> or <OperatorPanel />
+function ClientApp({ role }: { role: 'mc' | 'operator' }) {
+  // Set role + channel in store on mount (mirrors what Home's useLayoutEffect
+  // does, but ensures it's set before ClientApp renders the panel).
+  useLayoutEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const store = useSaatirilStore.getState()
+    store.setMyRole(role)
+    const channelParam = params.get('channel')
+    if (channelParam) {
+      const ch = parseInt(channelParam, 10)
+      if (ch >= 1 && ch <= 2) store.setMyChannel(ch)
+    }
+    store.setCurrentScreen('app')
+    console.log(`[SAATIRIL] ClientApp mounted — role: ${role}, channel: ${channelParam}`)
+  }, [role])
+
+  // Connect socket + set session password on mount.
+  // The socket.ts getSocketUrl() reads `socketPort` from URL params and
+  // connects to `http://{hostname}:{socketPort}` (the admin's socket.io
+  // server, e.g. http://192.168.100.61:3003).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const password = params.get('password') || ''
+
+    // Set session password FIRST (queued as pending if socket not connected)
+    // so it's sent to the admin server before any SYNC_DB events are relayed.
+    if (password) {
+      setSessionPassword(password).catch((e) =>
+        console.error('[SAATIRIL] Failed to set session password:', e)
+      )
+    }
+
+    // Connect socket — reads socketPort + hostname from URL params.
+    // For Electron clients loading http://{ADMIN_IP}:3000/?role=..&socketPort=3003,
+    // this connects to http://{ADMIN_IP}:3003 (the admin's socket.io server).
+    const socket = connectSocket()
+    console.log('[SAATIRIL] ClientApp socket created:', socket.id || '(connecting...)')
+
+    // Load any cached projects from localStorage (for offline resilience).
+    // If the admin is temporarily offline, the MC/Operator can still see
+    // the last-known project state instead of a blank "waiting for sync".
+    try {
+      useSaatirilStore.getState().loadProjectsFromStorage()
+      const store = useSaatirilStore.getState()
+      if (!store.currentProject && store.projects.length > 0) {
+        store.setCurrentProject(store.projects[0])
+        console.log('[SAATIRIL] Recovered currentProject from localStorage for', role)
+      }
+    } catch (e) {
+      console.error('[SAATIRIL] Failed to load projects from storage:', e)
+    }
+  }, [])
+
+  // Global error handler (mirrors Home's) so uncaught errors are logged.
+  useEffect(() => {
+    const handler = (event: ErrorEvent) => {
+      console.error('[SAATIRIL ClientApp] Uncaught error:', event.error)
+    }
+    window.addEventListener('error', handler)
+    return () => window.removeEventListener('error', handler)
+  }, [])
+
+  if (role === 'mc') {
+    return (
+      <div className="h-dvh w-dvw flex flex-col" style={{ backgroundColor: '#1a0b2e' }}>
+        <McPanel />
+      </div>
+    )
+  }
+  return (
+    <div className="h-dvh w-dvw flex flex-col" style={{ backgroundColor: '#1a0b2e' }}>
+      <OperatorPanel />
+    </div>
+  )
+}
+
 // ─── Main Page Component ──────────────────────────────────────────────────
 export default function Home() {
   const currentScreen = useSaatirilStore((s) => s.currentScreen)
@@ -243,6 +341,34 @@ export default function Home() {
       setLicenseState('valid')
     })
   }, [])
+
+  // ── Client app role detection (MC / Operator) ───────────────────────────
+  // For standalone Electron client apps (saatiril-mc-electron.exe,
+  // saatiril-operator-electron.exe), the admin's HTTP server serves the
+  // Next.js root page with ?role=mc or ?role=operator. We detect that here
+  // and render ONLY the McPanel or OperatorPanel — skipping the license gate,
+  // hub, setup, and admin dashboard entirely.
+  //
+  // clientRole is null on the first render (SSR/hydration-safe), then set
+  // synchronously in useLayoutEffect (before browser paint) so the user
+  // sees the panel directly with no flash of the loading screen.
+  const [clientRole, setClientRole] = useState<string | null>(null)
+
+  useLayoutEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const roleParam = params.get('role')
+    if (roleParam === 'mc' || roleParam === 'operator') {
+      setClientRole(roleParam)
+      console.log(`[SAATIRIL] Client role detected from URL — rendering ${roleParam} panel directly`)
+    }
+  }, [])
+
+  // If role=mc or role=operator, render ONLY that panel — skip everything else
+  // (license, hub, setup, admin dashboard). This branch is the Electron
+  // client app entry point.
+  if (clientRole === 'mc' || clientRole === 'operator') {
+    return <ClientApp role={clientRole} />
+  }
 
   if (licenseState === 'checking') {
     // Clear loading screen — NOT the license page, just loading

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'electron-clients/**'
+      - 'src/app/page.tsx'
       - '.github/workflows/saatiril-electron-clients.yml'
   workflow_dispatch:
 
@@ -116,9 +117,15 @@ jobs:
           echo "## Saatiril Electron Clients Build" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Built and uploaded to releases:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`saatiril-mc-electron.exe\` (small window, loads mc.html)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`saatiril-operator-electron.exe\` (large window, native camera + WASM)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`saatiril-mc-electron.exe\` (small window, renders React McPanel)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`saatiril-operator-electron.exe\` (large window, React OperatorPanel + native camera + WASM)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Both apps show a connection screen first (enter admin IP + password + channel)," >> $GITHUB_STEP_SUMMARY
-          echo "then loadURL to \`http://{IP}:3000/{mc|operator}?channel=..&socketPort=3003&password=..&v=23\`" >> $GITHUB_STEP_SUMMARY
-          echo "Electron grants camera/WASM permission on HTTP origins." >> $GITHUB_STEP_SUMMARY
+          echo "then loadURL to \`http://{IP}:3000/?role={mc|operator}&channel=..&socketPort=3003&password=..&v=23\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The admin's portable.exe serves the Next.js static export. page.tsx detects" >> $GITHUB_STEP_SUMMARY
+          echo "\`?role=mc\` or \`?role=operator\` and renders the React McPanel/OperatorPanel directly" >> $GITHUB_STEP_SUMMARY
+          echo "(skipping license/hub/setup/admin-dashboard). Electron grants camera + WASM" >> $GITHUB_STEP_SUMMARY
+          echo "permissions on HTTP origins so the operator can use MediaPipe palm detection." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Small .exe (~50MB each with Electron runtime) — no Next.js bundling needed." >> $GITHUB_STEP_SUMMARY

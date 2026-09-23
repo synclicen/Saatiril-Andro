@@ -4,10 +4,16 @@
  * Large-window Electron app for the photo Operator.
  * It does NOT bundle the Next.js app — instead, after the user enters
  * the admin's IP + password + channel on the connection screen, it
- * calls `loadURL` to load the admin's `operator.html` over HTTP. The
- * admin's portable.exe must already be running and serving on port 3000.
+ * calls `loadURL` to load the admin's Next.js app over HTTP. The admin's
+ * portable.exe must already be running and serving on port 3000.
  *
- * CRITICAL: This app grants camera + microphone + WASM permissions on
+ * CRITICAL: This loads the Next.js ROOT page (not operator.html) with a
+ * ?role=operator query parameter. The Next.js page.tsx detects ?role=operator
+ * and renders the React <OperatorPanel /> component directly (no admin
+ * dashboard, no license gate, no hub/setup screens). The same proven React
+ * panel used by the admin app is reused here — only the chrome is skipped.
+ *
+ * CRITICAL #2: This app grants camera + microphone + WASM permissions on
  * HTTP origins. Browsers (Chrome/Edge) block camera on HTTP, but
  * Electron's permission handler can grant it explicitly. This is the
  * main reason the Operator uses Electron instead of a browser tab.
@@ -16,7 +22,10 @@
  *   1. App launches → show connection screen (connection.html?role=operator)
  *   2. User enters IP, password, channel → press CONNECT
  *   3. Renderer calls saatirilAPI.connectToServer(url) → IPC → loadURL
- *   4. Window navigates to http://{IP}:3000/operator?channel=..&socketPort=..&password=..&v=23
+ *   4. Window navigates to http://{IP}:3000/?role=operator&channel=..&socketPort=..&password=..&v=23
+ *   5. Next.js page.tsx detects ?role=operator → renders <OperatorPanel /> only
+ *   6. OperatorPanel calls connectSocket() which reads socketPort from URL params
+ *      and connects to http://{IP}:3003 (admin's socket.io server)
  *
  * Auto-connect (QR / link launch):
  *   saatiril-operator-electron.exe --host=192.168.100.61 --port=3003 --channel=1 --password=xxx
@@ -28,9 +37,10 @@
  *   - geolocation, notifications, midi, pointerLock, openExternal
  *   - WASM (MediaPipe / palm-detection) — via CSP strip in onHeadersReceived
  *
- * NOTE: We strip Content-Security-Policy from the admin's HTTP
- * response so the operator.html page can freely run WASM, MediaPipe,
- * inline scripts, and access the camera over HTTP.
+ * NOTE: We strip Content-Security-Policy from the admin's HTTP response
+ * so the Next.js app (loaded with ?role=operator) can freely run WASM,
+ * MediaPipe palm-detection, inline scripts (Next.js hydration), and access
+ * the camera over HTTP.
  */
 
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
@@ -43,8 +53,10 @@ const WIN_W = 1280
 const WIN_H = 800
 const WIN_TITLE = 'Saatiril Operator'
 
-// URL pattern after connection (matches admin's operator.html — version v23)
-// http://{IP}:3000/operator?channel={CH}&socketPort=3003&password={PW}&v=23
+// URL pattern after connection — loads the Next.js root page with ?role=operator.
+// The admin's portable.exe serves the Next.js static export at http://{IP}:3000/.
+// page.tsx detects ?role=operator and renders <OperatorPanel /> directly.
+// http://{IP}:3000/?role=operator&channel={CH}&socketPort=3003&password={PW}&v=23
 const ADMIN_HTTP_PORT = 3000
 const DEFAULT_SOCKET_PORT = 3003
 const URL_VERSION = '23'
@@ -166,10 +178,19 @@ ipcMain.handle('get-lan-info', () => {
   }
 })
 
+// Renderer → main: open URL in default browser (for Web Bluetooth etc.)
+ipcMain.handle('open-in-browser', (_event, url: string) => {
+  if (typeof url === 'string' && url.length > 0) {
+    shell.openExternal(url).catch((e) => console.error('[Operator] open-in-browser failed:', e))
+    return true
+  }
+  return false
+})
+
 // ─── Permissions (CRITICAL — HTTP camera + WASM) ──────────────────────────
 function setupPermissions() {
   // Full list of permissions we will grant.
-  // 'media' = camera + microphone — required for HTTP camera in operator.html.
+  // 'media' = camera + microphone — required for HTTP camera in OperatorPanel.
   // 'display-capture' = getDisplayMedia
   // 'fullscreen' = Document.fullscreen
   // 'clipboard-read'/'clipboard-write' = clipboard for QR / paste
@@ -209,11 +230,11 @@ function setupPermissions() {
   })
 
   // Strip CSP / X-Frame-Options from admin HTTP responses so the
-  // operator.html page can:
-  //   - load WASM (MediaPipe palm-detection models)
-  //   - run inline scripts
+  // Next.js app (loaded with ?role=operator) can:
+  //   - load WASM (MediaPipe palm-detection models used by OperatorPanel)
+  //   - run inline scripts (Next.js uses inline scripts for hydration)
   //   - access camera via getUserMedia on HTTP
-  //   - load scripts/styles from CDN or local file paths
+  //   - load scripts/styles/fonts from CDN or local file paths
   session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
     const headers = details.responseHeaders || {}
     delete headers['content-security-policy']
