@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="saatiril-version" content="v20-operator-rebuild">
-  <title>SAATIRIL Operator v20-operator-rebuild</title>
+  <meta name="saatiril-version" content="v21-operator-settings">
+  <title>SAATIRIL Operator v21-operator-settings</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -418,6 +418,110 @@
       box-shadow: 0 0 8px rgba(212,175,55,0.15);
     }
 
+    /* Palm trigger row (separate from shutter chips — hands-free trigger) */
+    .palm-trigger-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--panel);
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      margin-top: 6px; width: 100%; transition: all 0.15s;
+    }
+    .palm-trigger-row.active {
+      border-color: var(--emerald); color: var(--emerald);
+      background: rgba(34,197,94,0.12);
+      box-shadow: 0 0 8px rgba(34,197,94,0.15);
+    }
+    .palm-trigger-row .palm-icon {
+      width: 12px; height: 12px; flex-shrink: 0;
+    }
+    .palm-trigger-row .palm-label { flex: 1; min-width: 0; }
+    .palm-trigger-row .palm-state {
+      font-size: 9px; font-weight: 700; padding: 1px 6px;
+      border-radius: 4px; background: rgba(0,0,0,0.3); color: inherit;
+    }
+    .palm-trigger-row .palm-state.searching { color: var(--muted); }
+    .palm-trigger-row .palm-state.hand { color: var(--gold); background: rgba(212,175,55,0.15); }
+    .palm-trigger-row .palm-state.confirmed { color: var(--emerald); background: rgba(34,197,94,0.15); }
+    .palm-trigger-row .palm-state.triggered { color: var(--emerald); background: rgba(34,197,94,0.2); }
+    .palm-trigger-row .palm-state.error { color: var(--red); background: rgba(239,68,68,0.15); }
+    .palm-trigger-row .palm-spinner {
+      width: 10px; height: 10px; border: 2px solid var(--border);
+      border-top-color: var(--gold); border-radius: 50%;
+      animation: spin 0.8s linear infinite; flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Gridline type chips */
+    .gridline-type-row, .gridline-thickness-row, .gridline-color-row {
+      display: flex; align-items: center; gap: 4px;
+      margin-top: 6px; flex-wrap: wrap;
+    }
+    .gridline-row-label {
+      font-size: 9px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-right: 2px; min-width: 50px;
+    }
+    .gridline-type-chip {
+      display: flex; align-items: center; justify-content: center; gap: 3px;
+      padding: 4px 6px; border-radius: 5px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--panel);
+      font-size: 9px; font-weight: 700; color: var(--muted);
+      transition: all 0.15s;
+    }
+    .gridline-type-chip.active {
+      border-color: var(--gold); color: var(--gold);
+      background: rgba(212,175,55,0.18);
+      box-shadow: 0 0 6px rgba(212,175,55,0.12);
+    }
+    .gridline-thickness-chip {
+      display: flex; align-items: center; justify-content: center;
+      width: 24px; height: 20px; border-radius: 5px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--panel);
+      transition: all 0.15s;
+    }
+    .gridline-thickness-chip.active {
+      border-color: var(--gold);
+      background: rgba(212,175,55,0.18);
+      box-shadow: 0 0 6px rgba(212,175,55,0.12);
+    }
+    .gridline-thickness-dot {
+      border-radius: 50%; background: var(--muted);
+    }
+    .gridline-thickness-chip.active .gridline-thickness-dot { background: var(--gold); }
+    .gridline-color-swatch {
+      width: 18px; height: 18px; border-radius: 50%; cursor: pointer;
+      border: 2px solid transparent; opacity: 0.5; transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .gridline-color-swatch.active {
+      opacity: 1; border-color: var(--gold);
+    }
+
+    /* Palm detection indicator overlay (on camera) */
+    .palm-indicator {
+      position: absolute; top: 8px; right: 8px; z-index: 10;
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 20px; font-size: 10px; font-weight: 700;
+      background: rgba(0,0,0,0.7); border: 1px solid var(--border);
+      color: var(--muted); pointer-events: none; transition: all 0.2s;
+    }
+    .palm-indicator.hand {
+      background: rgba(212,175,55,0.7); border-color: var(--gold); color: var(--gold);
+      animation: pulse 1s infinite;
+    }
+    .palm-indicator.confirmed {
+      background: rgba(34,197,94,0.7); border-color: var(--emerald); color: var(--emerald);
+    }
+    .palm-indicator.triggered {
+      background: rgba(34,197,94,0.85); border-color: var(--emerald); color: #fff;
+    }
+    .palm-indicator.error {
+      background: rgba(239,68,68,0.7); border-color: var(--red); color: #fff;
+    }
+    .palm-indicator-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    }
+
     /* Switch */
     .switch {
       width: 36px; height: 20px; border-radius: 10px; background: var(--border);
@@ -634,7 +738,7 @@
 <div id="connectionScreen" class="connection-screen">
   <div>
     <div class="logo-text">SAATIRIL</div>
-    <div class="logo-sub">SISTEM AUTO TRACK INPUT, RAW INTO LIVE<br>OPERATOR KAMERA v20</div>
+    <div class="logo-sub">SISTEM AUTO TRACK INPUT, RAW INTO LIVE<br>OPERATOR KAMERA v21</div>
   </div>
 
   <div id="permSection" style="width:100%;max-width:380px;">
@@ -797,6 +901,10 @@
         </div>
 
         <svg id="gridlineOverlay" class="gridline-overlay" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+        <div id="palmIndicator" class="palm-indicator" style="display:none;">
+          <div class="palm-indicator-dot"></div>
+          <span id="palmIndicatorText">Tangan</span>
+        </div>
         <img id="frameOverlay" class="frame-overlay hidden" alt="">
 
         <div id="timerOverlay" class="timer-overlay hidden">
@@ -903,12 +1011,55 @@
           <div class="shutter-chip" data-mode="timer-5" onclick="setShutterMode('timer-5')">5s</div>
           <div class="shutter-chip" data-mode="timer-10" onclick="setShutterMode('timer-10')">10s</div>
         </div>
+        <!-- Palm Trigger — hands-free trigger (separate row, like operator-panel.tsx) -->
+        <div id="palmTriggerRow" class="palm-trigger-row" onclick="togglePalmTrigger()">
+          <svg class="palm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
+            <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/>
+            <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/>
+            <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.7-.7-6.9-2.6l-1.3-1.3a2 2 0 0 1-.3-2.5l1.3-2a2 2 0 0 1 2.8-.6L9 14"/>
+          </svg>
+          <span class="palm-label">Trigger Tangan</span>
+          <span id="palmStateBadge" class="palm-state searching" style="display:none;"></span>
+        </div>
       </div>
 
       <div id="gridlinePanel" class="sidebar-panel hidden">
         <div class="settings-row">
           <span class="panel-label">Gridline</span>
           <div id="gridlineSwitch" class="switch on" onclick="toggleGridline()"></div>
+        </div>
+        <div id="gridlineSettings" style="display:block;">
+          <!-- Type selector -->
+          <div class="gridline-type-row">
+            <span class="gridline-row-label">Tipe</span>
+            <div class="gridline-type-chip active" data-type="thirds" onclick="setGridlineType('thirds')" title="1/3 (rule of thirds)">1/3</div>
+            <div class="gridline-type-chip" data-type="quarters" onclick="setGridlineType('quarters')" title="1/4 (quarters)">1/4</div>
+            <div class="gridline-type-chip" data-type="crosshair" onclick="setGridlineType('crosshair')" title="+ (crosshair)">+</div>
+            <div class="gridline-type-chip" data-type="diagonal" onclick="setGridlineType('diagonal')" title="X (diagonal)">X</div>
+          </div>
+          <!-- Thickness selector -->
+          <div class="gridline-thickness-row">
+            <span class="gridline-row-label">Tebal</span>
+            <div class="gridline-thickness-chip active" data-thickness="1" onclick="setGridlineThickness(1)" title="Ketebalan 1">
+              <div class="gridline-thickness-dot" style="width:3px;height:3px;"></div>
+            </div>
+            <div class="gridline-thickness-chip" data-thickness="2" onclick="setGridlineThickness(2)" title="Ketebalan 2">
+              <div class="gridline-thickness-dot" style="width:5px;height:5px;"></div>
+            </div>
+            <div class="gridline-thickness-chip" data-thickness="3" onclick="setGridlineThickness(3)" title="Ketebalan 3">
+              <div class="gridline-thickness-dot" style="width:7px;height:7px;"></div>
+            </div>
+          </div>
+          <!-- Color selector -->
+          <div class="gridline-color-row">
+            <span class="gridline-row-label">Warna</span>
+            <div class="gridline-color-swatch active" data-color="white" style="background:#ffffff;" onclick="setGridlineColor('white')" title="Putih"></div>
+            <div class="gridline-color-swatch" data-color="yellow" style="background:#facc15;" onclick="setGridlineColor('yellow')" title="Kuning"></div>
+            <div class="gridline-color-swatch" data-color="red" style="background:#ef4444;" onclick="setGridlineColor('red')" title="Merah"></div>
+            <div class="gridline-color-swatch" data-color="cyan" style="background:#06b6d4;" onclick="setGridlineColor('cyan')" title="Cyan"></div>
+            <div class="gridline-color-swatch" data-color="green" style="background:#22c55e;" onclick="setGridlineColor('green')" title="Hijau"></div>
+          </div>
         </div>
         <div class="settings-row">
           <span class="panel-label">Mirror</span>
@@ -991,7 +1142,7 @@ if (typeof io === 'undefined') {
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
-// SAATIRIL Operator v20-operator-rebuild
+// SAATIRIL Operator v21-operator-settings
 // — Rebuilt from scratch to match src/components/saatiril/operator-panel.tsx
 // — Keeps existing SHA-256 + camera logic + socket patterns from v19
 // — New layout: 65% camera + 35% sidebar (toolbar + target + camera selector +
@@ -1044,6 +1195,24 @@ let frameData = null
 // Gridline (DEFAULT ENABLED — matches operator-panel.tsx)
 let gridlineEnabled = true
 let gridlineType = 'thirds'
+let gridlineColor = 'white'    // NEW — white/yellow/red/cyan/green
+let gridlineThickness = 1      // NEW — 1/2/3
+
+// Palm trigger (NEW — hands-free trigger, matches operator-panel.tsx)
+let palmTriggerEnabled = false
+let palmDetectionRunning = false
+let palmState = 'none'         // none | searching | hand_detected | confirmed | triggered | error
+let palmHands = null           // MediaPipe Hands instance
+let palmAnimFrame = null       // requestAnimationFrame id
+let palmVideoEl = null         // cached video element
+let palmHandVisibleSince = 0   // timestamp when hand first appeared
+let palmIsConfirmed = false    // hand has been sustained long enough
+let palmTriggerFired = false   // trigger has fired (until reset)
+let palmLastTriggerTime = 0    // cooldown tracker
+let palmScriptsLoaded = false
+let palmScriptsLoading = false
+const HAND_CONFIRM_SUSTAIN_MS = 500
+const TRIGGER_COOLDOWN_MS = 5000
 
 // Latency
 let latencyMs = 0
@@ -2034,7 +2203,7 @@ async function handleConnect() {
 }
 
 function connectToServer(ip) {
-  console.log('[SAATIRIL Operator] v20-operator-rebuild booting — connecting to ' + ip);
+  console.log('[SAATIRIL Operator] v21-operator-settings booting — connecting to ' + ip);
   if (socket) {
     socket.disconnect()
     socket = null
@@ -2892,6 +3061,282 @@ function setShutterMode(mode) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PALM TRIGGER — hands-free shutter trigger (matches operator-panel.tsx)
+// Uses MediaPipe Hands loaded from /ai/mediapipe/hands.js
+// Flow: show hand → confirmed (500ms) → release hand → TRIGGER shutter mode
+// Manual mode → instant photo, Timer mode → start countdown
+// Graceful degradation: if MediaPipe fails to load, palm trigger shows error
+// and remains OFF.
+// ═══════════════════════════════════════════════════════════════════════════
+function togglePalmTrigger() {
+  palmTriggerEnabled = !palmTriggerEnabled
+  const row = document.getElementById('palmTriggerRow')
+  if (row) row.classList.toggle('active', palmTriggerEnabled)
+
+  if (palmTriggerEnabled) {
+    // Start detection — async, will load scripts if needed
+    startPalmDetection().catch(err => {
+      console.error('[OP Palm] Failed to start:', err)
+      setPalmState('error', 'Gagal memuat')
+      palmTriggerEnabled = false
+      if (row) row.classList.remove('active')
+    })
+  } else {
+    stopPalmDetection()
+  }
+}
+
+function setPalmState(state, label) {
+  palmState = state
+  const badge = document.getElementById('palmStateBadge')
+  const indicator = document.getElementById('palmIndicator')
+  const indText = document.getElementById('palmIndicatorText')
+  if (badge) {
+    badge.className = 'palm-state ' + state
+    badge.textContent = label || ''
+    badge.style.display = label ? 'inline-block' : 'none'
+  }
+  if (indicator && indText) {
+    if (state === 'none' || !palmTriggerEnabled) {
+      indicator.style.display = 'none'
+    } else {
+      indicator.style.display = 'flex'
+      indicator.className = 'palm-indicator ' + state
+      const txtMap = {
+        searching: 'Tunjukkan tangan',
+        hand_detected: 'Tangan terdeteksi...',
+        confirmed: 'Siap ✓ — lepaskan tangan',
+        triggered: 'Timer ✓',
+        error: 'MediaPipe error'
+      }
+      indText.textContent = txtMap[state] || 'Tangan'
+    }
+  }
+}
+
+// Load MediaPipe Hands scripts (singleton — only load once)
+function loadPalmScripts() {
+  return new Promise((resolve, reject) => {
+    if (palmScriptsLoaded && typeof window.Hands !== 'undefined') {
+      resolve()
+      return
+    }
+    if (palmScriptsLoading) {
+      // Wait for in-flight load
+      const wait = setInterval(() => {
+        if (palmScriptsLoaded) { clearInterval(wait); resolve(); return }
+        if (!palmScriptsLoading) { clearInterval(wait); reject(new Error('Load failed')); return }
+      }, 100)
+      return
+    }
+    palmScriptsLoading = true
+
+    function loadScript(src) {
+      return new Promise((res, rej) => {
+        // Already loaded? skip
+        if (document.querySelector('script[src="' + src + '"]')) { res(); return }
+        const s = document.createElement('script')
+        s.src = src
+        s.async = true
+        s.onload = () => res()
+        s.onerror = () => rej(new Error('Failed: ' + src))
+        document.head.appendChild(s)
+      })
+    }
+
+    // Use local MediaPipe files (offline support)
+    loadScript('/ai/mediapipe/hands.js')
+      .then(() => new Promise(r => setTimeout(r, 100)))
+      .then(() => {
+        if (typeof window.Hands === 'undefined') {
+          throw new Error('MediaPipe Hands global missing')
+        }
+        palmScriptsLoaded = true
+        palmScriptsLoading = false
+        resolve()
+      })
+      .catch(err => {
+        palmScriptsLoading = false
+        reject(err)
+      })
+  })
+}
+
+async function initPalmHands() {
+  if (palmHands) return palmHands
+  await loadPalmScripts()
+
+  const hands = new window.Hands({
+    locateFile: (file) => '/ai/mediapipe/' + file
+  })
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.3,
+    minTrackingConfidence: 0.3
+  })
+  hands.onResults(processPalmResults)
+
+  // Initialize with a 1x1 dummy frame
+  const tmp = document.createElement('canvas')
+  tmp.width = 1; tmp.height = 1
+  await hands.send({ image: tmp })
+
+  palmHands = hands
+  return hands
+}
+
+async function startPalmDetection() {
+  if (palmDetectionRunning) return
+  setPalmState('searching', 'Memuat...')
+
+  try {
+    await initPalmHands()
+  } catch (err) {
+    console.error('[OP Palm] Model init failed:', err)
+    setPalmState('error', 'Gagal memuat')
+    palmTriggerEnabled = false
+    const row = document.getElementById('palmTriggerRow')
+    if (row) row.classList.remove('active')
+    return
+  }
+
+  const video = document.getElementById('videoPreview')
+  if (!video) {
+    setPalmState('error', 'Video tidak ada')
+    return
+  }
+  palmVideoEl = video
+  palmHandVisibleSince = 0
+  palmIsConfirmed = false
+  palmTriggerFired = false
+  palmLastTriggerTime = 0
+  palmDetectionRunning = true
+
+  setPalmState('searching', 'Tunjukkan tangan')
+  schedulePalmFrame()
+}
+
+function schedulePalmFrame() {
+  if (!palmDetectionRunning) return
+  if (palmAnimFrame) cancelAnimationFrame(palmAnimFrame)
+  palmAnimFrame = requestAnimationFrame(runPalmFrame)
+}
+
+async function runPalmFrame() {
+  if (!palmDetectionRunning || !palmHands || !palmVideoEl) return
+
+  // Skip if video not ready
+  if (palmVideoEl.readyState < 2 || palmVideoEl.videoWidth === 0) {
+    schedulePalmFrame()
+    return
+  }
+
+  try {
+    await palmHands.send({ image: palmVideoEl })
+  } catch (e) {
+    // Frame failed, skip silently
+  }
+
+  if (palmDetectionRunning) {
+    schedulePalmFrame()
+  }
+}
+
+function processPalmResults(results) {
+  if (!palmDetectionRunning) return
+
+  const hands = results.multiHandLandmarks || []
+  const now = Date.now()
+  const handDetected = hands.length > 0
+
+  // Cooldown check
+  if (palmLastTriggerTime > 0 && now - palmLastTriggerTime < TRIGGER_COOLDOWN_MS) {
+    if (palmState !== 'triggered') setPalmState('triggered', 'Cooldown...')
+    return
+  } else if (palmState === 'triggered' && palmLastTriggerTime > 0 &&
+             now - palmLastTriggerTime >= TRIGGER_COOLDOWN_MS) {
+    // Reset after cooldown
+    palmTriggerFired = false
+    palmLastTriggerTime = 0
+  }
+
+  if (handDetected) {
+    if (palmHandVisibleSince === 0) {
+      // Hand just appeared
+      palmHandVisibleSince = now
+      palmIsConfirmed = false
+      palmTriggerFired = false
+      setPalmState('hand_detected', 'Tangan terdeteksi...')
+      console.log('[OP Palm] Hand appeared — waiting for sustain')
+    } else if (!palmIsConfirmed && now - palmHandVisibleSince >= HAND_CONFIRM_SUSTAIN_MS) {
+      // Hand sustained long enough → confirmed
+      palmIsConfirmed = true
+      setPalmState('confirmed', 'Lepas tangan = mulai')
+      console.log('[OP Palm] Hand confirmed ✓ — remove hand to trigger')
+    }
+    // else: still sustaining
+  } else {
+    // No hand in frame
+    if (palmIsConfirmed && !palmTriggerFired) {
+      // Confirmed hand just left → TRIGGER!
+      palmTriggerFired = true
+      palmLastTriggerTime = now
+      setPalmState('triggered', 'Timer ✓')
+      console.log('[OP Palm] Hand left frame → TRIGGER shutter mode:', shutterMode)
+      triggerPalmShutter()
+    } else {
+      // Hand not confirmed or already triggered — reset to searching
+      if (palmState !== 'triggered') setPalmState('searching', 'Tunjukkan tangan')
+    }
+    palmHandVisibleSince = 0
+    palmIsConfirmed = false
+  }
+}
+
+// Trigger the currently-selected shutter mode when palm is released
+function triggerPalmShutter() {
+  if (!currentTarget) {
+    console.log('[OP Palm] No target — skipping trigger')
+    return
+  }
+  const mode = currentProject && currentProject.config ? currentProject.config.mode : null
+  const isPs = isPhotoshootMode(mode)
+  // Only trigger if in a "ready" phase
+  const canCapture = isPs ? (capturePhase === 'ready-1') : (capturePhase === 'ready-1' || capturePhase === 'ready-2')
+  if (!canCapture) {
+    console.log('[OP Palm] Not in ready phase — skipping trigger (phase:', capturePhase + ')')
+    return
+  }
+
+  if (shutterMode.indexOf('timer-') === 0) {
+    // Timer mode → start countdown (only if not already running)
+    if (!timerInterval) {
+      const secs = parseInt(shutterMode.split('-')[1])
+      startTimer(secs)
+    }
+  } else {
+    // Manual mode → instant photo
+    doCapture()
+  }
+}
+
+function stopPalmDetection() {
+  palmDetectionRunning = false
+  if (palmAnimFrame) {
+    cancelAnimationFrame(palmAnimFrame)
+    palmAnimFrame = null
+  }
+  palmHandVisibleSince = 0
+  palmIsConfirmed = false
+  palmTriggerFired = false
+  setPalmState('none', '')
+  const indicator = document.getElementById('palmIndicator')
+  if (indicator) indicator.style.display = 'none'
+  // NOTE: do not close() palmHands — it's expensive to re-create; keep for reuse
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // GRIDLINE — default ENABLED (matches operator-panel.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
 function toggleGridline() {
@@ -2899,6 +3344,8 @@ function toggleGridline() {
   const gridSwitch = document.getElementById('gridlineSwitch')
   if (gridSwitch) gridSwitch.classList.toggle('on', gridlineEnabled)
   const overlay = document.getElementById('gridlineOverlay')
+  const settings = document.getElementById('gridlineSettings')
+  if (settings) settings.style.display = gridlineEnabled ? 'block' : 'none'
 
   if (gridlineEnabled) {
     overlay.classList.remove('hidden')
@@ -2908,20 +3355,95 @@ function toggleGridline() {
   }
 }
 
+// Gridline color map (matches operator-panel.tsx GRIDLINE_COLORS)
+const GRIDLINE_COLORS = {
+  white:  { stroke: '#ffffff', opacity: 0.25 },
+  yellow: { stroke: '#facc15', opacity: 0.35 },
+  red:    { stroke: '#ef4444', opacity: 0.35 },
+  cyan:   { stroke: '#06b6d4', opacity: 0.35 },
+  green:  { stroke: '#22c55e', opacity: 0.35 },
+}
+
 function renderGridline() {
   const svg = document.getElementById('gridlineOverlay')
-  const color = 'rgba(212,175,55,0.6)'
-  const props = `stroke="${color}" stroke-width="0.3"`
-  const propsSub = `stroke="${color}" stroke-width="0.15" opacity="0.4"`
+  if (!svg) return
+  const c = GRIDLINE_COLORS[gridlineColor] || GRIDLINE_COLORS.white
+  const sw = gridlineThickness * 0.15 // 0.15 / 0.3 / 0.45
+  const props = `stroke="${c.stroke}" stroke-width="${sw}" fill="none" opacity="${c.opacity}"`
+  const propsSub = `stroke="${c.stroke}" stroke-width="${sw}" fill="none" opacity="${c.opacity * 0.5}"`
+  let lines = ''
 
-  svg.innerHTML = `
-    <line x1="33.333" y1="0" x2="33.333" y2="100" ${props} />
-    <line x1="66.666" y1="0" x2="66.666" y2="100" ${props} />
-    <line x1="0" y1="33.333" x2="100" y2="33.333" ${props} />
-    <line x1="0" y1="66.666" x2="100" y2="66.666" ${props} />
-    <line x1="0" y1="0" x2="100" y2="100" ${propsSub} />
-    <line x1="100" y1="0" x2="0" y2="100" ${propsSub} />
-  `
+  switch (gridlineType) {
+    case 'thirds':
+      lines = `
+        <line x1="33.333" y1="0" x2="33.333" y2="100" ${props} />
+        <line x1="66.666" y1="0" x2="66.666" y2="100" ${props} />
+        <line x1="0" y1="33.333" x2="100" y2="33.333" ${props} />
+        <line x1="0" y1="66.666" x2="100" y2="66.666" ${props} />
+      `
+      break
+    case 'quarters':
+      lines = `
+        <line x1="25" y1="0" x2="25" y2="100" ${props} />
+        <line x1="50" y1="0" x2="50" y2="100" ${props} />
+        <line x1="75" y1="0" x2="75" y2="100" ${props} />
+        <line x1="0" y1="25" x2="100" y2="25" ${props} />
+        <line x1="0" y1="50" x2="100" y2="50" ${props} />
+        <line x1="0" y1="75" x2="100" y2="75" ${props} />
+      `
+      break
+    case 'crosshair':
+      lines = `
+        <line x1="50" y1="0" x2="50" y2="100" ${props} />
+        <line x1="0" y1="50" x2="100" y2="50" ${props} />
+        <circle cx="50" cy="50" r="8" ${props} />
+        <circle cx="50" cy="50" r="20" ${props} stroke-dasharray="2 2" />
+        <line x1="50" y1="0" x2="50" y2="5" ${props} stroke-width="${sw * 2}" />
+        <line x1="50" y1="95" x2="50" y2="100" ${props} stroke-width="${sw * 2}" />
+        <line x1="0" y1="50" x2="5" y2="50" ${props} stroke-width="${sw * 2}" />
+        <line x1="95" y1="50" x2="100" y2="50" ${props} stroke-width="${sw * 2}" />
+      `
+      break
+    case 'diagonal':
+      lines = `
+        <line x1="0" y1="0" x2="100" y2="100" ${props} />
+        <line x1="100" y1="0" x2="0" y2="100" ${props} />
+        <line x1="33.333" y1="0" x2="33.333" y2="100" ${propsSub} />
+        <line x1="66.666" y1="0" x2="66.666" y2="100" ${propsSub} />
+        <line x1="0" y1="33.333" x2="100" y2="33.333" ${propsSub} />
+        <line x1="0" y1="66.666" x2="100" y2="66.666" ${propsSub} />
+      `
+      break
+    default:
+      lines = ''
+  }
+
+  svg.innerHTML = lines
+}
+
+// Set gridline type/thickness/color — updates the overlay in real-time
+function setGridlineType(type) {
+  gridlineType = type
+  document.querySelectorAll('.gridline-type-chip').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === type)
+  })
+  if (gridlineEnabled) renderGridline()
+}
+
+function setGridlineThickness(t) {
+  gridlineThickness = parseInt(t)
+  document.querySelectorAll('.gridline-thickness-chip').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.thickness) === gridlineThickness)
+  })
+  if (gridlineEnabled) renderGridline()
+}
+
+function setGridlineColor(color) {
+  gridlineColor = color
+  document.querySelectorAll('.gridline-color-swatch').forEach(b => {
+    b.classList.toggle('active', b.dataset.color === color)
+  })
+  if (gridlineEnabled) renderGridline()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3349,7 +3871,21 @@ async function checkExistingPermission() {
   }
 }
 
-console.log('[SAATIRIL Operator] v20-operator-rebuild loaded — ready to connect');
+// Stop palm detection when tab hidden (saves CPU), resume when visible
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (palmDetectionRunning && palmAnimFrame) {
+      cancelAnimationFrame(palmAnimFrame)
+      palmAnimFrame = null
+    }
+  } else {
+    if (palmTriggerEnabled && !palmAnimFrame && palmHands) {
+      schedulePalmFrame()
+    }
+  }
+})
+
+console.log('[SAATIRIL Operator] v21-operator-settings loaded — ready to connect');
 </script>
 
 </body>
