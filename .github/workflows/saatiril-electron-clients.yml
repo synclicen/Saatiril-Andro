@@ -27,10 +27,14 @@ jobs:
       - name: Install tooling (TypeScript + Electron + electron-builder)
         working-directory: electron-clients
         run: |
-          npm install --no-save typescript@5.3.3 @types/node@20.10.0 electron@28.3.3 electron-builder@24.13.3
+          npm install --no-audit --no-fund --loglevel=error
           Write-Host "=== tooling versions ==="
           npx tsc --version
           node node_modules/electron-builder/cli.js --version
+          Write-Host "=== electron version ==="
+          node -e "console.log(require('electron/package.json').version)"
+          Write-Host "=== electron-builder dir contents ==="
+          Get-ChildItem node_modules/electron-builder | Format-Table Name,Length
 
       - name: Compile TypeScript (mc-main, operator-main, preload)
         working-directory: electron-clients
@@ -50,8 +54,6 @@ jobs:
         working-directory: electron-clients/dist
         run: |
           cp ../package-mc.json package.json
-          # electron-builder is installed at electron-clients/node_modules
-          # Call it directly via node (cross-platform, no PATH needed)
           node ../node_modules/electron-builder/cli.js --win --x64 --config package.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

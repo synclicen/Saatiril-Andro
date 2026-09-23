@@ -1,0 +1,17 @@
+{
+  "name": "saatiril-electron-clients-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build-time package for Saatiril MC + Operator Electron clients (NOT distributed)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:mc": "node node_modules/electron-builder/cli.js --win --x64 --config package-mc.json --project .",
+    "build:operator": "node node_modules/electron-builder/cli.js --win --x64 --config package-operator.json --project ."
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4",
+    "typescript": "^5.3.0",
+    "@types/node": "^20.10.0"
+  }
+}
