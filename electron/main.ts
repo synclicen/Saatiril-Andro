@@ -420,14 +420,14 @@ function startStaticServer(outDir: string): Promise<void> {
 
       // ── MC web page — served at /mc?channel=1 ─────────────────────────
       // MC scans QR code → browser opens this page → connects via Socket.io
-      // v15-final-audit: matches mc-panel.tsx for all 4 modes (single, dual,
+      // v16-screen-lock: matches mc-panel.tsx for all 4 modes (single, dual,
       // single-photoshoot, dual-photoshoot) + uses data.student.status.
       if (urlPath === '/mc') {
         const mcHtmlPath = getResourcePath('public/mc.html')
         if (fs.existsSync(mcHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v15-final-audit',
+            'X-Saatiril-Version': 'v16-screen-lock',
           })
           fs.createReadStream(mcHtmlPath).pipe(res)
           return
@@ -441,7 +441,7 @@ function startStaticServer(outDir: string): Promise<void> {
         if (fs.existsSync(opHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v15-final-audit',
+            'X-Saatiril-Version': 'v16-screen-lock',
           })
           fs.createReadStream(opHtmlPath).pipe(res)
           return
@@ -449,11 +449,11 @@ function startStaticServer(outDir: string): Promise<void> {
       }
 
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
-      // Returns the Saatiril build version (v15-final-audit). MC + operator HTML
+      // Returns the Saatiril build version (v16-screen-lock). MC + operator HTML
       // also expose this via <meta name="saatiril-version"> + console.log.
       if (urlPath === '/version' || urlPath === '/api/version') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ version: 'v15-final-audit', component: 'saatiril-server' }))
+        res.end(JSON.stringify({ version: 'v16-screen-lock', component: 'saatiril-server' }))
         return
       }
 

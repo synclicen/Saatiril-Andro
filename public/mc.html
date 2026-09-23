@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="saatiril-version" content="v15-final-audit">
-<title>Saatiril MC v15-final-audit</title>
+<meta name="saatiril-version" content="v16-screen-lock">
+<title>Saatiril MC v16-screen-lock</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
@@ -116,14 +116,24 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 .pwd-input:focus { border-color:#d4af37; outline:none; }
 .pwd-btn { width:100%; max-width:300px; height:44px; border:none; border-radius:8px; background:#d4af37; color:#1a0b2e; font-size:14px; font-weight:900; cursor:pointer; display:block; margin:0 auto; }
 .pwd-btn:disabled { opacity:0.6; cursor:wait; }
+
+/* Screen Lock */
+.lock-btn { background:#2a164a; border:1px solid #533485; color:#c4b5fd; padding:4px 8px; border-radius:4px; font-size:10px; cursor:pointer; margin-left:auto; display:flex; align-items:center; gap:4px; }
+.lock-btn.active { background:rgba(212,175,55,0.2); border-color:#d4af37; color:#d4af37; }
+.lock-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(26,11,46,0.95); z-index:9999; display:none; flex-direction:column; align-items:center; justify-content:center; gap:16px; }
+.lock-overlay.show { display:flex; }
+.lock-overlay .lock-icon { font-size:48px; }
+.lock-overlay .lock-title { font-size:20px; font-weight:bold; color:#d4af37; }
+.lock-overlay .lock-msg { font-size:13px; color:#c4b5fd; text-align:center; max-width:300px; }
+.lock-overlay .lock-btn-back { background:#d4af37; color:#1a0b2e; border:none; padding:10px 24px; border-radius:8px; font-size:14px; font-weight:bold; cursor:pointer; margin-top:8px; }
 </style>
 </head>
 <body>
 <div class="header">
   <div class="dot connecting" id="status-dot"></div>
   <h1>SAATIRIL MC</h1>
-  <span class="ver" id="ver-label">v15-final-audit</span>
-  <span class="ch" id="ch-label">Ch.1</span>
+  <span class="ver" id="ver-label">v16-screen-lock</span>
+  <span class="ch" id="ch-label">Ch.1</span><button class="lock-btn" id="lockBtn" onclick="toggleScreenLock()">&#128272; Kunci</button>
 </div>
 <div class="container" id="app">
   <div class="loading">Menghubungkan ke server&#8230;</div>
@@ -201,7 +211,7 @@ async function sha256(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MC Web Page — v15-final-audit — main logic
+// MC Web Page — v16-screen-lock — main logic
 //
 // Mode detection:
 //   - single           → wisuda, single channel, sequential calling
@@ -220,7 +230,7 @@ async function sha256(text) {
 //
 // SYNC_DB handler REPLACES project (MC is a thin client — no merge).
 // ═══════════════════════════════════════════════════════════════
-var VERSION = 'v15-final-audit';
+var VERSION = 'v16-screen-lock';
 var params = new URLSearchParams(window.location.search);
 var channel = parseInt(params.get('channel') || '1');
 var password = params.get('password') || '';
@@ -811,7 +821,84 @@ setInterval(function() {
   }
 }, 10000);
 
+// ── Screen Lock: prevent sleep + detect minimize ──
+var wakeLock = null;
+var screenLocked = false;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', function() {
+        console.log('[MC] Wake Lock released');
+        // Re-acquire if still locked
+        if (screenLocked) setTimeout(requestWakeLock, 1000);
+      });
+      console.log('[MC] Wake Lock acquired — screen will not sleep');
+    }
+  } catch(e) { console.log('[MC] Wake Lock error:', e.message); }
+}
+
+function toggleScreenLock() {
+  screenLocked = !screenLocked;
+  var btn = document.getElementById('lockBtn');
+  if (screenLocked) {
+    btn.classList.add('active');
+    btn.innerHTML = '&#128274; Terkunci';
+    requestWakeLock();
+    // Try fullscreen
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(function(){});
+    }
+  } else {
+    btn.classList.remove('active');
+    btn.innerHTML = '&#128272; Kunci';
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(function(){});
+    }
+  }
+}
+
+// Detect minimize (visibility change)
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden && screenLocked) {
+    // Page was minimized — show overlay when user returns
+    document.getElementById('lockOverlay').classList.add('show');
+    // Release wake lock (will re-acquire when visible)
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  } else if (!document.hidden && screenLocked) {
+    // Page is visible again — re-acquire wake lock
+    requestWakeLock();
+  }
+});
+
+// Re-acquire wake lock when page becomes visible
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden && screenLocked && !wakeLock) {
+    requestWakeLock();
+  }
+});
+
+function hideLockOverlay() {
+  document.getElementById('lockOverlay').classList.remove('show');
+  // Re-acquire wake lock
+  if (screenLocked) requestWakeLock();
+  // Try fullscreen again
+  if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(function(){});
+  }
+}
+
+
 connect();
 </script>
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-icon">&#128274;</div>
+  <div class="lock-title">LAYAR DI-MINIMIZE!</div>
+  <div class="lock-msg">Sistem tetap berjalan di background (sync aktif).<br>Klik tombol di bawah untuk kembali ke halaman MC.</div>
+  <button class="lock-btn-back" onclick="hideLockOverlay()">KEMBALI KE MC</button>
+</div>
 </body>
 </html>

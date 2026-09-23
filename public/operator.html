@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="saatiril-version" content="v15-final-audit">
-  <title>SAATIRIL Operator v15-final-audit</title>
+  <meta name="saatiril-version" content="v16-screen-lock">
+  <title>SAATIRIL Operator v16-screen-lock</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -579,7 +579,17 @@
       .top-bar-title { font-size: 11px; }
       .top-bar-mode, .top-bar-target { display: none; }
     }
-  </style>
+  
+/* Screen Lock */
+.lock-btn { background:#2a164a; border:1px solid #533485; color:#c4b5fd; padding:4px 8px; border-radius:4px; font-size:10px; cursor:pointer; margin-left:auto; display:flex; align-items:center; gap:4px; flex-shrink:0; }
+.lock-btn.active { background:rgba(212,175,55,0.2); border-color:#d4af37; color:#d4af37; }
+.lock-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(26,11,46,0.95); z-index:9999; display:none; flex-direction:column; align-items:center; justify-content:center; gap:16px; }
+.lock-overlay.show { display:flex; }
+.lock-overlay .lock-icon { font-size:48px; }
+.lock-overlay .lock-title { font-size:20px; font-weight:bold; color:#d4af37; }
+.lock-overlay .lock-msg { font-size:13px; color:#c4b5fd; text-align:center; max-width:300px; }
+.lock-overlay .lock-btn-back { background:#d4af37; color:#1a0b2e; border:none; padding:10px 24px; border-radius:8px; font-size:14px; font-weight:bold; cursor:pointer; margin-top:8px; }
+</style>
 </head>
 <body>
 
@@ -873,6 +883,60 @@
 <!-- Socket.io client — load locally first, fallback to CDN -->
 <script src="/js/socket.io.min.js"></script>
 <script>
+
+// ── Screen Lock: prevent sleep + detect minimize ──
+var wakeLock = null;
+var screenLocked = false;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', function() {
+        if (screenLocked) setTimeout(requestWakeLock, 1000);
+      });
+      console.log('[OP] Wake Lock acquired');
+    }
+  } catch(e) { console.log('[OP] Wake Lock error:', e.message); }
+}
+
+function toggleScreenLock() {
+  screenLocked = !screenLocked;
+  var btn = document.getElementById('lockBtn');
+  if (screenLocked) {
+    btn.classList.add('active');
+    btn.innerHTML = 'Terkunci';
+    requestWakeLock();
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(function(){});
+    }
+  } else {
+    btn.classList.remove('active');
+    btn.innerHTML = 'Kunci';
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(function(){});
+    }
+  }
+}
+
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden && screenLocked) {
+    document.getElementById('lockOverlay').classList.add('show');
+    if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  } else if (!document.hidden && screenLocked) {
+    requestWakeLock();
+  }
+});
+
+function hideLockOverlay() {
+  document.getElementById('lockOverlay').classList.remove('show');
+  if (screenLocked) requestWakeLock();
+  if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(function(){});
+  }
+}
+
 // Verify Socket.io loaded correctly
 if (typeof io === 'undefined') {
   console.warn('[OP] Local Socket.io failed, trying CDN...');
@@ -2293,7 +2357,7 @@ async function handleConnect() {
 }
 
 function connectToServer(ip) {
-  console.log('[SAATIRIL Operator] v15-final-audit booting — connecting to ' + ip);
+  console.log('[SAATIRIL Operator] v16-screen-lock booting — connecting to ' + ip);
   if (socket) {
     socket.disconnect()
     socket = null
@@ -3410,5 +3474,12 @@ async function checkExistingPermission() {
 })()
 </script>
 
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-icon">&#128274;</div>
+  <div class="lock-title">LAYAR DI-MINIMIZE!</div>
+  <div class="lock-msg">Kamera tetap aktif di background.<br>Klik tombol di bawah untuk kembali.</div>
+  <button class="lock-btn-back" onclick="hideLockOverlay()">KEMBALI KE OPERATOR</button>
+</div>
 </body>
 </html>
