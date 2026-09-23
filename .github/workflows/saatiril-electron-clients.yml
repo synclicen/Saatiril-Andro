@@ -54,7 +54,7 @@ jobs:
         working-directory: electron-clients/dist
         run: |
           cp ../package-mc.json package.json
-          node ../node_modules/electron-builder/cli.js --win --x64 --config package.json
+          node ../node_modules/electron-builder/cli.js --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -63,7 +63,7 @@ jobs:
         working-directory: electron-clients/dist
         run: |
           cp ../package-operator.json package.json
-          node ../node_modules/electron-builder/cli.js --win --x64 --config package.json
+          node ../node_modules/electron-builder/cli.js --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
