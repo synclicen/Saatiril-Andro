@@ -75,8 +75,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-mc
-          Copy-Item mc-main.js dist-mc/
-          Copy-Item preload.js dist-mc/
+          Copy-Item dist/mc-main.js dist-mc/
+          Copy-Item dist/preload.js dist-mc/
           Copy-Item connection.html dist-mc/
           Copy-Item package-mc.json dist-mc/package.json
           Copy-Item ../public/icon.ico dist-mc/ -ErrorAction SilentlyContinue
@@ -90,8 +90,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-operator
-          Copy-Item operator-main.js dist-operator/
-          Copy-Item preload.js dist-operator/
+          Copy-Item dist/operator-main.js dist-operator/
+          Copy-Item dist/preload.js dist-operator/
           Copy-Item connection.html dist-operator/
           Copy-Item package-operator.json dist-operator/package.json
           Copy-Item ../public/icon.ico dist-operator/ -ErrorAction SilentlyContinue
