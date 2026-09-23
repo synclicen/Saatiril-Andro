@@ -9,9 +9,9 @@
     "build:operator": "node node_modules/electron-builder/cli.js --win --x64 --config package-operator.json --project ."
   },
   "devDependencies": {
-    "electron": "^28.0.0",
+    "electron": "28.3.3",
     "electron-builder": "^24.6.4",
     "typescript": "^5.3.0",
-    "@types/node": "^20.10.0"
+    "@types/node": "20.11.0"
   }
 }
