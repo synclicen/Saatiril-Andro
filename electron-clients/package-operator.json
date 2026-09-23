@@ -5,13 +5,16 @@
   "build": {
     "appId": "com.saatiril.operator.electron",
     "productName": "Saatiril Operator",
-    "directories": { "output": "dist-operator" },
+    "directories": { "output": "output" },
     "asar": true,
     "files": ["operator-main.js", "preload.js", "connection.html"],
     "win": {
-      "icon": "../public/icon.ico",
       "target": [{ "target": "portable", "arch": ["x64"] }],
       "artifactName": "saatiril-operator-electron.exe"
     }
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4"
   }
 }

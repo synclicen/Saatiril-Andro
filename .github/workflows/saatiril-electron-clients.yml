@@ -107,7 +107,7 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
           
-          MC_EXE=$(find electron-clients/dist-mc -name "saatiril-mc-electron.exe" 2>/dev/null | head -1)
+          MC_EXE=$(find electron-clients/dist-mc/output -name "saatiril-mc-electron.exe" 2>/dev/null | head -1)
           if [ -n "$MC_EXE" ]; then
             gh release upload latest "$MC_EXE" --clobber --repo "$REPO"
             echo "MC uploaded: $MC_EXE"
@@ -116,7 +116,7 @@ jobs:
             find electron-clients/dist-mc -name "*.exe" 2>/dev/null || echo "  no .exe files"
           fi
           
-          OP_EXE=$(find electron-clients/dist-operator -name "saatiril-operator-electron.exe" 2>/dev/null | head -1)
+          OP_EXE=$(find electron-clients/dist-operator/output -name "saatiril-operator-electron.exe" 2>/dev/null | head -1)
           if [ -n "$OP_EXE" ]; then
             gh release upload latest "$OP_EXE" --clobber --repo "$REPO"
             echo "Operator uploaded: $OP_EXE"
