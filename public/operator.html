@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="saatiril-version" content="v22-operator-settings">
-  <title>SAATIRIL Operator v22-operator-settings</title>
+  <meta name="saatiril-version" content="v23-photo-format-fix">
+  <title>SAATIRIL Operator v23-photo-format-fix</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -1142,7 +1142,7 @@ if (typeof io === 'undefined') {
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
-// SAATIRIL Operator v22-operator-settings
+// SAATIRIL Operator v23-photo-format-fix
 // — Rebuilt from scratch to match src/components/saatiril/operator-panel.tsx
 // — Keeps existing SHA-256 + camera logic + socket patterns from v19
 // — New layout: 65% camera + 35% sidebar (toolbar + target + camera selector +
@@ -2287,7 +2287,7 @@ async function handleConnect() {
 }
 
 function connectToServer(ip) {
-  console.log('[SAATIRIL Operator] v22-operator-settings booting — connecting to ' + ip);
+  console.log('[SAATIRIL Operator] v23-photo-format-fix booting — connecting to ' + ip);
   if (socket) {
     socket.disconnect()
     socket = null
@@ -3079,19 +3079,21 @@ async function sendPhotos() {
   }
 
   // PHOTOS_SAVED with student + photos + channel (both modes)
+  // CRITICAL FIX v23: photos must be array of dataUrl STRINGS (not objects!)
+  // Admin's handlePhotosSaved expects: data.photos[0] = "data:image/jpeg;base64,..."
+  // NOT: data.photos[0] = { filename, data, label }
+  // Mismatch caused photo save to fail silently.
   socket.emit('lan-message', {
     event: 'PHOTOS_SAVED',
     data: {
       student: Object.assign({}, currentTarget, { status: 'done' }),
-      studentId: currentTarget.id,
-      nim: nim,
-      nama: nama,
+      photos: photos.map(p => p.data),  // ← FIX: array of dataUrl strings
       channel: channel,
-      photos: photos,
-      timestamp: Date.now()
+      version: 1,  // ← ADD: version (1 = first capture, 2+ = retake)
+      filename: photos[0] ? photos[0].filename : undefined,  // ← ADD: filename
     }
   })
-  console.log('[OP] PHOTOS_SAVED emitted with', photos.length, 'photos')
+  console.log('[OP] PHOTOS_SAVED emitted with', photos.length, 'photos (dataUrl strings)')
 
   // Update local DB status to done
   if (currentProject && currentProject.database) {
@@ -3992,7 +3994,7 @@ document.addEventListener('visibilitychange', () => {
   }
 })
 
-console.log('[SAATIRIL Operator] v22-operator-settings loaded — ready to connect');
+console.log('[SAATIRIL Operator] v23-photo-format-fix loaded — ready to connect');
 </script>
 
 </body>

@@ -420,14 +420,14 @@ function startStaticServer(outDir: string): Promise<void> {
 
       // ── MC web page — served at /mc?channel=1 ─────────────────────────
       // MC scans QR code → browser opens this page → connects via Socket.io
-      // v22-operator-settings: matches mc-panel.tsx for all 4 modes (single, dual,
+      // v23-photo-format-fix: matches mc-panel.tsx for all 4 modes (single, dual,
       // single-photoshoot, dual-photoshoot) + uses data.student.status.
       if (urlPath === '/mc') {
         const mcHtmlPath = getResourcePath('public/mc.html')
         if (fs.existsSync(mcHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v22-operator-settings',
+            'X-Saatiril-Version': 'v23-photo-format-fix',
           })
           fs.createReadStream(mcHtmlPath).pipe(res)
           return
@@ -441,7 +441,7 @@ function startStaticServer(outDir: string): Promise<void> {
         if (fs.existsSync(opHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v22-operator-settings',
+            'X-Saatiril-Version': 'v23-photo-format-fix',
           })
           fs.createReadStream(opHtmlPath).pipe(res)
           return
@@ -449,11 +449,11 @@ function startStaticServer(outDir: string): Promise<void> {
       }
 
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
-      // Returns the Saatiril build version (v22-operator-settings). MC + operator HTML
+      // Returns the Saatiril build version (v23-photo-format-fix). MC + operator HTML
       // also expose this via <meta name="saatiril-version"> + console.log.
       if (urlPath === '/version' || urlPath === '/api/version') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ version: 'v22-operator-settings', component: 'saatiril-server' }))
+        res.end(JSON.stringify({ version: 'v23-photo-format-fix', component: 'saatiril-server' }))
         return
       }
 
