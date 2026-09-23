@@ -420,14 +420,14 @@ function startStaticServer(outDir: string): Promise<void> {
 
       // ── MC web page — served at /mc?channel=1 ─────────────────────────
       // MC scans QR code → browser opens this page → connects via Socket.io
-      // v16-screen-lock: matches mc-panel.tsx for all 4 modes (single, dual,
+      // v17-no-license-flash: matches mc-panel.tsx for all 4 modes (single, dual,
       // single-photoshoot, dual-photoshoot) + uses data.student.status.
       if (urlPath === '/mc') {
         const mcHtmlPath = getResourcePath('public/mc.html')
         if (fs.existsSync(mcHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v16-screen-lock',
+            'X-Saatiril-Version': 'v17-no-license-flash',
           })
           fs.createReadStream(mcHtmlPath).pipe(res)
           return
@@ -441,7 +441,7 @@ function startStaticServer(outDir: string): Promise<void> {
         if (fs.existsSync(opHtmlPath)) {
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v16-screen-lock',
+            'X-Saatiril-Version': 'v17-no-license-flash',
           })
           fs.createReadStream(opHtmlPath).pipe(res)
           return
@@ -449,11 +449,11 @@ function startStaticServer(outDir: string): Promise<void> {
       }
 
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
-      // Returns the Saatiril build version (v16-screen-lock). MC + operator HTML
+      // Returns the Saatiril build version (v17-no-license-flash). MC + operator HTML
       // also expose this via <meta name="saatiril-version"> + console.log.
       if (urlPath === '/version' || urlPath === '/api/version') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ version: 'v16-screen-lock', component: 'saatiril-server' }))
+        res.end(JSON.stringify({ version: 'v17-no-license-flash', component: 'saatiril-server' }))
         return
       }
 
@@ -1193,6 +1193,8 @@ function createWindow() {
   mainWindow.loadURL(loadUrl)
 
   // Show window when ready — close splash first
+  // CRITICAL: Show main window ASAP — minimize splash time to prevent
+  // users from confusing splash with license page
   mainWindow.once('ready-to-show', () => {
     // Close splash and show main window
     if (splashWindow && !splashWindow.isDestroyed()) {

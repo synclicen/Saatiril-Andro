@@ -33,7 +33,6 @@ import AdminDashboard from '@/components/saatiril/admin-dashboard'
 import { McPanel } from '@/components/saatiril/mc-panel'
 import OperatorPanel from '@/components/saatiril/operator-panel'
 import { SaatirilFooterLines } from '@/components/saatiril/saatiril-footer'
-import { LicenseGate } from '@/components/saatiril/license-gate'
 
 // ─── Theme constants ──────────────────────────────────────────────────────────
 const THEME = {
@@ -55,7 +54,6 @@ type MobileTab = 'admin' | 'mc' | 'operator'
 // ─── Component ────────────────────────────────────────────────────────────────
 export function MainApp() {
   // ── License gate ─────────────────────────────────────────────────────────
-  const [licenseValid, setLicenseValid] = useState(true)  // true because page.tsx already checked license
 
   // ── Store bindings ─────────────────────────────────────────────────────────
   const currentProject = useSaatirilStore((s) => s.currentProject)
@@ -457,11 +455,6 @@ export function MainApp() {
     },
     [setMyChannel],
   )
-
-  // ── Render: License gate (Electron only) ──────────────────────────────────
-  if (!licenseValid) {
-    return <LicenseGate onLicenseValid={() => setLicenseValid(true)} />
-  }
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (

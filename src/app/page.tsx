@@ -225,10 +225,12 @@ export default function Home() {
   }, [])
 
   if (licenseState === 'checking') {
-    // Plain loading screen — no "license" text, prevents flash
+    // Clear loading screen — NOT the license page, just loading
     return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-4 px-6" style={{ backgroundColor: '#1a0b2e' }}>
+      <div className="flex h-dvh flex-col items-center justify-center gap-6 px-6" style={{ backgroundColor: '#1a0b2e' }}>
+        <div className="text-3xl font-bold tracking-widest" style={{ color: '#d4af37' }}>SAATIRIL</div>
         <div className="size-10 animate-spin rounded-full border-2 border-[#d4af37] border-t-transparent" />
+        <div className="text-sm" style={{ color: '#c4b5fd' }}>Memuat aplikasi...</div>
       </div>
     )
   }
