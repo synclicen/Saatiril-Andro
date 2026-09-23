@@ -30,7 +30,7 @@ jobs:
           npm install --no-save typescript@5.3.3 @types/node@20.10.0 electron@28.3.3 electron-builder@24.13.3
           Write-Host "=== tooling versions ==="
           npx tsc --version
-          node ../electron-clients/node_modules/electron-builder/out/cli/cli.js --version
+          node node_modules/electron-builder/cli.js --version
 
       - name: Compile TypeScript (mc-main, operator-main, preload)
         working-directory: electron-clients
@@ -52,7 +52,7 @@ jobs:
           cp ../package-mc.json package.json
           # electron-builder is installed at electron-clients/node_modules
           # Call it directly via node (cross-platform, no PATH needed)
-          node ../node_modules/electron-builder/out/cli/cli.js --win --x64 --config package.json
+          node ../node_modules/electron-builder/cli.js --win --x64 --config package.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -61,7 +61,7 @@ jobs:
         working-directory: electron-clients/dist
         run: |
           cp ../package-operator.json package.json
-          node ../node_modules/electron-builder/out/cli/cli.js --win --x64 --config package.json
+          node ../node_modules/electron-builder/cli.js --win --x64 --config package.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
