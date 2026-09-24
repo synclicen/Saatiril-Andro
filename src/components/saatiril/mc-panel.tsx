@@ -206,9 +206,6 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
           proj.photoHistory ?? [],
           curProj.photoHistory,
         )
-        // Merge captureVersions (MAX per key) so MC sees the same version
-        // numbers as the operator/admin (needed for RESET & KIRIM ULANG flow
-        // where the MC needs to know the current version to display correctly).
         const mergedVersions = mergeCaptureVersions(
           curProj.captureVersions,
           (proj as any).captureVersions,
@@ -220,6 +217,10 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
           config: mergedConfig,
           captureVersions: mergedVersions,
         })
+      } else {
+        // Different project ID — REPLACE entirely (admin switched projects)
+        updateCurrentProject(proj)
+        console.log('[SAATIRIL MC] SYNC_DB: replaced project (different ID):', proj.name)
       }
     }
 
