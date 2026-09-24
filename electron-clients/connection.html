@@ -78,11 +78,14 @@ function doConnect() {
   const btn = document.getElementById('connectBtn');
   btn.disabled = true;
   btn.textContent = 'MENGHUBUNGKAN...';
-  const url = 'http://' + host + ':3000/?role=' + role + '&channel=' + ch + '&socketPort=3003&password=' + encodeURIComponent(pw) + '&v=24';
+  // Pass connection params to Electron main process
+  // Main process will start local server and load the page with these params
+  const connectUrl = 'http://localhost:3000/?host=' + host + '&channel=' + ch + '&socketPort=3003&password=' + encodeURIComponent(pw) + '&role=' + role;
   if (window.saatirilAPI && window.saatirilAPI.connectToServer) {
-    window.saatirilAPI.connectToServer(url);
+    window.saatirilAPI.connectToServer(connectUrl);
   } else {
-    location.href = url;
+    // Non-Electron: redirect directly to admin
+    location.href = 'http://' + host + ':3000/?role=' + role + '&channel=' + ch + '&socketPort=3003&password=' + encodeURIComponent(pw);
   }
 }
 function showErr(msg) {

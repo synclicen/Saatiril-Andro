@@ -6,6 +6,8 @@ files:
   - mc-main.js
   - preload.js
   - connection.html
+  - out/**/*
+  - public/**/*
 extraMetadata:
   main: mc-main.js
 win:

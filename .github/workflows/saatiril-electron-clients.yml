@@ -70,19 +70,19 @@ jobs:
       - name: Bundle preload
         run: npx esbuild electron-clients/preload.ts --bundle --platform=node --outfile=electron-clients/preload.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
 
-      - name: Build MC Electron app (from root — uses root node_modules with Electron)
+      - name: Build MC Electron app
         shell: pwsh
         run: |
-          # Copy compiled files to root so electron-builder finds them
+          # Copy compiled files + Next.js build to root
           Copy-Item electron-clients/mc-main.js mc-main.js -Force
           Copy-Item electron-clients/preload.js preload.js -Force
           Copy-Item electron-clients/connection.html connection.html -Force
-          # Build using ROOT node_modules (has Electron installed)
+          # out/ and public/ are already in root from Next.js build
           npx electron-builder --win --x64 --config electron-clients/builder-mc.yml
-          # Clean up root copies
+          # Clean up
           Remove-Item mc-main.js, preload.js, connection.html -ErrorAction SilentlyContinue
 
-      - name: Build Operator Electron app (from root)
+      - name: Build Operator Electron app
         shell: pwsh
         run: |
           Copy-Item electron-clients/operator-main.js operator-main.js -Force

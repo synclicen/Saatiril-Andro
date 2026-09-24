@@ -6,6 +6,8 @@ files:
   - operator-main.js
   - preload.js
   - connection.html
+  - out/**/*
+  - public/**/*
 extraMetadata:
   main: operator-main.js
 win:
