@@ -1368,10 +1368,8 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
         </ScrollArea>
       </Card>
     </div>
-  )
-}
-
-  // Add to render: {renderMonitorLock()}{renderLockToggle()}
       {renderMonitorLock()}
       {renderLockToggle()}
+  )
+}
 export default McPanel
