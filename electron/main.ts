@@ -1253,10 +1253,9 @@ function createWindow() {
 // ── Windows Firewall: auto-add rules for HTTP (3000) and Socket.io (3003) ──
 // This allows other PCs/devices on the LAN to connect to the admin server.
 // Requires admin privileges — if not elevated, the rules are silently skipped.
-import { exec } from 'child_process'
 function addFirewallRule(name: string, port: number) {
   const cmd = `netsh advfirewall firewall add rule name="${name}" dir=in action=allow protocol=TCP localport=${port}`
-  exec(cmd, (err) => {
+  child_process.exec(cmd, (err) => {
     if (err) {
       // Silently ignore — user might not have admin privileges
       console.log(`[SAATIRIL] Firewall rule '${name}' skipped (needs admin)`)
