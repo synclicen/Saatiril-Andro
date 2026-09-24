@@ -261,9 +261,14 @@ function getSocketUrl(): string {
   const socketPortParam = params.get('socketPort')
 
   if (isElectron) {
-    // Electron admin: always connect via HTTP localhost
+    // Electron app: connect to the SAME hostname as the page was loaded from.
+    // - Admin (portable.exe): loaded from localhost → connect to localhost:3003
+    // - MC/Operator Electron: loaded from http://ADMIN_IP:3000 → connect to ADMIN_IP:3003
+    // This fixes the bug where Electron client apps connected to localhost
+    // (their own machine) instead of the admin's socket.io server.
     const port = socketPortParam || '3003'
-    return `http://localhost:${port}`
+    const host = window.location.hostname
+    return `http://${host}:${port}`
   }
 
   // LAN device: always use HTTP to connect to Socket.io server
