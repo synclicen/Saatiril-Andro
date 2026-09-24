@@ -5,15 +5,11 @@
   "build": {
     "appId": "com.saatiril.mc.electron",
     "productName": "Saatiril MC",
-    "directories": { "output": "output" },
+    "directories": { "output": "dist-mc" },
     "files": ["mc-main.js", "preload.js", "connection.html"],
     "win": {
       "target": "portable",
       "artifactName": "saatiril-mc-electron.exe"
     }
-  },
-  "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.6.4"
   }
 }

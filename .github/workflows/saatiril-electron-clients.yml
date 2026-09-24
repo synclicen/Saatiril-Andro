@@ -16,7 +16,7 @@ jobs:
   build:
     name: Build MC + Operator Electron Apps
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install dependencies (includes Electron)
         run: npm install --legacy-peer-deps
         env:
           PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
@@ -64,41 +64,32 @@ jobs:
       - name: Compile Electron client TypeScript
         run: npx tsc -p electron-clients/tsconfig.json
 
-      - name: Bundle MC main with esbuild
+      - name: Bundle MC main
         run: npx esbuild electron-clients/mc-main.ts --bundle --platform=node --outfile=electron-clients/mc-main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
 
-      - name: Bundle Operator main with esbuild
+      - name: Bundle Operator main
         run: npx esbuild electron-clients/operator-main.ts --bundle --platform=node --outfile=electron-clients/operator-main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
 
-      - name: Build MC Electron app
-        working-directory: electron-clients
+      - name: Build MC Electron app (from root — uses root node_modules with Electron)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist-mc
-          Copy-Item dist/mc-main.js dist-mc/
-          Copy-Item dist/preload.js dist-mc/
-          Copy-Item connection.html dist-mc/
-          Copy-Item package-mc.json dist-mc/package.json
-          Copy-Item ../public/icon.ico dist-mc/ -ErrorAction SilentlyContinue
-          Push-Location dist-mc
-          npm install
-          npx electron-builder --win --x64
-          Pop-Location
+          # Copy compiled files to root so electron-builder finds them
+          Copy-Item electron-clients/mc-main.js mc-main.js -Force
+          Copy-Item electron-clients/preload.js preload.js -Force
+          Copy-Item electron-clients/connection.html connection.html -Force
+          # Build using ROOT node_modules (has Electron installed)
+          npx electron-builder --win --x64 --config electron-clients/package-mc.json
+          # Clean up root copies
+          Remove-Item mc-main.js, preload.js, connection.html -ErrorAction SilentlyContinue
 
-      - name: Build Operator Electron app
-        working-directory: electron-clients
+      - name: Build Operator Electron app (from root)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist-operator
-          Copy-Item dist/operator-main.js dist-operator/
-          Copy-Item dist/preload.js dist-operator/
-          Copy-Item connection.html dist-operator/
-          Copy-Item package-operator.json dist-operator/package.json
-          Copy-Item ../public/icon.ico dist-operator/ -ErrorAction SilentlyContinue
-          Push-Location dist-operator
-          npm install
-          npx electron-builder --win --x64
-          Pop-Location
+          Copy-Item electron-clients/operator-main.js operator-main.js -Force
+          Copy-Item electron-clients/preload.js preload.js -Force
+          Copy-Item electron-clients/connection.html connection.html -Force
+          npx electron-builder --win --x64 --config electron-clients/package-operator.json
+          Remove-Item operator-main.js, preload.js, connection.html -ErrorAction SilentlyContinue
 
       - name: Upload to Saatiril-Andro releases
         shell: bash
@@ -109,27 +100,27 @@ jobs:
           REPO="${{ github.repository }}"
           
           echo "=== Searching for MC exe ==="
-          find electron-clients/dist-mc -name "*.exe" 2>/dev/null
-          MC_EXE=$(find electron-clients/dist-mc -name "*.exe" 2>/dev/null | head -1)
+          find . -name "saatiril-mc-electron.exe" -not -path "./node_modules/*" 2>/dev/null
+          MC_EXE=$(find . -name "saatiril-mc-electron.exe" -not -path "./node_modules/*" 2>/dev/null | head -1)
           if [ -n "$MC_EXE" ]; then
-            echo "Found MC: $MC_EXE"
+            echo "Found MC: $MC_EXE ($(ls -lh "$MC_EXE" | awk '{print $5}'))"
             cp "$MC_EXE" saatiril-mc-electron.exe
             gh release delete-asset latest saatiril-mc-electron.exe --yes --repo "$REPO" 2>/dev/null || true
             gh release upload latest saatiril-mc-electron.exe --repo "$REPO" && echo "MC uploaded" || echo "MC upload failed"
           else
-            echo "MC build not found"
+            echo "MC not found"
           fi
           
           echo "=== Searching for Operator exe ==="
-          find electron-clients/dist-operator -name "*.exe" 2>/dev/null
-          OP_EXE=$(find electron-clients/dist-operator -name "*.exe" 2>/dev/null | head -1)
+          find . -name "saatiril-operator-electron.exe" -not -path "./node_modules/*" 2>/dev/null
+          OP_EXE=$(find . -name "saatiril-operator-electron.exe" -not -path "./node_modules/*" 2>/dev/null | head -1)
           if [ -n "$OP_EXE" ]; then
-            echo "Found Operator: $OP_EXE"
+            echo "Found Operator: $OP_EXE ($(ls -lh "$OP_EXE" | awk '{print $5}'))"
             cp "$OP_EXE" saatiril-operator-electron.exe
             gh release delete-asset latest saatiril-operator-electron.exe --yes --repo "$REPO" 2>/dev/null || true
             gh release upload latest saatiril-operator-electron.exe --repo "$REPO" && echo "Operator uploaded" || echo "Operator upload failed"
           else
-            echo "Operator build not found"
+            echo "Operator not found"
           fi
           
           echo "=== Done ==="
@@ -141,7 +132,6 @@ jobs:
           echo "=========================================="
           echo "  Saatiril Electron Clients Build Complete!"
           echo "=========================================="
-          echo "  Outputs in Saatiril-Andro releases:"
-          echo "  - saatiril-mc-electron.exe (MC app)"
-          echo "  - saatiril-operator-electron.exe (Operator app)"
+          echo "  MC: saatiril-mc-electron.exe (~80MB)"
+          echo "  OP: saatiril-operator-electron.exe (~80MB)"
           echo "=========================================="
