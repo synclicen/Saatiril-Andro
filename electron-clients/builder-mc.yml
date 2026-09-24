@@ -1,0 +1,14 @@
+appId: com.saatiril.mc.electron
+productName: Saatiril MC
+directories:
+  output: dist-mc
+files:
+  - mc-main.js
+  - preload.js
+  - connection.html
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: saatiril-mc-electron.exe
