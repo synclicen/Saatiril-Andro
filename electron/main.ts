@@ -18,7 +18,7 @@
  * - getMachineId: Get the Machine ID for this computer
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } from 'electron'
 import * as path from 'path'
 import * as https from 'https'
 import * as fs from 'fs'
@@ -1243,6 +1243,41 @@ function createWindow() {
     }
     return { action: 'deny' }
   })
+
+  // Anti-minimize: warn user when trying to minimize
+  mainWindow.on('minimize', (e: Electron.Event) => {
+    e.preventDefault()
+    dialog.showMessageBox(mainWindow!, {
+      type: 'warning', title: 'Jangan Minimize!',
+      message: 'Aplikasi Saatiril sedang berjalan!',
+      detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
+      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
+    }).then(({ response }) => {
+      if (response === 1) {
+        mainWindow!.removeAllListeners('minimize')
+        mainWindow!.minimize()
+        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      }
+    })
+  })
+  function preventMin(e: Electron.Event) {
+    e.preventDefault()
+    dialog.showMessageBox(mainWindow!, {
+      type: 'warning', title: 'Jangan Minimize!',
+      message: 'Aplikasi Saatiril sedang berjalan!',
+      detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
+      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
+    }).then(({ response }) => {
+      if (response === 1) {
+        mainWindow!.removeAllListeners('minimize')
+        mainWindow!.minimize()
+        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      }
+    })
+  }
+  // Prevent screen sleep
+  const { powerSaveBlocker } = require('electron')
+  powerSaveBlocker.start('prevent-display-sleep')
 
   mainWindow.on('closed', () => {
     mainWindow = null
