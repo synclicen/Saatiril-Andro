@@ -1,5 +1,6 @@
 appId: com.saatiril.mc.electron
 productName: Saatiril MC
+main: mc-main.js
 directories:
   output: dist-mc
 files:
