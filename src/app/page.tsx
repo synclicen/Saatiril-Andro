@@ -187,6 +187,34 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
     const socket = connectSocket()
     console.log('[SAATIRIL] ClientApp socket created:', socket.id || '(connecting...)')
 
+    // CRITICAL: After auth-success, send REQUEST_STATE to get the current
+    // project from the admin. Without this, the admin doesn't know the
+    // client needs the project data → McPanel/OperatorPanel show
+    // "Belum ada proyek aktif" even though admin has a project running.
+    const channelNum = parseInt(params.get('channel') || '1', 10)
+    socket.on('auth-success', () => {
+      console.log('[SAATIRIL] ClientApp auth-success — sending REQUEST_STATE')
+      socket.emit('lan-message', {
+        event: 'REQUEST_STATE',
+        data: { role: role, channel: channelNum }
+      })
+    })
+
+    // Also send periodic REQUEST_STATE every 10 seconds for sync resilience
+    const syncInterval = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('lan-message', {
+          event: 'REQUEST_STATE',
+          data: { role: role, channel: channelNum }
+        })
+      }
+    }, 10000)
+
+    // Cleanup on unmount
+    return () => {
+      clearInterval(syncInterval)
+    }
+
     // Load any cached projects from localStorage (for offline resilience).
     // If the admin is temporarily offline, the MC/Operator can still see
     // the last-known project state instead of a blank "waiting for sync".
