@@ -1250,25 +1250,10 @@ function createWindow() {
 }
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────
-// ── Windows Firewall: auto-add rules for HTTP (3000) and Socket.io (3003) ──
-// This allows other PCs/devices on the LAN to connect to the admin server.
-// Requires admin privileges — if not elevated, the rules are silently skipped.
-function addFirewallRule(name: string, port: number) {
-  const cmd = `netsh advfirewall firewall add rule name="${name}" dir=in action=allow protocol=TCP localport=${port}`
-  child_process.exec(cmd, (err) => {
-    if (err) {
-      // Silently ignore — user might not have admin privileges
-      console.log(`[SAATIRIL] Firewall rule '${name}' skipped (needs admin)`)
-    } else {
-      console.log(`[SAATIRIL] Firewall rule '${name}' added for port ${port}`)
-    }
-  })
-}
-
 app.whenReady().then(async () => {
-  // Add firewall rules for incoming connections
-  addFirewallRule('Saatiril HTTP', 3000)
-  addFirewallRule('Saatiril Socket.io', 3003)
+  // Add firewall rules for incoming connections (uses existing addFirewallRule function)
+  addFirewallRule(3000)
+  addFirewallRule(3003)
   const startTime = Date.now()
   console.log('[SAATIRIL] ═══════════════════════════════════════════════════════════')
   console.log('[SAATIRIL]  SAATIRIL Electron App Starting...')
