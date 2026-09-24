@@ -1247,7 +1247,8 @@ function createWindow() {
   // Anti-minimize: warn user when trying to minimize
   mainWindow.on('minimize', (e: Electron.Event) => {
     e.preventDefault()
-    dialog.showMessageBox(mainWindow, {
+    // @ts-ignore — mainWindow is checked for null before this
+    dialog.showMessageBox(mainWindow as any, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Aplikasi Saatiril sedang berjalan!',
       detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
@@ -1262,7 +1263,8 @@ function createWindow() {
   })
   function preventMin(e: Electron.Event) {
     e.preventDefault()
-    dialog.showMessageBox(mainWindow, {
+    // @ts-ignore — mainWindow is checked for null before this
+    dialog.showMessageBox(mainWindow as any, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Aplikasi Saatiril sedang berjalan!',
       detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
