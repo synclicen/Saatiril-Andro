@@ -618,8 +618,8 @@ function startStaticServer(outDir: string): Promise<void> {
         console.warn(`[SAATIRIL] Port ${httpPort} in use, trying ${httpPort + 1}...`)
         httpPort++
         httpServer!.close()
-        httpServer!.listen(httpPort, () => {
-          console.log(`[SAATIRIL] Static file server running on http://localhost:${httpPort}`)
+        httpServer!.listen(httpPort, '0.0.0.0', () => {
+          console.log(`[SAATIRIL] Static file server running on http://0.0.0.0:${httpPort} (accessible from LAN)`)
           resolve()
         })
       } else {
@@ -628,8 +628,8 @@ function startStaticServer(outDir: string): Promise<void> {
       }
     })
 
-    httpServer.listen(httpPort, () => {
-      console.log(`[SAATIRIL] Static file server running on http://localhost:${httpPort}`)
+    httpServer.listen(httpPort, '0.0.0.0', () => {
+      console.log(`[SAATIRIL] Static file server running on http://0.0.0.0:${httpPort} (accessible from LAN)`)
       resolve()
     })
   })
@@ -787,7 +787,7 @@ function startSocketServer(): Promise<void> {
         console.warn(`[SAATIRIL] Socket port ${socketPort} in use, trying ${socketPort + 1}...`)
         socketPort++
         httpForSocket.close()
-        httpForSocket.listen(socketPort, () => {
+        httpForSocket.listen(socketPort, '0.0.0.0', () => {
           console.log(`[SAATIRIL] Socket.io relay server running on port ${socketPort}`)
           resolve()
         })

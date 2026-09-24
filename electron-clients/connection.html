@@ -78,7 +78,7 @@ function doConnect() {
   const btn = document.getElementById('connectBtn');
   btn.disabled = true;
   btn.textContent = 'MENGHUBUNGKAN...';
-  const url = 'http://' + host + ':3000/?role=' + role + '&channel=' + ch + '&socketPort=3003&password=' + encodeURIComponent(pw) + '&v=23';
+  const url = 'http://' + host + ':3000/?role=' + role + '&channel=' + ch + '&socketPort=3003&password=' + encodeURIComponent(pw) + '&v=24';
   if (window.saatirilAPI && window.saatirilAPI.connectToServer) {
     window.saatirilAPI.connectToServer(url);
   } else {
