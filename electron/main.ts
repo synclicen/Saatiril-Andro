@@ -1247,36 +1247,36 @@ function createWindow() {
   // Anti-minimize: warn user when trying to minimize
   mainWindow.on('minimize', (e: Electron.Event) => {
     e.preventDefault()
-    dialog.showMessageBox(mainWindow!, {
+    dialog.showMessageBox(mainWindow, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Aplikasi Saatiril sedang berjalan!',
       detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
       buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
     }).then(({ response }) => {
       if (response === 1) {
-        mainWindow!.removeAllListeners('minimize')
-        mainWindow!.minimize()
-        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+        mainWindow?.removeAllListeners('minimize')
+        mainWindow?.minimize()
+        mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
       }
     })
   })
   function preventMin(e: Electron.Event) {
     e.preventDefault()
-    dialog.showMessageBox(mainWindow!, {
+    dialog.showMessageBox(mainWindow, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Aplikasi Saatiril sedang berjalan!',
       detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
       buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
     }).then(({ response }) => {
       if (response === 1) {
-        mainWindow!.removeAllListeners('minimize')
-        mainWindow!.minimize()
-        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+        mainWindow?.removeAllListeners('minimize')
+        mainWindow?.minimize()
+        mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
       }
     })
   }
   // Prevent screen sleep
-  const { powerSaveBlocker } = require('electron')
+  // powerSaveBlocker imported at top
   powerSaveBlocker.start('prevent-display-sleep')
 
   mainWindow.on('closed', () => {
