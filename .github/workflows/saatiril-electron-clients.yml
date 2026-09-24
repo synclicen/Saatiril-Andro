@@ -61,14 +61,14 @@ jobs:
           if (Test-Path "out/index.html") { Write-Host "Static export OK" }
           else { Write-Error "out/index.html NOT found!"; exit 1 }
 
-      - name: Compile Electron client TypeScript
-        run: npx tsc -p electron-clients/tsconfig.json
-
       - name: Bundle MC main
         run: npx esbuild electron-clients/mc-main.ts --bundle --platform=node --outfile=electron-clients/mc-main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
 
       - name: Bundle Operator main
         run: npx esbuild electron-clients/operator-main.ts --bundle --platform=node --outfile=electron-clients/operator-main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
+
+      - name: Bundle preload
+        run: npx esbuild electron-clients/preload.ts --bundle --platform=node --outfile=electron-clients/preload.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
 
       - name: Build MC Electron app (from root — uses root node_modules with Electron)
         shell: pwsh
