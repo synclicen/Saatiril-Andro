@@ -2471,7 +2471,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
-    </div>
+          {renderMonitorLock()}
+      {renderLockToggle()}
+</div>
       
   )
       {renderMonitorLock()}

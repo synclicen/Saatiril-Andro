@@ -1213,6 +1213,7 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   // flex-1 full height). Daftar peserta TIDAK PERNAH terdesak meski banyak peserta
   // sudah dipanggil, karena panel kontrol ada di kolom terpisah.
   return (
+    <>
     <div className="flex flex-row gap-3 h-full p-3" style={{ backgroundColor: THEME.bg }}>
       {/* LEFT: Control column (fixed width, internal scroll if overflow) */}
       <div className="flex flex-col gap-3 shrink-0 w-[340px] lg:w-[360px] xl:w-[400px] min-h-0 overflow-y-auto pr-1">
@@ -1367,9 +1368,10 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
           </div>
         </ScrollArea>
       </Card>
-    </div>
       {renderMonitorLock()}
       {renderLockToggle()}
+    </div>
+    </>
   )
 }
 export default McPanel
