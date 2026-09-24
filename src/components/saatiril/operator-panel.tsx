@@ -258,6 +258,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
   const [showShutterPanel, setShowShutterPanel] = useState(false)
   const [showGridlinePanel, setShowGridlinePanel] = useState(false)
   const [showQueuePanel, setShowQueuePanel] = useState(true)
+  const [monitorLocked, setMonitorLocked] = useState(false)
 
   // ── Gridline overlay state ─────────────────────────────────────────────────
   const [gridlineEnabled, setGridlineEnabled] = useState(true)
@@ -2006,7 +2007,53 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
     </Card>
   )
 
-  // ── Main render ──────────────────────────────────────────────────────────
+  
+  // ── Monitor Lock: prevents accidental clicks (view-only mode) ──
+  const renderMonitorLock = () => {
+    if (!monitorLocked) return null
+    return (
+      <div
+        style={{
+          position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(26, 11, 46, 0.85)',
+          zIndex: 9999,
+          display: 'flex' as const, flexDirection: 'column' as const,
+          alignItems: 'center' as const, justifyContent: 'center' as const,
+          gap: '16px', cursor: 'pointer' as const,
+        }}
+        onClick={() => setMonitorLocked(false)}
+      >
+        <div style={{ fontSize: '48px' }}>🔒</div>
+        <div style={{ fontSize: '20px', fontWeight: 'bold' as const, color: '#d4af37' }}>MODE MONITOR</div>
+        <div style={{ fontSize: '12px', color: '#c4b5fd', textAlign: 'center' as const, maxWidth: '280px' }}>
+          Layar terkunci. Klik untuk membuka kunci.
+        </div>
+        <button
+          style={{ marginTop: '8px', padding: '10px 24px', background: '#d4af37', color: '#1a0b2e', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold' as const, cursor: 'pointer' as const }}
+          onClick={(e) => { e.stopPropagation(); setMonitorLocked(false) }}
+        >🔓 BUKA KUNCI</button>
+      </div>
+    )
+  }
+
+  const renderLockToggle = () => (
+    <button
+      onClick={() => setMonitorLocked(!monitorLocked)}
+      style={{
+        position: 'fixed' as const, top: 8, right: 8, zIndex: 10000,
+        background: monitorLocked ? '#4ade80' : '#2a164a',
+        color: monitorLocked ? '#1a0b2e' : '#c4b5fd',
+        border: monitorLocked ? '1px solid #4ade80' : '1px solid #533485',
+        borderRadius: '6px', padding: '4px 10px',
+        fontSize: '10px', fontWeight: 'bold' as const, cursor: 'pointer' as const,
+      }}
+      title={monitorLocked ? 'Buka kunci' : 'Kunci layar'}
+    >
+      {monitorLocked ? '🔓 Terkunci' : '🔒 Kunci'}
+    </button>
+  )
+
+// ── Main render ──────────────────────────────────────────────────────────
   if (!currentProject) {
     return (
       <div className="flex items-center justify-center h-full" style={{ backgroundColor: THEME.bg, color: THEME.muted }}>
@@ -2426,6 +2473,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
       </ResizablePanelGroup>
     </div>
   )
+      {renderMonitorLock()}
+      {renderLockToggle()}
 }
 
 export default OperatorPanel

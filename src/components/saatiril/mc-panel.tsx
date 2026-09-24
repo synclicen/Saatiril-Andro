@@ -85,6 +85,7 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   const [opProgressChannel, setOpProgressChannel] = useState<number>(0)
   // ── Photoshoot mode: search state ─────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
+  const [monitorLocked, setMonitorLocked] = useState(false)
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
 
   const myChannelRef = useRef(myChannel)
@@ -862,7 +863,53 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     )
   }
 
-  // ── Main render
+    // ── Monitor Lock: prevents accidental clicks (view-only mode) ──
+  const renderMonitorLock = () => {
+    if (!monitorLocked) return null
+    return (
+      <div
+        style={{
+          position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(26, 11, 46, 0.85)',
+          zIndex: 9999,
+          display: 'flex' as const, flexDirection: 'column' as const,
+          alignItems: 'center' as const, justifyContent: 'center' as const,
+          gap: '16px', cursor: 'pointer' as const,
+        }}
+        onClick={() => setMonitorLocked(false)}
+      >
+        <div style={{ fontSize: '48px' }}>🔒</div>
+        <div style={{ fontSize: '20px', fontWeight: 'bold' as const, color: '#d4af37' }}>MODE MONITOR</div>
+        <div style={{ fontSize: '12px', color: '#c4b5fd', textAlign: 'center' as const, maxWidth: '280px' }}>
+          Layar terkunci untuk menghindari gangguan.<br />Klik di mana saja untuk membuka.
+        </div>
+        <button
+          style={{ marginTop: '8px', padding: '10px 24px', background: '#d4af37', color: '#1a0b2e', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold' as const, cursor: 'pointer' as const }}
+          onClick={(e) => { e.stopPropagation(); setMonitorLocked(false) }}
+        >🔓 BUKA KUNCI</button>
+      </div>
+    )
+  }
+
+  // Floating toggle button (top-right, always visible)
+  const renderLockToggle = () => (
+    <button
+      onClick={() => setMonitorLocked(!monitorLocked)}
+      style={{
+        position: 'fixed' as const, top: 8, right: 8, zIndex: 10000,
+        background: monitorLocked ? '#4ade80' : '#2a164a',
+        color: monitorLocked ? '#1a0b2e' : '#c4b5fd',
+        border: monitorLocked ? '1px solid #4ade80' : '1px solid #533485',
+        borderRadius: '6px', padding: '4px 10px',
+        fontSize: '10px', fontWeight: 'bold' as const, cursor: 'pointer' as const,
+      }}
+      title={monitorLocked ? 'Buka kunci' : 'Kunci layar (mode monitor)'}
+    >
+      {monitorLocked ? '🔓 Terkunci' : '🔒 Kunci'}
+    </button>
+  )
+
+// ── Main render
   if (!currentProject) {
     return (
       <div
@@ -1324,4 +1371,7 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   )
 }
 
+  // Add to render: {renderMonitorLock()}{renderLockToggle()}
+      {renderMonitorLock()}
+      {renderLockToggle()}
 export default McPanel
