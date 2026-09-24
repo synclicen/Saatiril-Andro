@@ -269,7 +269,14 @@ export default function AdminDashboard() {
     const handleSyncDb = (data: SyncDbData) => {
       // Read latest state synchronously to avoid stale-ref race
       const proj = useSaatirilStore.getState().currentProject
-      if (!proj) return
+      if (!proj) {
+        // No existing project — accept incoming directly (Electron client first connect)
+        if (data.project) {
+          updateCurrentProject(data.project)
+          console.log('[SAATIRIL ADMIN] SYNC_DB: accepted new project (no existing):', data.project.name)
+        }
+        return
+      }
       // Preserve frame data: if incoming has '__FRAME_SAVED__', keep existing frame
       const mergedConfig = preserveFrameOnSync(data.project.config, proj.config)
       // Merge database with incoming (prevents channel data overwrite in dual mode)

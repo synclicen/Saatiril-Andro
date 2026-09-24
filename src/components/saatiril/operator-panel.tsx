@@ -645,7 +645,18 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
       // Read latest state synchronously (avoids stale currentProjectRef race
       // when SYNC_DB arrives immediately after STUDENT_RESET / other updates).
       const proj = useSaatirilStore.getState().currentProject
-      if (!proj) return
+      if (!proj) {
+        // No existing project — accept incoming directly (first connect)
+        updateCurrentProject(data.project)
+        console.log('[SAATIRIL OP] SYNC_DB: accepted new project (no existing):', data.project.name)
+        // Check for active student in wisuda mode
+        if (!isPhotoshootMode(data.project.config.mode)) {
+          const ch = myChannelRef.current
+          const activeStudent = data.project.database.find((s) => s.assignedChannel === ch && isActiveStatus(s.status))
+          if (activeStudent) setOpCurrentTarget(activeStudent)
+        }
+        return
+      }
       const mergedDb = mergeDatabases(proj.database, data.project.database)
       const mergedConfig = preserveFrameOnSync(data.project.config, proj.config)
       const mergedPhotoHistory = preservePhotoHistoryOnSync(

@@ -193,7 +193,13 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
       // echo would see the PRE-reset photoHistory and preservePhotoHistoryOnSync
       // would RE-ADD entries that STUDENT_RESET just cleared — defeating the reset.
       const curProj = useSaatirilStore.getState().currentProject
-      if (curProj && proj.id === curProj.id) {
+      if (!curProj) {
+        // No existing project — accept incoming directly (first connect)
+        updateCurrentProject(proj)
+        console.log('[SAATIRIL MC] SYNC_DB: accepted new project (no existing):', proj.name)
+        return
+      }
+      if (proj.id === curProj.id) {
         const mergedDb = mergeDatabases(curProj.database, proj.database)
         const mergedConfig = preserveFrameOnSync(proj.config, curProj.config)
         const mergedPhotoHistory = preservePhotoHistoryOnSync(
