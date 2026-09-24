@@ -1245,6 +1245,7 @@ function createWindow() {
   })
 
   // Anti-minimize: warn user when trying to minimize
+  // @ts-ignore — minimize event exists at runtime
   mainWindow.on('minimize', (e: Electron.Event) => {
     e.preventDefault()
     // @ts-ignore — mainWindow is checked for null before this
@@ -1257,6 +1258,7 @@ function createWindow() {
       if (response === 1) {
         mainWindow?.removeAllListeners('minimize')
         mainWindow?.minimize()
+        // @ts-ignore — minimize event exists at runtime
         mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
       }
     })
@@ -1273,6 +1275,7 @@ function createWindow() {
       if (response === 1) {
         mainWindow?.removeAllListeners('minimize')
         mainWindow?.minimize()
+        // @ts-ignore — minimize event exists at runtime
         mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
       }
     })
