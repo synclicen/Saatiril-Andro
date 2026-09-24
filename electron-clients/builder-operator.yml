@@ -1,12 +1,13 @@
 appId: com.saatiril.operator.electron
 productName: Saatiril Operator
-main: operator-main.js
 directories:
   output: dist-operator
 files:
   - operator-main.js
   - preload.js
   - connection.html
+extraMetadata:
+  main: operator-main.js
 win:
   target:
     - target: portable

@@ -1,12 +1,13 @@
 appId: com.saatiril.mc.electron
 productName: Saatiril MC
-main: mc-main.js
 directories:
   output: dist-mc
 files:
   - mc-main.js
   - preload.js
   - connection.html
+extraMetadata:
+  main: mc-main.js
 win:
   target:
     - target: portable
