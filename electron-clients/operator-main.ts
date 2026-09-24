@@ -71,6 +71,46 @@ function createWindow() {
     console.error('[OP] Load failed:', errorCode, errorDesc, validatedURL)
   })
 
+  // Anti-minimize: warn user
+  mainWindow.on('minimize', (e) => {
+    e.preventDefault()
+    const { dialog } = require('electron')
+    dialog.showMessageBox(mainWindow!, {
+      type: 'warning', title: 'Jangan Minimize!',
+      message: 'Saatiril Operator sedang berjalan!',
+      detail: 'Meminimize dapat mengganggu prosesi.\nLanjutkan minimize?',
+      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
+    }).then(({ response }) => {
+      if (response === 1) {
+        mainWindow!.removeAllListeners('minimize')
+        mainWindow!.minimize()
+        mainWindow!.once('restore', () => {
+          mainWindow!.on('minimize', preventMin)
+        })
+      }
+    })
+  })
+  function preventMin(e) {
+    e.preventDefault()
+    const { dialog } = require('electron')
+    dialog.showMessageBox(mainWindow!, {
+      type: 'warning', title: 'Jangan Minimize!',
+      message: 'Saatiril Operator sedang berjalan!',
+      detail: 'Meminimize dapat mengganggu prosesi.\nLanjutkan minimize?',
+      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
+    }).then(({ response }) => {
+      if (response === 1) {
+        mainWindow!.removeAllListeners('minimize')
+        mainWindow!.minimize()
+        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      }
+    })
+  }
+
+  // Prevent screen sleep
+  const { powerSaveBlocker } = require('electron')
+  powerSaveBlocker.start('prevent-display-sleep')
+
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
