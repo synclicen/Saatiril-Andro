@@ -85,6 +85,7 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   const [opProgressChannel, setOpProgressChannel] = useState<number>(0)
   // ── Photoshoot mode: search state ─────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('')
+  const [selesaiSearchQuery, setSelesaiSearchQuery] = useState('')
   const [monitorLocked, setMonitorLocked] = useState(false)
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
   // ── Mobile/compact: active tab for the 3-section workspace ────────────────
@@ -158,6 +159,16 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
       (s) => s.nim.toLowerCase().includes(q) || s.nama.toLowerCase().includes(q),
     )
   }, [antreanStudents, searchQuery])
+
+  // ── SELESAI list filtered by selesaiSearchQuery (car peserta yang sudah disimpan —
+  // berguna saat antrean sudah 4000+ peserta selesai dan MC butuh cari untuk reset+resend).
+  const displayedSelesai = useMemo<Student[]>(() => {
+    if (!selesaiSearchQuery.trim()) return selesaiStudents
+    const q = selesaiSearchQuery.toLowerCase().trim()
+    return selesaiStudents.filter(
+      (s) => s.nim.toLowerCase().includes(q) || s.nama.toLowerCase().includes(q),
+    )
+  }, [selesaiStudents, selesaiSearchQuery])
 
   // ── Photoshoot: check per-channel completion from photoHistory ──────────
   const getStudentChannelCompletion = useCallback((studentId: string): Record<number, boolean> => {
@@ -1091,17 +1102,35 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
           </span>
         </div>
 
+        {/* Search — cari peserta di SELESAI (Disimpan) untuk reset+resend.
+            Berguna saat ribuan peserta sudah selesai; MC bisa langsung cari tanpa scroll. */}
+        <div
+          className={`shrink-0 relative ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+          style={{ borderBottom: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+        >
+          <Search className={`absolute top-1/2 -translate-y-1/2 ${isCompact ? 'left-3.5 size-3' : 'left-4 size-3.5'}`} style={{ color: THEME.muted }} />
+          <Input
+            placeholder="Cari NIM atau Nama..."
+            value={selesaiSearchQuery}
+            onChange={(e) => {
+              setSelesaiSearchQuery(e.target.value)
+              setSelectedStudent(null)
+            }}
+            className={`${isCompact ? 'pl-7 h-7 text-[10px]' : 'pl-8 h-9 text-xs'} border-[#533485] bg-[#3b2263] text-white placeholder:text-[#533485] focus-visible:border-[#4ade80] focus-visible:ring-[#4ade80]/30`}
+          />
+        </div>
+
         {/* List — click to select for reset (photoshoot only) */}
         <ScrollArea className="flex-1 min-h-0">
           <div className="flex flex-col">
-            {selesaiStudents.length === 0 ? (
+            {displayedSelesai.length === 0 ? (
               <div className={`flex items-center justify-center ${isCompact ? 'py-6' : 'py-12'}`}>
                 <p className={`${isCompact ? 'text-[10px]' : 'text-sm'}`} style={{ color: THEME.muted }}>
-                  Belum ada yang selesai
+                  {selesaiStudents.length === 0 ? 'Belum ada yang selesai' : 'Tidak ditemukan'}
                 </p>
               </div>
             ) : (
-              selesaiStudents.map((student, idx) => {
+              displayedSelesai.map((student, idx) => {
                 const isSelected = photoshoot && selectedStudent?.id === student.id
                 return (
                   <div
