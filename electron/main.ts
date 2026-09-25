@@ -1249,6 +1249,17 @@ function createWindow() {
         mainWindow?.minimize()
         // @ts-ignore — minimize event exists at runtime
         mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      } else {
+        // Tetap Buka — explicitly restore/show/focus the window. On Windows,
+        // the OS minimize button can minimize the window BEFORE e.preventDefault()
+        // takes effect (an Electron race), so the window ends up minimized even
+        // though the user chose "Tetap Buka". restore()+show()+focus() brings it
+        // back to the foreground so the user doesn't have to manually maximize.
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+        }
       }
     })
   })
@@ -1266,6 +1277,17 @@ function createWindow() {
         mainWindow?.minimize()
         // @ts-ignore — minimize event exists at runtime
         mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      } else {
+        // Tetap Buka — explicitly restore/show/focus the window. On Windows,
+        // the OS minimize button can minimize the window BEFORE e.preventDefault()
+        // takes effect (an Electron race), so the window ends up minimized even
+        // though the user chose "Tetap Buka". restore()+show()+focus() brings it
+        // back to the foreground so the user doesn't have to manually maximize.
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+        }
       }
     })
   }

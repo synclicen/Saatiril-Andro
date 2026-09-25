@@ -107,6 +107,15 @@ function createWindow() {
         mainWindow!.once('restore', () => {
           mainWindow!.on('minimize', preventMin)
         })
+      } else {
+        // Tetap Buka — restore/show/focus (Windows race: OS may minimize before
+        // e.preventDefault() takes effect, so the window ends up minimized even
+        // though the user chose "Tetap Buka").
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+        }
       }
     })
   })
@@ -123,6 +132,13 @@ function createWindow() {
         mainWindow!.removeAllListeners('minimize')
         mainWindow!.minimize()
         mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
+      } else {
+        // Tetap Buka — restore/show/focus (Windows race — see inline handler).
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore()
+          mainWindow.show()
+          mainWindow.focus()
+        }
       }
     })
   }
