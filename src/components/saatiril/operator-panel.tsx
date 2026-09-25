@@ -390,8 +390,21 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       currentProject.database.filter((s) => s.status === 'done').map((s) => s.id)
     )
     const dbQueueIds = new Set<string>()
+    // dbItems: students with status 'sent' (MC sent them, not yet photographed).
+    // NOTE: do NOT exclude via alreadyPhotographed here. A 'sent' student is, by
+    // definition, NOT yet photographed (photographed students are 'done'). The
+    // alreadyPhotographed check previously excluded 'sent' students when the
+    // operator's localStorage had STALE photoHistory entries (from a previous
+    // session or a reset whose cleared photoHistory didn't persist before close).
+    // That stale check caused the operator to LOSE the queue after close+reopen —
+    // the PROSES count was correct (DB has 'sent' students) but the queue list was
+    // empty (alreadyPhotographed wrongly excluded them). Now 'sent' students
+    // always show in the queue regardless of stale photoHistory, so the operator
+    // recovers the full queue after reopen. (Re-photographing a 'sent' student
+    // that's inconsistently in photoHistory is safe — the versioned filename
+    // logic creates a new version, and the photoHistory entry is overwritten.)
     const dbItems = currentProject.database.filter(
-      (s) => s.status === 'sent' && !alreadyPhotographed.has(s.id)
+      (s) => s.status === 'sent' && !doneIds.has(s.id)
     )
     dbItems.forEach((s) => dbQueueIds.add(s.id))
     const bufferItems = mcCallBuffer.filter(
