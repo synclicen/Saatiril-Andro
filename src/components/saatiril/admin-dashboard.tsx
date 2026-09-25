@@ -666,19 +666,24 @@ export default function AdminDashboard() {
     async (role: string, channel: number): Promise<string> => {
       const api = window.saatirilAPI
       const isElectron = api?.isElectron
-      // Build path: /mc for MC role, /operator for operator role
-      const path = role === 'mc' ? '/mc' : '/operator'
+      // UNIFIED: load the root route with ?role= param so the browser page
+      // uses the SAME React panel (mc-panel.tsx / operator-panel.tsx) as the
+      // Electron apps — identical display + data sync across MC page, MC App,
+      // Operator page, Operator App, and the Portable's MC/Operator panels.
+      // (Previously /mc and /operator served the standalone mc.html /
+      // operator.html which had drifted from the React panels.)
+      const path = '/?role=' + role
 
       if (isElectron) {
         try {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          return `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=23`
+          return `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23`
         } catch {
           const hostname = window.location.hostname
           const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
-          return `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=23`
+          return `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23`
         }
       } else {
         const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
@@ -715,7 +720,7 @@ export default function AdminDashboard() {
           }
         }
 
-        return `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=23`
+        return `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23`
       }
     },
     [lanInfo],
@@ -845,8 +850,13 @@ export default function AdminDashboard() {
     async (role: string, channel: number) => {
       const api = window.saatirilAPI
       const isElectron = api?.isElectron
-      // Build path: /mc for MC role, /operator for operator role
-      const path = role === 'mc' ? '/mc' : '/operator'
+      // UNIFIED: load the root route with ?role= param so the browser page
+      // uses the SAME React panel (mc-panel.tsx / operator-panel.tsx) as the
+      // Electron apps — identical display + data sync across MC page, MC App,
+      // Operator page, Operator App, and the Portable's MC/Operator panels.
+      // (Previously /mc and /operator served the standalone mc.html /
+      // operator.html which had drifted from the React panels.)
+      const path = '/?role=' + role
 
       let url: string
       if (isElectron) {
@@ -854,12 +864,12 @@ export default function AdminDashboard() {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          url = `http://${lanIP}:${info.httpPort}${path}?channel=${channel}&socketPort=${info.socketPort}&v=23`
+          url = `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23`
         } catch {
           const hostname = window.location.hostname
           const params = new URLSearchParams(window.location.search)
           const socketPort = params.get('socketPort') || '3003'
-          url = `http://${hostname}:3000${path}?channel=${channel}&socketPort=${socketPort}&v=23`
+          url = `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23`
         }
       } else {
         // Web/sandbox mode: include socketPort so LAN clients can connect to the Socket.io server
@@ -902,7 +912,7 @@ export default function AdminDashboard() {
           }
         }
 
-        url = `${origin}${path}?channel=${channel}&socketPort=${socketPort}&v=23`
+        url = `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23`
       }
       try {
         if (navigator.clipboard) {

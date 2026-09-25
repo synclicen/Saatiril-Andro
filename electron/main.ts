@@ -418,34 +418,23 @@ function startStaticServer(outDir: string): Promise<void> {
 
       if (urlPath === '/') urlPath = '/index.html'
 
-      // ── MC web page — served at /mc?channel=1 ─────────────────────────
-      // MC scans QR code → browser opens this page → connects via Socket.io
-      // v24-client-sync-fix: matches mc-panel.tsx for all 4 modes (single, dual,
-      // single-photoshoot, dual-photoshoot) + uses data.student.status.
-      if (urlPath === '/mc') {
-        const mcHtmlPath = getResourcePath('public/mc.html')
-        if (fs.existsSync(mcHtmlPath)) {
-          res.writeHead(200, {
-            'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v24-client-sync-fix',
-          })
-          fs.createReadStream(mcHtmlPath).pipe(res)
-          return
-        }
-      }
-
-      // ── Operator web page — served at /operator?channel=1 ────────────
-      // Operator scans QR code → browser opens this page → camera + shutter
-      if (urlPath === '/operator') {
-        const opHtmlPath = getResourcePath('public/operator.html')
-        if (fs.existsSync(opHtmlPath)) {
-          res.writeHead(200, {
-            'Content-Type': 'text/html; charset=utf-8',
-            'X-Saatiril-Version': 'v24-client-sync-fix',
-          })
-          fs.createReadStream(opHtmlPath).pipe(res)
-          return
-        }
+      // ── /mc + /operator → redirect to root route with ?role= param ──────
+      // UNIFIED: browser pages now load the SAME Next.js React panel
+      // (mc-panel.tsx / operator-panel.tsx) as the Electron apps, so display
+      // + data sync are identical across MC page, MC App, Operator page,
+      // Operator App, and the Portable's MC/Operator panels. The old standalone
+      // mc.html / operator.html had drifted from the React panels (different
+      // layout, desynced data). This redirect preserves any existing query
+      // (channel, socketPort, v) and just prepends role=<mc|operator>.
+      if (urlPath === '/mc' || urlPath === '/operator') {
+        const role = urlPath === '/mc' ? 'mc' : 'operator'
+        const newQuery = urlQuery ? `role=${role}&${urlQuery}` : `role=${role}`
+        res.writeHead(302, {
+          Location: `/?${newQuery}`,
+          'Cache-Control': 'no-cache',
+        })
+        res.end()
+        return
       }
 
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
