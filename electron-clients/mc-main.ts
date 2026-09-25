@@ -91,10 +91,22 @@ function createWindow() {
     ))
   })
 
-  // Anti-minimize: warn user
-  mainWindow.on('minimize', (e) => {
+  // Anti-minimize: warn user.
+  // CRITICAL: restore+show+focus SYNCHRONOUSLY at the START of the handler —
+  // BEFORE the async dialog. On Windows, the OS minimize button can minimize
+  // the window BEFORE e.preventDefault() takes effect (an Electron race). If
+  // we restore only inside the dialog's async .then(), the window stays
+  // minimized while the dialog is open AND may get re-minimized after restore.
+  // Restoring synchronously brings the window back ASAP — the app NEVER stays
+  // minimized against the user's "Tetap Buka" choice.
+  function handleMinimize(e) {
     e.preventDefault()
     const { dialog } = require('electron')
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
     dialog.showMessageBox(mainWindow!, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Saatiril MC sedang berjalan!',
@@ -102,46 +114,15 @@ function createWindow() {
       buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
     }).then(({ response }) => {
       if (response === 1) {
+        // Minimize Saja — re-minimize + re-attach handler on restore
         mainWindow!.removeAllListeners('minimize')
         mainWindow!.minimize()
-        mainWindow!.once('restore', () => {
-          mainWindow!.on('minimize', preventMin)
-        })
-      } else {
-        // Tetap Buka — restore/show/focus (Windows race: OS may minimize before
-        // e.preventDefault() takes effect, so the window ends up minimized even
-        // though the user chose "Tetap Buka").
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore()
-          mainWindow.show()
-          mainWindow.focus()
-        }
+        mainWindow!.once('restore', () => { mainWindow!.on('minimize', handleMinimize) })
       }
-    })
-  })
-  function preventMin(e) {
-    e.preventDefault()
-    const { dialog } = require('electron')
-    dialog.showMessageBox(mainWindow!, {
-      type: 'warning', title: 'Jangan Minimize!',
-      message: 'Saatiril MC sedang berjalan!',
-      detail: 'Meminimize dapat mengganggu prosesi.\nLanjutkan minimize?',
-      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
-    }).then(({ response }) => {
-      if (response === 1) {
-        mainWindow!.removeAllListeners('minimize')
-        mainWindow!.minimize()
-        mainWindow!.once('restore', () => { mainWindow!.on('minimize', preventMin) })
-      } else {
-        // Tetap Buka — restore/show/focus (Windows race — see inline handler).
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore()
-          mainWindow.show()
-          mainWindow.focus()
-        }
-      }
+      // else: Tetap Buka — already restored synchronously above, nothing more.
     })
   }
+  mainWindow.on('minimize', handleMinimize)
 
   // Prevent screen sleep
   const { powerSaveBlocker } = require('electron')

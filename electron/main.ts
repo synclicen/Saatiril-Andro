@@ -1233,10 +1233,23 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // Anti-minimize: warn user when trying to minimize
-  // @ts-ignore — minimize event exists at runtime
-  mainWindow.on('minimize', (e: Electron.Event) => {
+  // Anti-minimize: warn user when trying to minimize.
+  // CRITICAL: restore+show+focus SYNCHRONOUSLY at the START of the handler —
+  // BEFORE the async dialog. On Windows, the OS minimize button can minimize
+  // the window BEFORE e.preventDefault() takes effect (an Electron race). If
+  // we restore only inside the dialog's async .then(), the window stays
+  // minimized while the dialog is open AND may get re-minimized after restore.
+  // Restoring synchronously brings the window back ASAP. The dialog then asks;
+  // if the user picks "Minimize Saja", we re-minimize; if "Tetap Buka", nothing
+  // more (already restored) — so the app NEVER stays minimized against the
+  // user's choice.
+  function handleMinimize(e: Electron.Event) {
     e.preventDefault()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
     // @ts-ignore — mainWindow is checked for null before this
     dialog.showMessageBox(mainWindow as any, {
       type: 'warning', title: 'Jangan Minimize!',
@@ -1245,52 +1258,17 @@ function createWindow() {
       buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
     }).then(({ response }) => {
       if (response === 1) {
+        // Minimize Saja — re-minimize + re-attach handler on restore
         mainWindow?.removeAllListeners('minimize')
         mainWindow?.minimize()
         // @ts-ignore — minimize event exists at runtime
-        mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
-      } else {
-        // Tetap Buka — explicitly restore/show/focus the window. On Windows,
-        // the OS minimize button can minimize the window BEFORE e.preventDefault()
-        // takes effect (an Electron race), so the window ends up minimized even
-        // though the user chose "Tetap Buka". restore()+show()+focus() brings it
-        // back to the foreground so the user doesn't have to manually maximize.
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore()
-          mainWindow.show()
-          mainWindow.focus()
-        }
+        mainWindow?.once('restore', () => { if (mainWindow) mainWindow.on('minimize', handleMinimize) })
       }
-    })
-  })
-  function preventMin(e: Electron.Event) {
-    e.preventDefault()
-    // @ts-ignore — mainWindow is checked for null before this
-    dialog.showMessageBox(mainWindow as any, {
-      type: 'warning', title: 'Jangan Minimize!',
-      message: 'Aplikasi Saatiril sedang berjalan!',
-      detail: 'Meminimize dapat mengganggu prosesi.\n\nLanjutkan minimize?',
-      buttons: ['Tetap Buka', 'Minimize Saja'], defaultId: 0, cancelId: 0,
-    }).then(({ response }) => {
-      if (response === 1) {
-        mainWindow?.removeAllListeners('minimize')
-        mainWindow?.minimize()
-        // @ts-ignore — minimize event exists at runtime
-        mainWindow?.once('restore', () => { mainWindow!.on('minimize', preventMin) })
-      } else {
-        // Tetap Buka — explicitly restore/show/focus the window. On Windows,
-        // the OS minimize button can minimize the window BEFORE e.preventDefault()
-        // takes effect (an Electron race), so the window ends up minimized even
-        // though the user chose "Tetap Buka". restore()+show()+focus() brings it
-        // back to the foreground so the user doesn't have to manually maximize.
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore()
-          mainWindow.show()
-          mainWindow.focus()
-        }
-      }
+      // else: Tetap Buka — already restored synchronously above, nothing more.
     })
   }
+  // @ts-ignore — minimize event exists at runtime
+  mainWindow.on('minimize', handleMinimize)
   // Prevent screen sleep
   // powerSaveBlocker imported at top
   powerSaveBlocker.start('prevent-display-sleep')
