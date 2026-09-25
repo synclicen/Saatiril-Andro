@@ -80,7 +80,11 @@ export type AppTab = 'admin' | 'mc' | 'operator'
 // ─── Memory guard: max photo history items kept in memory ──────────────────
 // With thousands of participants, we can't keep all base64 photos in memory.
 // Admin keeps last N items for live gallery; MC/Operator only need current target.
-// Photos are still saved to disk by the Operator's SYNC_DB handler.
+// Photos are saved to disk by the Admin's handlePhotosSaved handler (via savePhoto
+// IPC) — disk saves are UNCAPPED and independent of this in-memory gallery cap.
+// The operator exe ALSO saves a local copy for redundancy.
+// NOTE: This caps ONLY the in-memory gallery for display. DISK SAVES are
+// triggered per-PHOTOS_SAVED and are UNLIMITED — safe for 4000+ participants.
 const MAX_PHOTO_HISTORY_IN_MEMORY = 200
 
 // ─── Frame storage: separate localStorage keys for frame base64 data ──────────

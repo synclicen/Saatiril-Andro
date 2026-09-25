@@ -40,6 +40,14 @@ import { useSaatirilStore, type Student, type StudentStatus, type PhotoHistoryIt
 import { onLocal, offLocal, emitLocal, getConnectionHealth, onLatencyUpdate, type ConnectionHealth } from '@/lib/socket'
 import { useToast } from '@/hooks/use-toast'
 import { useIsMobile } from '@/hooks/use-mobile'
+import {
+  isBrowserSaveSupported,
+  isElectronSaveAvailable,
+  requestBrowserSaveDirectory,
+  getBrowserSaveDirectory,
+  savePhotoInBrowser,
+  browserSaveStorageKey,
+} from '@/lib/browser-photo-save'
 
 // ── Theme constants ──────────────────────────────────────────────
 const BG = 'bg-[#1a0b2e]'
@@ -124,6 +132,23 @@ export default function AdminDashboard() {
   const { toast } = useToast()
   const isMobile = useIsMobile()
 
+  // ── Disk-save stats (visible in header) ──────────────────────────────
+  // Cumulative count of photos successfully written to disk vs failed.
+  // Disk saves are triggered per-PHOTOS_SAVED in handlePhotosSaved below.
+  const [diskSaveStats, setDiskSaveStats] = useState<{
+    saved: number
+    failed: number
+    lastFile: string | null
+    lastError: string | null
+  }>({ saved: 0, failed: 0, lastFile: null, lastError: null })
+  // Ref mirror so the save callback can read the latest cumulative count
+  // synchronously (for the "toast on first success only" decision) without
+  // depending on stale closure state.
+  const diskSaveStatsRef = useRef(diskSaveStats)
+  useEffect(() => {
+    diskSaveStatsRef.current = diskSaveStats
+  }, [diskSaveStats])
+
   // Store
   const currentProject = useSaatirilStore((s) => s.currentProject)
   const updateCurrentProject = useSaatirilStore((s) => s.updateCurrentProject)
@@ -168,47 +193,139 @@ export default function AdminDashboard() {
       const version = data.version ?? 1
 
       // ── Save photos to disk ─────────────────────────────────────────────
-      // Electron only: photos write to config.targetFolder (folder chosen at
-      // PROJECT CREATION) via IPC. In browser mode photos stay in memory/gallery
-      // only. The folder is NOT picked by the operator — it's set at project
-      // creation. Run via Electron desktop for permanent disk saves.
+      // BULLETPROOF: tries Electron IPC first, falls back to the browser File
+      // System Access API, and finally counts a failure. Visible via the
+      // diskSaveStats state + a header Disk badge + toasts (failure always,
+      // first-success only — no spam for 4000 photos). Disk saves are UNCAPPED
+      // and independent of the in-memory gallery cap (MAX_PHOTO_HISTORY_IN_MEMORY).
       const targetFolder = proj.config?.targetFolder
       const hasEnoughPhotos = data.photos?.length >= (photoshootMode ? 1 : 2)
 
       if (hasEnoughPhotos) {
-        const api = window.saatirilAPI
-        if (api?.savePhoto && targetFolder) {
-          if (photoshootMode) {
-            const filename = data.filename ?? buildPhotoshootFilename(data.student.nim, data.student.nama, data.channel, version)
-            api.savePhoto({ base64Data: data.photos[0], filename, targetFolder }).then((path: string | null) => {
-              if (path) {
-                console.log(`[SAATIRIL ADMIN] Photo saved to disk (v${version}): → ${path}`)
-              } else {
-                console.warn('[SAATIRIL ADMIN] Photo failed to save to disk')
+        // Build the list of { base64Data, filename } items to save.
+        // Photoshoot mode → 1 photo (buildPhotoshootFilename).
+        // Wisuda mode (single/dual) → 2 photos (buildFilename Toga + Ijazah).
+        const items: { base64Data: string; filename: string }[] = []
+        if (photoshootMode) {
+          const filename = data.filename ?? buildPhotoshootFilename(data.student.nim, data.student.nama, data.channel, version)
+          items.push({ base64Data: data.photos[0], filename })
+        } else {
+          const togaFilename = buildFilename(data.student.nim, data.student.nama, 1, 'Toga', version)
+          const ijazahFilename = buildFilename(data.student.nim, data.student.nama, 2, 'Ijazah', version)
+          items.push({ base64Data: data.photos[0], filename: togaFilename })
+          items.push({ base64Data: data.photos[1], filename: ijazahFilename })
+        }
+
+        const electronOk = isElectronSaveAvailable()
+        const browserOk = isBrowserSaveSupported()
+        const hasFolder = !!targetFolder
+
+        // No save path at all — tell the user immediately (visible, not silent).
+        if (!hasFolder && !browserOk && !electronOk) {
+          console.error('[SAATIRIL ADMIN] No disk-save path available (no Electron IPC, no browser FS Access, no targetFolder). Photos stay in memory/gallery only.')
+          toast({
+            title: 'Tidak Ada Folder Simpan',
+            description: 'Jalankan via Electron (portable.exe) atau pilih folder simpan di browser.',
+            variant: 'destructive',
+          })
+        } else {
+          const storageKey = browserSaveStorageKey(proj.id)
+          // Save each photo with PRIORITY:
+          //   (a) Electron IPC (primary) — if window.saatirilAPI.savePhoto exists AND targetFolder is set
+          //   (b) Browser File System Access API (fallback) — pick directory once, persist in IndexedDB
+          //   (c) failure — count toward diskSaveStats.failed
+          const savePromises = items.map(async (item) => {
+            // (a) Electron IPC (primary)
+            if (electronOk && hasFolder) {
+              try {
+                const p = await window.saatirilAPI!.savePhoto({
+                  base64Data: item.base64Data,
+                  filename: item.filename,
+                  targetFolder,
+                })
+                if (p) {
+                  console.log(`[SAATIRIL ADMIN] Photo saved to disk (Electron IPC, v${version}): ${item.filename} → ${p}`)
+                  return { ok: true, filename: item.filename, error: null as string | null }
+                }
+                console.warn(`[SAATIRIL ADMIN] Electron savePhoto returned null for ${item.filename} — trying browser fallback`)
+              } catch (err: any) {
+                console.warn(`[SAATIRIL ADMIN] Electron savePhoto threw for ${item.filename}: ${err?.message} — trying browser fallback`)
               }
-            }).catch((err: Error) => {
-              console.error('[SAATIRIL ADMIN] Error saving photo to disk:', err)
-            })
-          } else {
-            const togaFilename = buildFilename(data.student.nim, data.student.nama, 1, 'Toga', version)
-            const ijazahFilename = buildFilename(data.student.nim, data.student.nama, 2, 'Ijazah', version)
-            Promise.all([
-              api.savePhoto({ base64Data: data.photos[0], filename: togaFilename, targetFolder }),
-              api.savePhoto({ base64Data: data.photos[1], filename: ijazahFilename, targetFolder }),
-            ]).then(([path1, path2]) => {
-              if (path1 && path2) {
-                console.log(`[SAATIRIL ADMIN] Photos saved to disk (v${version}):\n  → ${path1}\n  → ${path2}`)
-              } else {
-                console.warn('[SAATIRIL ADMIN] Some photos failed to save to disk')
+            }
+            // (b) Browser File System Access API (fallback)
+            if (browserOk) {
+              try {
+                let dir = await getBrowserSaveDirectory(storageKey)
+                if (!dir) {
+                  dir = await requestBrowserSaveDirectory(storageKey)
+                }
+                if (dir) {
+                  const saved = await savePhotoInBrowser(storageKey, item.base64Data, item.filename)
+                  if (saved) {
+                    console.log(`[SAATIRIL ADMIN] Photo saved to disk (browser FS Access, v${version}): ${item.filename}`)
+                    return { ok: true, filename: item.filename, error: null as string | null }
+                  }
+                  console.warn(`[SAATIRIL ADMIN] Browser savePhotoInBrowser returned null for ${item.filename}`)
+                } else {
+                  console.warn(`[SAATIRIL ADMIN] No browser save directory picked — skipping browser save for ${item.filename}`)
+                }
+              } catch (err: any) {
+                console.error(`[SAATIRIL ADMIN] Browser save failed for ${item.filename}:`, err)
               }
-            }).catch((err) => {
-              console.error('[SAATIRIL ADMIN] Error saving photos to disk:', err)
+            }
+            // (c) Both unavailable / failed
+            return { ok: false, filename: item.filename, error: 'No save path available (no Electron, no browser folder)' }
+          })
+
+          Promise.allSettled(savePromises).then((results) => {
+            let savedNow = 0
+            let failedNow = 0
+            let lastFile: string | null = null
+            let lastError: string | null = null
+            const savedNames: string[] = []
+            for (const r of results) {
+              if (r.status === 'fulfilled') {
+                if (r.value.ok) {
+                  savedNow++
+                  savedNames.push(r.value.filename)
+                  lastFile = r.value.filename
+                } else {
+                  failedNow++
+                  lastError = r.value.error
+                }
+              } else {
+                // Promise rejected outright (unexpected) — count as failed.
+                failedNow++
+                const msg = (r.reason as Error)?.message ?? String(r.reason)
+                lastError = msg
+                console.error('[SAATIRIL ADMIN] Save promise rejected:', r.reason)
+              }
+            }
+
+            const prev = diskSaveStatsRef.current
+            // Toast on FAILURE always; on SUCCESS only for the very first
+            // photo of the session (prev.saved === 0) — so 4000 photos do
+            // not spam toasts.
+            if (failedNow > 0) {
+              toast({
+                title: 'Gagal Simpan ke Disk',
+                description: `${failedNow} foto tidak tersimpan. ${lastError ?? 'Cek ruang disk & folder target.'}`,
+                variant: 'destructive',
+              })
+            } else if (savedNow > 0 && prev.saved === 0) {
+              const folderDesc = hasFolder ? targetFolder : 'folder browser (File System Access)'
+              toast({
+                title: 'Foto Tersimpan ke Disk',
+                description: `${savedNames.join(', ')} → ${folderDesc}`,
+              })
+            }
+            setDiskSaveStats({
+              saved: prev.saved + savedNow,
+              failed: prev.failed + failedNow,
+              lastFile,
+              lastError,
             })
-          }
-        } else if (!api?.savePhoto) {
-          console.warn('[SAATIRIL ADMIN] savePhoto API not available — not running in Electron? Photos stay in memory only.')
-        } else if (!targetFolder) {
-          console.warn('[SAATIRIL ADMIN] No targetFolder in project config — photos not saved to disk')
+          })
         }
       }
 
@@ -953,6 +1070,22 @@ export default function AdminDashboard() {
             <span>Tersimpan otomatis{lastSavedAt ? ` — ${new Date(lastSavedAt).toLocaleTimeString('id-ID')}` : ''}</span>
           </div>
         )}
+
+        {/* ── Disk-save status (visible: cumulative saved vs failed) ── */}
+        <div className="shrink-0">
+          <Badge
+            variant="outline"
+            className={
+              diskSaveStats.failed > 0
+                ? 'border-red-500/40 text-red-400'
+                : 'border-green-500/40 text-green-400'
+            }
+          >
+            <Folder className="h-3 w-3 mr-1" />
+            Disk: {diskSaveStats.saved} tersimpan
+            {diskSaveStats.failed > 0 && ` · ${diskSaveStats.failed} gagal`}
+          </Badge>
+        </div>
 
         <Separator className="bg-[#533485]/40 shrink-0" />
 

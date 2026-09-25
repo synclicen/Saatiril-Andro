@@ -136,4 +136,25 @@ ipcMain.on('connect-to-server', async (_e: any, connectUrl: string) => {
 })
 
 ipcMain.handle('get-connection-info', () => parseArgs())
+
+// Save photo to disk (operator local copy — redundancy with admin)
+ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string }) => {
+  try {
+    const { base64Data, filename, targetFolder } = data
+    if (!targetFolder) {
+      console.warn('[SAATIRIL OP-MAIN] save-photo: no targetFolder — skipping local save (admin will save via PHOTOS_SAVED)')
+      return null
+    }
+    fs.mkdirSync(targetFolder, { recursive: true })
+    const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+    const buffer = Buffer.from(base64, 'base64')
+    const filePath = path.join(targetFolder, filename)
+    fs.writeFileSync(filePath, buffer)
+    console.log(`[SAATIRIL OP-MAIN] Photo saved (local redundancy): ${filePath} (${(buffer.length / 1024).toFixed(1)}KB)`)
+    return filePath
+  } catch (err: any) {
+    console.error('[SAATIRIL OP-MAIN] Failed to save photo:', err.message)
+    return null
+  }
+})
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

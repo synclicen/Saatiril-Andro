@@ -168,4 +168,28 @@ ipcMain.on('connect-to-server', async (_e: any, connectUrl: string) => {
 })
 
 ipcMain.handle('get-connection-info', () => parseArgs())
+
+// Save photo to disk (registered so the shared preload's savePhoto IPC does
+// not throw "No handler registered" — the MC exe does not currently capture
+// photos, but the preload is shared with the operator exe, so the handler
+// must exist. Writes a LOCAL redundancy copy if a targetFolder is supplied.)
+ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string }) => {
+  try {
+    const { base64Data, filename, targetFolder } = data
+    if (!targetFolder) {
+      console.warn('[SAATIRIL MC-MAIN] save-photo: no targetFolder — skipping (admin will save via PHOTOS_SAVED)')
+      return null
+    }
+    fs.mkdirSync(targetFolder, { recursive: true })
+    const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+    const buffer = Buffer.from(base64, 'base64')
+    const filePath = path.join(targetFolder, filename)
+    fs.writeFileSync(filePath, buffer)
+    console.log(`[SAATIRIL MC-MAIN] Photo saved (local redundancy): ${filePath} (${(buffer.length / 1024).toFixed(1)}KB)`)
+    return filePath
+  } catch (err: any) {
+    console.error('[SAATIRIL MC-MAIN] Failed to save photo:', err.message)
+    return null
+  }
+})
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

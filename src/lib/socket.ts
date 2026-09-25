@@ -299,7 +299,13 @@ interface QueuedEvent {
 }
 
 const eventQueue: QueuedEvent[] = []
-const MAX_QUEUE_SIZE = 100  // Increased for ceremony resilience
+// NOTE: This queue is ONLY for relay reliability (re-emitting events after a
+// WiFi drop/reconnect). It is NOT the source of truth for photos — disk saves
+// (admin's handlePhotosSaved + operator's local redundancy) are the source of
+// truth and are UNCAPPED. 2000 is large enough that PHOTOS_SAVED events for a
+// 4000+ participant event are never dropped from the offline queue during
+// extended WiFi congestion.
+const MAX_QUEUE_SIZE = 2000
 const MAX_RETRIES = 5     // More retries for unreliable WiFi
 const CRITICAL_EVENTS = new Set(['PHOTOS_SAVED', 'MC_CALL', 'SYNC_DB', 'STUDENT_DONE', 'STUDENT_RESET'])
 

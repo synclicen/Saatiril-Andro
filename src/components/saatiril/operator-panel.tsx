@@ -837,13 +837,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
             const targetFolder = projConfig.targetFolder
             console.log(`[SAATIRIL OP] Saving photo to disk: ${targetFolder}/${vFilename}`)
             api.savePhoto({ base64Data: allPhotos[0], filename: vFilename, targetFolder }).then((path: string | null) => {
+              // Detect the legacy fake-delegation sentinel returned by an OLD
+              // operator-exe preload (pre-fix). The new preload (after CHANGE 3)
+              // returns a real filesystem path or null — never this sentinel.
+              if (path === 'saved-via-admin-socket') {
+                console.log(`[SAATIRIL OP] Photo delegated — Admin will save to disk via PHOTOS_SAVED event. (${vFilename})`)
+                return
+              }
               if (path) {
-                console.log(`[SAATIRIL OP] ✓ Photo saved to disk: → ${path}`)
+                console.log(`[SAATIRIL OP] ✓ Photo saved to disk (local redundancy): → ${path}`)
               } else {
                 console.warn(`[SAATIRIL OP] ✗ Photo FAILED to save to disk: ${targetFolder}/${vFilename}`)
                 toast({
                   title: 'Gagal Simpan ke Disk',
-                  description: `Foto ${vFilename} tidak tersimpan. Cek ruang disk & folder target.`,
+                  description: `Foto ${vFilename} tidak tersimpan. Cek ruang disk & folder target. Admin tetap akan mencoba simpan via PHOTOS_SAVED.`,
                   variant: 'destructive',
                 })
               }
@@ -940,13 +947,32 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
               api.savePhoto({ base64Data: allPhotos[0], filename: togaFilename, targetFolder }),
               api.savePhoto({ base64Data: allPhotos[1], filename: ijazahFilename, targetFolder }),
             ]).then(([path1, path2]) => {
-              if (path1 && path2) {
-                console.log(`[SAATIRIL OP] ✓ Photos saved to disk:\n  → ${path1}\n  → ${path2}`)
-              } else {
-                console.warn(`[SAATIRIL OP] ✗ Some photos FAILED to save: toga=${!!path1} ijazah=${!!path2}`)
+              // Detect the legacy fake-delegation sentinel returned by an OLD
+              // operator-exe preload (pre-fix). The new preload (after CHANGE 3)
+              // returns real filesystem paths or null — never this sentinel.
+              const SENTINEL = 'saved-via-admin-socket'
+              const delegated1 = path1 === SENTINEL
+              const delegated2 = path2 === SENTINEL
+              if (delegated1 && delegated2) {
+                console.log(`[SAATIRIL OP] Photos delegated — Admin will save to disk via PHOTOS_SAVED event. (${togaFilename}, ${ijazahFilename})`)
+                return
+              }
+              const ok1 = !!path1 && !delegated1
+              const ok2 = !!path2 && !delegated2
+              if (ok1 && ok2) {
+                console.log(`[SAATIRIL OP] ✓ Photos saved to disk (local redundancy):\n  → ${path1}\n  → ${path2}`)
+              } else if (ok1 || ok2) {
+                console.warn(`[SAATIRIL OP] ✗ Partial save: toga=${ok1} ijazah=${ok2}`)
                 toast({
                   title: 'Gagal Simpan ke Disk',
-                  description: 'Sebagian foto tidak tersimpan. Cek ruang disk & folder target.',
+                  description: 'Sebagian foto tidak tersimpan. Cek ruang disk & folder target. Admin tetap akan mencoba simpan via PHOTOS_SAVED.',
+                  variant: 'destructive',
+                })
+              } else {
+                console.warn(`[SAATIRIL OP] ✗ Photos FAILED to save: toga=${ok1} ijazah=${ok2}`)
+                toast({
+                  title: 'Gagal Simpan ke Disk',
+                  description: 'Foto tidak tersimpan. Cek ruang disk & folder target. Admin tetap akan mencoba simpan via PHOTOS_SAVED.',
                   variant: 'destructive',
                 })
               }
