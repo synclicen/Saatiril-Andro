@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Megaphone, Users, Clock, CheckCircle2, Loader2, Camera, Search, Send, RotateCcw } from 'lucide-react'
+import { Megaphone, Users, Clock, CheckCircle2, Loader2, Camera, Search, Send, RotateCcw, ArrowRight } from 'lucide-react'
 import { useSaatirilStore, type Student, type StudentStatus, type PhotoHistoryItem, type CameraMode, mergeDatabases, stripFrameForSync, preserveFrameOnSync, preservePhotoHistoryOnSync, mergeCaptureVersions, isPhotoshootMode, isDualPhotoshootMode, channelCount } from '@/store/use-saatiril-store'
 import { emitLocal, onLocal, offLocal } from '@/lib/socket'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -87,6 +87,8 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [monitorLocked, setMonitorLocked] = useState(false)
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
+  // ── Mobile/compact: active tab for the 3-section workspace ────────────────
+  const [activeTab, setActiveTab] = useState<'antrean' | 'proses' | 'selesai'>('antrean')
 
   const myChannelRef = useRef(myChannel)
   const currentProjectRef = useRef(currentProject)
@@ -124,11 +126,38 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
 
   const isPhotographing = !photoshoot && currentlyActive !== null
 
-  // ── Photoshoot: students sent to operators ──────────────────────────────
+  // ── Photoshoot: students sent to operators (kept for backward compatibility) ─
   const sentStudents = useMemo<Student[]>(() => {
     if (!photoshoot) return []
     return channelStudents.filter((s) => s.status === 'sent')
   }, [photoshoot, channelStudents])
+
+  // ── 3-section workspace filters (NEW) — split channelStudents by status ──
+  // ANTREAN: pending only ( belum dipanggil / dikirim )
+  const antreanStudents = useMemo<Student[]>(() => {
+    return channelStudents.filter((s) => s.status === 'pending')
+  }, [channelStudents])
+
+  // PROSES: sent OR active_N ( sedang dengan operator / difoto )
+  const prosesStudents = useMemo<Student[]>(() => {
+    return channelStudents.filter((s) => s.status === 'sent' || isActiveStatus(s.status))
+  }, [channelStudents])
+
+  // SELESAI: done ( sudah disimpan )
+  const selesaiStudents = useMemo<Student[]>(() => {
+    return channelStudents.filter((s) => s.status === 'done')
+  }, [channelStudents])
+
+  const totalCount = channelStudents.length
+
+  // ── ANTREAN list filtered by searchQuery (photoshoot free-order selection) ─
+  const displayedAntrean = useMemo<Student[]>(() => {
+    if (!searchQuery.trim()) return antreanStudents
+    const q = searchQuery.toLowerCase().trim()
+    return antreanStudents.filter(
+      (s) => s.nim.toLowerCase().includes(q) || s.nama.toLowerCase().includes(q),
+    )
+  }, [antreanStudents, searchQuery])
 
   // ── Photoshoot: check per-channel completion from photoHistory ──────────
   const getStudentChannelCompletion = useCallback((studentId: string): Record<number, boolean> => {
@@ -141,19 +170,6 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     }
     return result
   }, [])
-
-  // ── Photoshoot: filtered search results ───────────────────────────────────
-  // Include 'done' status so MC can find participants who have already been
-  // photographed — this allows MC to reset them for a retake.
-  const searchResults = useMemo<Student[]>(() => {
-    if (!photoshoot || !searchQuery.trim()) return []
-    const q = searchQuery.toLowerCase().trim()
-    return channelStudents.filter(
-      (s) =>
-        (s.status === 'pending' || s.status === 'sent' || s.status === 'done') &&
-        (s.nim.toLowerCase().includes(q) || s.nama.toLowerCase().includes(q))
-    )
-  }, [photoshoot, searchQuery, channelStudents])
 
   const activeRowRef = useRef<HTMLDivElement>(null)
   const nextRowRef = useRef<HTMLDivElement>(null)
@@ -465,6 +481,9 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     // Pre-select the student for easy re-send
     setSelectedStudent({ ...student, status: 'pending' })
     setSearchQuery(student.nama)
+    // Switch to ANTREAN tab so MC immediately sees the reset student at the
+    // top of the pending list and can re-send.
+    setActiveTab('antrean')
   }, [dualPhotoshoot, updateStudentStatus, updateCurrentProject, saveProjectsToStorageNow])
 
   // ── Render helpers
@@ -679,191 +698,494 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     return <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: THEME.border }} title="Menunggu" />
   }
 
-  // ── Photoshoot: search input + results
-  const renderPhotoshootSearch = () => (
-    <Card
-      className="shrink-0 border-2 rounded-xl overflow-hidden"
-      style={{
-        backgroundColor: THEME.card,
-        borderColor: THEME.emerald,
-        boxShadow: `0 0 20px ${THEME.emerald}22`,
-      }}
-    >
-      <CardContent className={compact ? 'p-1.5 space-y-1 min-w-0' : 'p-3 space-y-2'}>
-        <p
-          className={`font-semibold uppercase tracking-widest truncate ${compact ? 'text-[8px]' : 'text-[10px]'}`}
-          style={{ color: THEME.emerald }}
-        >
-          Cari Peserta — Urutan Bebas
-        </p>
-
-        <div className="relative min-w-0">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5" style={{ color: THEME.muted }} />
-          <Input
-            placeholder="Cari NIM atau Nama..."
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value)
-              setSelectedStudent(null)
-            }}
-            className={`${compact ? 'pl-7 h-7 text-[10px]' : 'pl-8'} border-[#533485] bg-[#3b2263] text-white placeholder:text-[#533485] focus-visible:border-[#4ade80] focus-visible:ring-[#4ade80]/30`}
-          />
+  // ── NEW: Top progress bar (sticky, full-width) — "informasi proses progres"
+  // 4 stat pills: ANTREAN / PROSES / SELESAI / TOTAL + mode indicator + network badge.
+  // On condensed (compact/mobile), pills double as tabs to switch active column.
+  const renderTopBar = (opts: { condensed: boolean }) => {
+    const { condensed } = opts
+    const pills: Array<{
+      label: string
+      count: number
+      color: string
+      bg: string
+      tab: 'antrean' | 'proses' | 'selesai' | null
+    }> = [
+      { label: 'ANTREAN', count: antreanStudents.length, color: THEME.muted, bg: `${THEME.border}33`, tab: 'antrean' },
+      { label: 'PROSES', count: prosesStudents.length, color: THEME.cyan, bg: `${THEME.cyan}22`, tab: 'proses' },
+      { label: 'SELESAI', count: selesaiStudents.length, color: THEME.emerald, bg: `${THEME.emerald}22`, tab: 'selesai' },
+      { label: 'TOTAL', count: totalCount, color: THEME.gold, bg: `${THEME.gold}22`, tab: null },
+    ]
+    return (
+      <div
+        className={`shrink-0 flex items-center justify-between gap-2 ${condensed ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+        style={{
+          backgroundColor: THEME.panel,
+          borderBottom: `1px solid ${THEME.border}`,
+        }}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto">
+          {pills.map((p) => {
+            const active = p.tab !== null && p.tab === activeTab
+            const dimmed = condensed && p.tab !== null && !active
+            return (
+              <button
+                key={p.label}
+                type="button"
+                disabled={p.tab === null}
+                onClick={() => { if (p.tab) setActiveTab(p.tab) }}
+                className={`flex flex-col items-center justify-center rounded-md transition-all shrink-0
+                  ${condensed ? 'px-2 py-0.5 min-w-[48px]' : 'px-3 py-1 min-w-[72px]'}
+                  ${p.tab === null ? 'cursor-default' : 'cursor-pointer hover:brightness-125'}`}
+                style={{
+                  backgroundColor: p.bg,
+                  border: `1px solid ${p.color}44`,
+                  boxShadow: active ? `0 0 10px ${p.color}66` : 'none',
+                  opacity: dimmed ? 0.5 : 1,
+                }}
+                aria-pressed={active}
+              >
+                <span className={`font-bold leading-none ${condensed ? 'text-sm' : 'text-xl'}`} style={{ color: p.color }}>
+                  {p.count}
+                </span>
+                <span className={`uppercase tracking-wider font-semibold leading-tight ${condensed ? 'text-[7px]' : 'text-[9px]'}`} style={{ color: p.color }}>
+                  {p.label}
+                </span>
+              </button>
+            )
+          })}
         </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`hidden sm:inline ${condensed ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
+            {photoshoot ? (dualPhotoshoot ? '2 Kamera' : 'Photoshoot') : `Channel ${myChannel}`}
+          </span>
+          <NetworkQualityBadge />
+        </div>
+      </div>
+    )
+  }
 
-        {/* Search results */}
-        {searchQuery.trim() && (
-          <div className="max-h-32 overflow-y-auto rounded-lg border" style={{ borderColor: THEME.border }}>
-            {searchResults.length === 0 ? (
-              <p className="p-2 text-xs text-center" style={{ color: THEME.muted }}>
-                Tidak ditemukan
-              </p>
-            ) : (
-              searchResults.slice(0, 10).map((student) => (
-                <button
-                  key={student.id}
-                  onClick={() => setSelectedStudent(student)}
-                  className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-white/5 cursor-pointer min-w-0"
-                  style={{
-                    backgroundColor: selectedStudent?.id === student.id ? `${THEME.emerald}22` : 'transparent',
-                    borderLeft: selectedStudent?.id === student.id ? `3px solid ${THEME.emerald}` : `3px solid transparent`,
-                  }}
-                >
-                  <span className={`font-mono truncate shrink-0 ${compact ? 'text-[9px] w-12' : 'text-xs w-16'}`} style={{ color: THEME.muted }}>
-                    {student.nim}
-                  </span>
-                  <span className={`font-medium truncate flex-1 min-w-0 ${compact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
-                    {student.nama}
-                  </span>
-                  {renderStatusBadge(student.status)}
-                </button>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* Selected student preview */}
-        {selectedStudent && (
-          <div
-            className="rounded-lg p-2 min-w-0"
-            style={{
-              backgroundColor: selectedStudent.status === 'done' ? `${THEME.gold}15` : `${THEME.emerald}15`,
-              border: `1px solid ${selectedStudent.status === 'done' ? `${THEME.gold}55` : `${THEME.emerald}33`}`,
-            }}
-          >
-            <p
-              className={`font-semibold uppercase tracking-wider ${compact ? 'text-[8px]' : 'text-[10px]'}`}
-              style={{ color: selectedStudent.status === 'done' ? THEME.gold : THEME.emerald }}
-            >
-              {selectedStudent.status === 'done' ? '⚠ Peserta Sudah Difoto' : 'Peserta Dipilih'}
-            </p>
-            <p className="text-sm font-bold truncate" style={{ color: '#ffffff' }}>
-              {selectedStudent.nama}
-            </p>
-            <p className="text-xs font-mono truncate" style={{ color: THEME.muted }}>
-              {selectedStudent.nim}
-            </p>
-            {selectedStudent.status === 'done' && (
-              <p className="text-[10px] mt-1 truncate" style={{ color: THEME.gold }}>
-                Klik RESET & KIRIM ULANG untuk memfoto ulang.
-              </p>
-            )}
-          </div>
-        )}
-
-        {renderCallButton()}
-      </CardContent>
-    </Card>
-  )
-
-  // ── Photoshoot: sent students panel (per-channel progress)
-  const renderSentStudents = () => {
-    if (!photoshoot || sentStudents.length === 0) return null
-
+  // ── NEW: ANTREAN column (status === 'pending') ──────────────────────────
+  // - Photoshoot: click a row → setSelectedStudent + setSearchQuery (free order).
+  // - Wisuda: nextPending auto-highlighted (no click). Footer: PANGGIL/TUNGGU.
+  const renderAntreanColumn = (opts: { isCompact: boolean }) => {
+    const { isCompact } = opts
     return (
       <Card
-        className="shrink-0 border rounded-xl overflow-hidden"
-        style={{ backgroundColor: THEME.card, borderColor: THEME.cyan }}
+        className="flex flex-col min-h-0 border rounded-xl overflow-hidden min-w-0 h-full"
+        style={{
+          backgroundColor: THEME.card,
+          borderColor: THEME.border,
+          flex: 4,
+        }}
       >
-        <CardContent className={compact ? 'p-1.5 space-y-1 min-w-0' : 'p-3 space-y-2'}>
-          <p className={`font-semibold uppercase tracking-widest truncate ${compact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.cyan }}>
-            <Camera className="size-3 inline mr-1 shrink-0" />
-            Dikirim ke Operator ({sentStudents.length})
-          </p>
-          <div className={`${compact ? 'max-h-32' : 'max-h-48'} overflow-y-auto space-y-1`}>
-            {sentStudents.map((student) => {
-              const completion = getStudentChannelCompletion(student.id)
-              return (
-                <div
-                  key={student.id}
-                  className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg min-w-0"
-                  style={{ backgroundColor: `${THEME.cyan}0a`, border: `1px solid ${THEME.cyan}22` }}
-                >
-                  <span className={`font-medium truncate flex-1 min-w-0 ${compact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
-                    {student.nama}
-                  </span>
-                  {dualPhotoshoot ? (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Badge
-                        className="text-[9px] px-1 py-0"
-                        style={{
-                          backgroundColor: completion[1] ? '#22c55e33' : `${THEME.gold}22`,
-                          color: completion[1] ? '#4ade80' : THEME.gold,
-                          border: `1px solid ${completion[1] ? '#22c55e55' : `${THEME.gold}44`}`,
-                        }}
-                      >
-                        Ch.1 {completion[1] ? '✓' : '...'}
-                      </Badge>
-                      <Badge
-                        className="text-[9px] px-1 py-0"
-                        style={{
-                          backgroundColor: completion[2] ? '#22c55e33' : `${THEME.cyan}22`,
-                          color: completion[2] ? '#4ade80' : THEME.cyan,
-                          border: `1px solid ${completion[2] ? '#22c55e55' : `${THEME.cyan}44`}`,
-                        }}
-                      >
-                        Ch.2 {completion[2] ? '✓' : '...'}
-                      </Badge>
-                    </div>
-                  ) : (
-                    <Badge
-                      className="text-[9px] px-1 py-0"
+        {/* Header */}
+        <div
+          className={`shrink-0 flex items-center justify-between gap-2 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+          style={{ borderBottom: `1px solid ${THEME.border}` }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.gold }}>
+              Antrean
+            </h3>
+            <span
+              className={`font-bold rounded-full shrink-0 ${isCompact ? 'text-[9px] px-1.5 py-0' : 'text-xs px-2 py-0.5'}`}
+              style={{
+                backgroundColor: `${THEME.gold}33`,
+                color: THEME.gold,
+                border: `1px solid ${THEME.gold}55`,
+              }}
+            >
+              {antreanStudents.length}
+            </span>
+          </div>
+          <span className={`truncate shrink-0 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+            Belum dipanggil
+          </span>
+        </div>
+
+        {/* Search (photoshoot only — free-order selection) */}
+        {photoshoot && (
+          <div
+            className={`shrink-0 relative ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+            style={{ borderBottom: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+          >
+            <Search className={`absolute top-1/2 -translate-y-1/2 ${isCompact ? 'left-3.5 size-3' : 'left-4 size-3.5'}`} style={{ color: THEME.muted }} />
+            <Input
+              placeholder="Cari NIM atau Nama..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setSelectedStudent(null)
+              }}
+              className={`${isCompact ? 'pl-7 h-7 text-[10px]' : 'pl-8 h-9 text-xs'} border-[#533485] bg-[#3b2263] text-white placeholder:text-[#533485] focus-visible:border-[#4ade80] focus-visible:ring-[#4ade80]/30`}
+            />
+          </div>
+        )}
+
+        {/* List */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="flex flex-col">
+            {displayedAntrean.length === 0 ? (
+              <div className={`flex items-center justify-center ${isCompact ? 'py-6' : 'py-12'}`}>
+                <p className={`${isCompact ? 'text-[10px]' : 'text-sm'}`} style={{ color: THEME.muted }}>
+                  {antreanStudents.length === 0 ? 'Antrean kosong' : 'Tidak ditemukan'}
+                </p>
+              </div>
+            ) : (
+              displayedAntrean.map((student, idx) => {
+                const isNext = !photoshoot && student.id === nextPending?.id
+                const isSelected = photoshoot && selectedStudent?.id === student.id
+                return (
+                  <div
+                    key={student.id}
+                    ref={isNext ? nextRowRef : undefined}
+                    className={`flex items-center gap-2 transition-colors duration-200 min-w-0
+                      ${photoshoot ? 'cursor-pointer' : ''}
+                      ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+                    style={getRowStyle(student)}
+                    onClick={() => {
+                      if (photoshoot) {
+                        setSelectedStudent(student)
+                        setSearchQuery(student.nama)
+                      }
+                    }}
+                  >
+                    <span className={`font-mono shrink-0 ${isCompact ? 'text-[9px] w-3' : 'text-[10px] w-5'}`} style={{ color: THEME.muted }}>
+                      {idx + 1}
+                    </span>
+                    <span className={`font-mono truncate shrink-0 ${isCompact ? 'text-[9px] w-12' : 'text-[10px] w-16'}`} style={{ color: THEME.muted }}>
+                      {student.nim}
+                    </span>
+                    <span
+                      className={`font-medium truncate flex-1 min-w-0 ${isCompact ? 'text-[10px]' : 'text-xs'}`}
                       style={{
-                        backgroundColor: completion[1] ? '#22c55e33' : `${THEME.gold}22`,
-                        color: completion[1] ? '#4ade80' : THEME.gold,
-                        border: `1px solid ${completion[1] ? '#22c55e55' : `${THEME.gold}44`}`,
+                        color: isSelected ? THEME.emerald : '#ffffff',
                       }}
                     >
-                      {completion[1] ? '✓ Selesai' : 'Memotret...'}
-                    </Badge>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 shrink-0 cursor-pointer"
-                    style={{ color: THEME.gold }}
-                    onClick={() => handleResetForRetake(student)}
-                    title="Reset & Kirim Ulang"
-                  >
-                    <RotateCcw className="size-3" />
-                  </Button>
-                </div>
-              )
-            })}
+                      {student.nama}
+                    </span>
+                    {photoshoot ? (
+                      <ArrowRight className={`shrink-0 ${isCompact ? 'size-3' : 'size-3.5'}`} style={{ color: isSelected ? THEME.emerald : THEME.muted }} />
+                    ) : isNext ? (
+                      <Megaphone className={`shrink-0 ${isCompact ? 'size-3' : 'size-3.5'}`} style={{ color: THEME.gold }} />
+                    ) : null}
+                  </div>
+                )
+              })
+            )}
           </div>
-          {opProgressText && (
-            <div className="flex items-center gap-1.5 mt-1">
-              <Loader2 className="size-3 animate-spin" style={{ color: THEME.cyan }} />
-              <span className="text-[10px]" style={{ color: THEME.cyan }}>
-                Ch.{opProgressChannel}: {opProgressText}
-              </span>
+        </ScrollArea>
+
+        {/* Footer: CALL (wisuda) / SEND (photoshoot) button */}
+        <div
+          className={`shrink-0 ${isCompact ? 'p-1.5' : 'p-3'}`}
+          style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+        >
+          {/* Selected student preview (photoshoot only, not done) */}
+          {photoshoot && selectedStudent && selectedStudent.status !== 'done' && (
+            <div
+              className={`rounded-md mb-2 min-w-0 ${isCompact ? 'p-1.5' : 'p-2'}`}
+              style={{ backgroundColor: `${THEME.emerald}15`, border: `1px solid ${THEME.emerald}33` }}
+            >
+              <p className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.emerald }}>
+                Peserta Dipilih
+              </p>
+              <p className={`font-bold truncate ${isCompact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
+                {selectedStudent.nama}
+              </p>
+              <p className={`font-mono truncate ${isCompact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+                {selectedStudent.nim}
+              </p>
             </div>
           )}
-        </CardContent>
+          {/* When the selected student is already 'done', redirect reset to SELESAI column */}
+          {photoshoot && selectedStudent && selectedStudent.status === 'done' ? (
+            <p className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.gold }}>
+              ↳ Lihat kolom SELESAI untuk reset
+            </p>
+          ) : (
+            renderCallButton()
+          )}
+        </div>
       </Card>
     )
   }
 
-    // ── Monitor Lock: prevents accidental clicks (view-only mode) ──
+  // ── NEW: PROSES column (status === 'sent' || isActiveStatus) ─────────────
+  // Display-only — NO click, NO reset from here. The user explicitly required
+  // that sent-but-not-photographed students can NOT be re-clicked/reset by MC
+  // (they're already with the operator).
+  const renderProsesColumn = (opts: { isCompact: boolean }) => {
+    const { isCompact } = opts
+    return (
+      <Card
+        className="flex flex-col min-h-0 border rounded-xl overflow-hidden min-w-0 h-full"
+        style={{
+          backgroundColor: THEME.card,
+          borderColor: THEME.border,
+          flex: 3,
+        }}
+      >
+        {/* Header */}
+        <div
+          className={`shrink-0 flex items-center justify-between gap-2 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+          style={{ borderBottom: `1px solid ${THEME.border}` }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.cyan }}>
+              Proses
+            </h3>
+            <span
+              className={`font-bold rounded-full shrink-0 ${isCompact ? 'text-[9px] px-1.5 py-0' : 'text-xs px-2 py-0.5'}`}
+              style={{
+                backgroundColor: `${THEME.cyan}33`,
+                color: THEME.cyan,
+                border: `1px solid ${THEME.cyan}55`,
+              }}
+            >
+              {prosesStudents.length}
+            </span>
+          </div>
+          <span className={`truncate shrink-0 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+            Dikirim ke operator
+          </span>
+        </div>
+
+        {/* List — display only */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="flex flex-col">
+            {prosesStudents.length === 0 ? (
+              <div className={`flex items-center justify-center ${isCompact ? 'py-6' : 'py-12'}`}>
+                <p className={`${isCompact ? 'text-[10px]' : 'text-sm'}`} style={{ color: THEME.muted }}>
+                  Belum ada yang dikirim
+                </p>
+              </div>
+            ) : (
+              prosesStudents.map((student, idx) => {
+                const isActive = isActiveStatus(student.status)
+                const completion = photoshoot ? getStudentChannelCompletion(student.id) : {}
+                const showOpProgress = !!opProgressText && (isActive || (photoshoot && student.status === 'sent'))
+                return (
+                  <div
+                    key={student.id}
+                    ref={isActive ? activeRowRef : undefined}
+                    className={`flex flex-col min-w-0 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+                    style={getRowStyle(student)}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`font-mono shrink-0 ${isCompact ? 'text-[9px] w-3' : 'text-[10px] w-5'}`} style={{ color: THEME.muted }}>
+                        {idx + 1}
+                      </span>
+                      <span className={`font-mono truncate shrink-0 ${isCompact ? 'text-[9px] w-12' : 'text-[10px] w-16'}`} style={{ color: THEME.muted }}>
+                        {student.nim}
+                      </span>
+                      <span
+                        className={`font-medium truncate flex-1 min-w-0 ${isCompact ? 'text-[10px]' : 'text-xs'}`}
+                        style={{ color: isActive ? THEME.gold : THEME.cyan }}
+                      >
+                        {student.nama}
+                      </span>
+                      <div className="shrink-0">
+                        {renderStatusBadge(student.status)}
+                      </div>
+                    </div>
+                    {/* Per-channel completion (photoshoot + sent) */}
+                    {photoshoot && student.status === 'sent' && (
+                      <div className={`flex items-center gap-1 min-w-0 ${isCompact ? 'mt-0.5 pl-4' : 'mt-1 pl-6'}`}>
+                        {dualPhotoshoot ? (
+                          [1, 2].map((ch) => {
+                            const done = !!completion[ch]
+                            return (
+                              <Badge
+                                key={ch}
+                                className={`px-1 py-0 ${isCompact ? 'text-[8px]' : 'text-[9px]'}`}
+                                style={{
+                                  backgroundColor: done ? '#22c55e33' : `${THEME.cyan}22`,
+                                  color: done ? '#4ade80' : THEME.cyan,
+                                  border: `1px solid ${done ? '#22c55e55' : `${THEME.cyan}44`}`,
+                                }}
+                              >
+                                Ch.{ch} {done ? '✓' : '...'}
+                              </Badge>
+                            )
+                          })
+                        ) : (
+                          <Badge
+                            className={`px-1 py-0 ${isCompact ? 'text-[8px]' : 'text-[9px]'}`}
+                            style={{
+                              backgroundColor: !!completion[1] ? '#22c55e33' : `${THEME.cyan}22`,
+                              color: !!completion[1] ? '#4ade80' : THEME.cyan,
+                              border: `1px solid ${!!completion[1] ? '#22c55e55' : `${THEME.cyan}44`}`,
+                            }}
+                          >
+                            {!!completion[1] ? '✓ Selesai' : 'Memotret...'}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                    {/* opProgressText under active/sent student */}
+                    {showOpProgress && (
+                      <div className={`flex items-center gap-1.5 min-w-0 ${isCompact ? 'mt-0.5 pl-4' : 'mt-1 pl-6'}`}>
+                        <Loader2 className={`shrink-0 animate-spin ${isCompact ? 'size-2.5' : 'size-3'}`} style={{ color: isActive ? THEME.gold : THEME.cyan }} />
+                        <span className={`truncate ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: isActive ? THEME.gold : THEME.cyan }}>
+                          {opProgressText}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </ScrollArea>
+
+        {/* Footer: hint (no reset from here) */}
+        <div
+          className={`shrink-0 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+          style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+        >
+          <p className={`text-center italic ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+            Display only — reset hanya dari SELESAI
+          </p>
+        </div>
+      </Card>
+    )
+  }
+
+  // ── NEW: SELESAI column (status === 'done') ─────────────────────────────
+  // The ONLY column where reset+resend is allowed. Click a row → selectedStudent
+  // (status 'done') → renderCallButton renders RESET & KIRIM ULANG.
+  const renderSelesaiColumn = (opts: { isCompact: boolean }) => {
+    const { isCompact } = opts
+    return (
+      <Card
+        className="flex flex-col min-h-0 border rounded-xl overflow-hidden min-w-0 h-full"
+        style={{
+          backgroundColor: THEME.card,
+          borderColor: THEME.border,
+          flex: 3,
+        }}
+      >
+        {/* Header */}
+        <div
+          className={`shrink-0 flex items-center justify-between gap-2 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+          style={{ borderBottom: `1px solid ${THEME.border}` }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.emerald }}>
+              Selesai
+            </h3>
+            <span
+              className={`font-bold rounded-full shrink-0 ${isCompact ? 'text-[9px] px-1.5 py-0' : 'text-xs px-2 py-0.5'}`}
+              style={{
+                backgroundColor: `${THEME.emerald}33`,
+                color: THEME.emerald,
+                border: `1px solid ${THEME.emerald}55`,
+              }}
+            >
+              {selesaiStudents.length}
+            </span>
+          </div>
+          <span className={`truncate shrink-0 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+            Sudah disimpan
+          </span>
+        </div>
+
+        {/* List — click to select for reset (photoshoot only) */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="flex flex-col">
+            {selesaiStudents.length === 0 ? (
+              <div className={`flex items-center justify-center ${isCompact ? 'py-6' : 'py-12'}`}>
+                <p className={`${isCompact ? 'text-[10px]' : 'text-sm'}`} style={{ color: THEME.muted }}>
+                  Belum ada yang selesai
+                </p>
+              </div>
+            ) : (
+              selesaiStudents.map((student, idx) => {
+                const isSelected = photoshoot && selectedStudent?.id === student.id
+                return (
+                  <div
+                    key={student.id}
+                    className={`flex items-center gap-2 transition-colors duration-200 min-w-0
+                      ${photoshoot ? 'cursor-pointer' : ''}
+                      ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+                    style={getRowStyle(student)}
+                    onClick={() => {
+                      if (photoshoot) {
+                        setSelectedStudent(student)
+                      }
+                    }}
+                  >
+                    <span className={`font-mono shrink-0 ${isCompact ? 'text-[9px] w-3' : 'text-[10px] w-5'}`} style={{ color: THEME.muted }}>
+                      {idx + 1}
+                    </span>
+                    <span className={`font-mono truncate shrink-0 ${isCompact ? 'text-[9px] w-12' : 'text-[10px] w-16'}`} style={{ color: THEME.muted }}>
+                      {student.nim}
+                    </span>
+                    <span
+                      className={`font-medium truncate flex-1 min-w-0 line-through ${isCompact ? 'text-[10px]' : 'text-xs'}`}
+                      style={{ color: isSelected ? THEME.gold : THEME.muted }}
+                    >
+                      {student.nama}
+                    </span>
+                    {photoshoot && isSelected && (
+                      <RotateCcw className={`shrink-0 ${isCompact ? 'size-3' : 'size-3.5'}`} style={{ color: THEME.gold }} />
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </ScrollArea>
+
+        {/* Footer: RESET button (photoshoot only) */}
+        {photoshoot ? (
+          <div
+            className={`shrink-0 ${isCompact ? 'p-1.5' : 'p-3'}`}
+            style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+          >
+            {selectedStudent && selectedStudent.status === 'done' ? (
+              <>
+                <div
+                  className={`rounded-md mb-2 min-w-0 ${isCompact ? 'p-1.5' : 'p-2'}`}
+                  style={{ backgroundColor: `${THEME.gold}15`, border: `1px solid ${THEME.gold}55` }}
+                >
+                  <p className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
+                    ⚠ Peserta Sudah Difoto
+                  </p>
+                  <p className={`font-bold truncate ${isCompact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
+                    {selectedStudent.nama}
+                  </p>
+                  <p className={`font-mono truncate ${isCompact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+                    {selectedStudent.nim}
+                  </p>
+                  <p className={`truncate mt-1 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
+                    Klik RESET & KIRIM ULANG untuk memfoto ulang.
+                  </p>
+                </div>
+                {renderCallButton()}
+              </>
+            ) : (
+              <p className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
+                Klik peserta selesai untuk reset & kirim ulang
+              </p>
+            )}
+          </div>
+        ) : (
+          <div
+            className={`shrink-0 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
+            style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+          >
+            <p className={`text-center italic ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+              Selesai — alur wisuda (no reset)
+            </p>
+          </div>
+        )}
+      </Card>
+    )
+  }
+
+  // ── Monitor Lock: prevents accidental clicks (view-only mode) ──
   const renderMonitorLock = () => {
     if (!monitorLocked) return null
     return (
@@ -909,7 +1231,7 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     </button>
   )
 
-// ── Main render
+  // ── Main render
   if (!currentProject) {
     return (
       <div
@@ -921,456 +1243,60 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     )
   }
 
-  // ── MOBILE LAYOUT ────────────────────────────────────────────────────────
+  // ── MOBILE LAYOUT — tabs (3 columns won't fit a phone) ──────────────────
+  // Top bar pills double as tabs. The active tab's column renders full-height.
   if (isMobile) {
     return (
-      <div className="flex flex-col gap-2 h-full p-2 touch-no-select" style={{ backgroundColor: THEME.bg }}>
-        {/* Call Panel */}
-        {photoshoot ? renderPhotoshootSearch() : (
-          <Card
-            className="shrink-0 border-2 rounded-xl"
-            style={{
-              backgroundColor: THEME.card,
-              borderColor: THEME.gold,
-              boxShadow: `0 0 20px ${THEME.gold}22`,
-            }}
-          >
-            <CardContent className="p-3 space-y-2">
-              <p
-                className="text-[10px] font-semibold uppercase tracking-widest"
-                style={{ color: THEME.gold }}
-              >
-                Target Selanjutnya
-              </p>
-
-              {nextPending ? (
-                <div className="space-y-0.5">
-                  <p className="text-xl font-bold leading-tight truncate" style={{ color: '#ffffff' }}>
-                    {nextPending.nama}
-                  </p>
-                  <p className="text-sm font-mono" style={{ color: THEME.muted }}>
-                    {nextPending.nim}
-                  </p>
-                </div>
-              ) : currentlyActive ? (
-                <div className="space-y-0.5">
-                  <p className="text-sm font-semibold leading-tight" style={{ color: THEME.gold }}>
-                    Sedang difoto:
-                  </p>
-                  <p className="text-xl font-bold leading-tight truncate" style={{ color: '#ffffff' }}>
-                    {currentlyActive.nama}
-                  </p>
-                  <p className="text-sm font-mono" style={{ color: THEME.muted }}>
-                    {currentlyActive.nim}
-                  </p>
-                  {opProgressText && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <Camera className="size-3.5" style={{ color: THEME.gold }} />
-                      <span className="text-xs font-medium" style={{ color: THEME.gold }}>
-                        {opProgressText}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm italic" style={{ color: THEME.muted }}>
-                  Semua peserta telah dipanggil
-                </p>
-              )}
-
-              {renderCallButton()}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Sent Students (photoshoot) */}
-        {photoshoot && renderSentStudents()}
-
-        {/* Queue List */}
-        <Card
-          className="flex-1 min-h-0 border rounded-xl overflow-hidden flex flex-col"
-          style={{ backgroundColor: THEME.card, borderColor: THEME.border }}
-        >
-          <div
-            className="shrink-0 flex items-center justify-between px-3 py-2"
-            style={{ borderBottom: `1px solid ${THEME.border}` }}
-          >
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-semibold" style={{ color: '#ffffff' }}>
-                {photoshoot ? 'Daftar Peserta' : 'Antrean'}
-              </h3>
-              <span
-                className="text-xs font-bold px-2 py-0.5 rounded-full"
-                style={{
-                  backgroundColor: remainingCount > 10 ? 'rgba(239,68,68,0.2)' : remainingCount > 0 ? `${THEME.gold}33` : `${THEME.border}44`,
-                  color: remainingCount > 10 ? '#ef4444' : remainingCount > 0 ? (photoshoot ? THEME.emerald : THEME.gold) : THEME.muted,
-                  border: `1px solid ${remainingCount > 10 ? 'rgba(239,68,68,0.33)' : remainingCount > 0 ? `${THEME.gold}55` : THEME.border}`,
-                }}
-              >
-                {remainingCount}
-              </span>
-            </div>
-            <span className="text-[10px]" style={{ color: THEME.muted }}>
-              {photoshoot ? (dualPhotoshoot ? '2 Kamera' : 'Photoshoot') : `Ch.${myChannel}`}
-            </span>
+      <>
+        <div className="flex flex-col h-full min-w-0 touch-no-select" style={{ backgroundColor: THEME.bg }}>
+          {renderTopBar({ condensed: true })}
+          <div className="flex-1 min-h-0 p-2 min-w-0">
+            {activeTab === 'antrean' && renderAntreanColumn({ isCompact: true })}
+            {activeTab === 'proses' && renderProsesColumn({ isCompact: true })}
+            {activeTab === 'selesai' && renderSelesaiColumn({ isCompact: true })}
           </div>
-
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="flex flex-col">
-              {channelStudents.length === 0 ? (
-                <div className="flex items-center justify-center py-8">
-                  <p className="text-xs" style={{ color: THEME.muted }}>Tidak ada peserta</p>
-                </div>
-              ) : (
-                channelStudents.map((student, idx) => {
-                  const isActive = isActiveStatus(student.status)
-                  const isNext = !photoshoot && student.id === nextPending?.id && student.status === 'pending'
-
-                  return (
-                    <div
-                      key={student.id}
-                      ref={isActive ? activeRowRef : isNext ? nextRowRef : undefined}
-                      className="flex items-center gap-2 px-3 py-2 transition-colors duration-200 cursor-pointer"
-                      style={getRowStyle(student)}
-                      onClick={() => {
-                        if (photoshoot) {
-                          setSelectedStudent(student)
-                          setSearchQuery(student.nama)
-                        }
-                      }}
-                    >
-                      <span className="text-[10px] font-mono w-5 shrink-0" style={{ color: THEME.muted }}>
-                        {idx + 1}
-                      </span>
-                      <span className="text-[10px] font-mono truncate w-16 shrink-0" style={{ color: THEME.muted }}>
-                        {student.nim}
-                      </span>
-                      <span
-                        className={`text-xs font-medium truncate flex-1 ${student.status === 'done' ? 'line-through' : ''}`}
-                        style={{
-                          color: isActive ? THEME.gold : selectedStudent?.id === student.id ? THEME.emerald : student.status === 'sent' ? THEME.cyan : student.status === 'done' ? THEME.muted : '#ffffff',
-                        }}
-                      >
-                        {student.nama}
-                      </span>
-                      <div className="shrink-0">
-                        {renderStatusBadge(student.status)}
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </ScrollArea>
-        </Card>
-      </div>
+        </div>
+        {renderMonitorLock()}
+        {renderLockToggle()}
+      </>
     )
   }
 
-  // ── COMPACT DESKTOP LAYOUT — single-column vertical for sidebar use
+  // ── COMPACT DESKTOP LAYOUT (Portable's tab) — tabbed (narrow sidebar) ───
+  // Same tabbed UX as mobile, slightly tighter padding. Pills in top bar act
+  // as tabs.
   if (compact) {
     return (
-      <div className="flex flex-col gap-1.5 h-full p-1.5 min-w-0" style={{ backgroundColor: THEME.bg }}>
-        {/* Call Panel — compact */}
-        {photoshoot ? renderPhotoshootSearch() : (
-          <Card
-            className="shrink-0 border-2 rounded-xl overflow-hidden min-w-0"
-            style={{
-              backgroundColor: THEME.card,
-              borderColor: THEME.gold,
-              boxShadow: `0 0 20px ${THEME.gold}22`,
-            }}
-          >
-            <CardContent className="p-1.5 space-y-1 min-w-0">
-              <p
-                className="text-[9px] font-semibold uppercase tracking-widest truncate"
-                style={{ color: THEME.gold }}
-              >
-                Target Selanjutnya
-              </p>
-
-              {nextPending ? (
-                <div className="space-y-0.5 min-w-0">
-                  <p className="text-sm font-bold leading-tight truncate" style={{ color: '#ffffff' }}>
-                    {nextPending.nama}
-                  </p>
-                  <p className="text-[10px] font-mono truncate" style={{ color: THEME.muted }}>
-                    {nextPending.nim}
-                  </p>
-                </div>
-              ) : currentlyActive ? (
-                <div className="space-y-0.5 min-w-0">
-                  <p className="text-[10px] font-semibold leading-tight truncate" style={{ color: THEME.gold }}>
-                    Sedang difoto:
-                  </p>
-                  <p className="text-sm font-bold leading-tight truncate" style={{ color: '#ffffff' }}>
-                    {currentlyActive.nama}
-                  </p>
-                  <p className="text-[10px] font-mono truncate" style={{ color: THEME.muted }}>
-                    {currentlyActive.nim}
-                  </p>
-                  {opProgressText && (
-                    <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                      <Camera className="size-3 shrink-0" style={{ color: THEME.gold }} />
-                      <span className="text-[10px] font-medium truncate" style={{ color: THEME.gold }}>
-                        {opProgressText}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs italic truncate" style={{ color: THEME.muted }}>
-                  Semua peserta telah dipanggil
-                </p>
-              )}
-
-              {renderCallButton()}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Sent Students (photoshoot) */}
-        {photoshoot && renderSentStudents()}
-
-        {/* Queue List — compact (no header row, compact rows like mobile) */}
-        <Card
-          className="flex-1 min-h-0 border rounded-xl overflow-hidden flex flex-col min-w-0"
-          style={{ backgroundColor: THEME.card, borderColor: THEME.border }}
-        >
-          <div
-            className="shrink-0 flex items-center justify-between px-1.5 py-1.5 min-w-0"
-            style={{ borderBottom: `1px solid ${THEME.border}` }}
-          >
-            <div className="flex items-center gap-1 min-w-0">
-              <h3 className="text-[10px] font-semibold shrink-0" style={{ color: '#ffffff' }}>
-                {photoshoot ? 'Peserta' : 'Antrean'}
-              </h3>
-              <span
-                className="text-[10px] font-bold px-1 py-0 rounded-full shrink-0"
-                style={{
-                  backgroundColor: remainingCount > 10 ? 'rgba(239,68,68,0.2)' : remainingCount > 0 ? `${THEME.gold}33` : `${THEME.border}44`,
-                  color: remainingCount > 10 ? '#ef4444' : remainingCount > 0 ? (photoshoot ? THEME.emerald : THEME.gold) : THEME.muted,
-                  border: `1px solid ${remainingCount > 10 ? 'rgba(239,68,68,0.33)' : remainingCount > 0 ? `${THEME.gold}55` : THEME.border}`,
-                }}
-              >
-                {remainingCount}
-              </span>
-            </div>
-            <span className="text-[9px] shrink-0" style={{ color: THEME.muted }}>
-              {photoshoot ? (dualPhotoshoot ? '2 Cam' : 'PS') : `Ch.${myChannel}`}
-            </span>
+      <>
+        <div className="flex flex-col h-full min-w-0" style={{ backgroundColor: THEME.bg }}>
+          {renderTopBar({ condensed: true })}
+          <div className="flex-1 min-h-0 p-1.5 min-w-0">
+            {activeTab === 'antrean' && renderAntreanColumn({ isCompact: true })}
+            {activeTab === 'proses' && renderProsesColumn({ isCompact: true })}
+            {activeTab === 'selesai' && renderSelesaiColumn({ isCompact: true })}
           </div>
-
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="flex flex-col">
-              {channelStudents.length === 0 ? (
-                <div className="flex items-center justify-center py-6">
-                  <p className="text-[10px]" style={{ color: THEME.muted }}>Tidak ada peserta</p>
-                </div>
-              ) : (
-                channelStudents.map((student, idx) => {
-                  const isActive = isActiveStatus(student.status)
-                  const isNext = !photoshoot && student.id === nextPending?.id && student.status === 'pending'
-
-                  return (
-                    <div
-                      key={student.id}
-                      ref={isActive ? activeRowRef : isNext ? nextRowRef : undefined}
-                      className="flex items-center gap-1 px-1.5 py-1 transition-colors duration-200 cursor-pointer min-w-0"
-                      style={getRowStyle(student)}
-                      onClick={() => {
-                        if (photoshoot) {
-                          setSelectedStudent(student)
-                          setSearchQuery(student.nama)
-                        }
-                      }}
-                    >
-                      <span className="text-[9px] font-mono w-3 shrink-0 text-center" style={{ color: THEME.muted }}>
-                        {idx + 1}
-                      </span>
-                      <span
-                        className={`text-[10px] font-medium truncate flex-1 min-w-0 ${student.status === 'done' ? 'line-through' : ''}`}
-                        style={{
-                          color: isActive ? THEME.gold : selectedStudent?.id === student.id ? THEME.emerald : student.status === 'sent' ? THEME.cyan : student.status === 'done' ? THEME.muted : '#ffffff',
-                        }}
-                      >
-                        {student.nama}
-                      </span>
-                      {renderStatusDot(student.status)}
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </ScrollArea>
-        </Card>
-      </div>
+        </div>
+        {renderMonitorLock()}
+        {renderLockToggle()}
+      </>
     )
   }
 
-  // ── DESKTOP LAYOUT — side-by-side: control column + full-height participant list
-  // Control panel (left, fixed width) berdampingan dengan daftar peserta (right,
-  // flex-1 full height). Daftar peserta TIDAK PERNAH terdesak meski banyak peserta
-  // sudah dipanggil, karena panel kontrol ada di kolom terpisah.
+  // ── DESKTOP LAYOUT — 3 columns side-by-side + top progress bar ──────────
+  // ANTREAN (4fr) | PROSES (3fr) | SELESAI (3fr), all full-height. Pills in
+  // top bar are stats (no tab switching needed — all 3 visible).
   return (
     <>
-    <div className="flex flex-row gap-3 h-full p-3" style={{ backgroundColor: THEME.bg }}>
-      {/* LEFT: Control column (fixed width, internal scroll if overflow) */}
-      <div className="flex flex-col gap-3 shrink-0 w-[340px] lg:w-[360px] xl:w-[400px] min-h-0 overflow-y-auto pr-1">
-        {photoshoot ? renderPhotoshootSearch() : (
-          <Card
-            className="shrink-0 border-2 rounded-xl"
-            style={{
-              backgroundColor: THEME.card,
-              borderColor: THEME.gold,
-              boxShadow: `0 0 20px ${THEME.gold}22`,
-            }}
-          >
-            <CardContent className="p-4 space-y-3">
-              <p
-                className="text-xs font-semibold uppercase tracking-widest"
-                style={{ color: THEME.gold }}
-              >
-                Target Pemanggilan Selanjutnya
-              </p>
-
-              {nextPending ? (
-                <div className="space-y-1">
-                  <p className="text-2xl font-bold leading-tight" style={{ color: '#ffffff' }}>
-                    {nextPending.nama}
-                  </p>
-                  <p className="text-sm font-mono" style={{ color: THEME.muted }}>
-                    {nextPending.nim}
-                  </p>
-                </div>
-              ) : currentlyActive ? (
-                <div className="space-y-1">
-                  <p className="text-lg font-semibold leading-tight" style={{ color: THEME.gold }}>
-                    Sedang difoto:
-                  </p>
-                  <p className="text-2xl font-bold leading-tight" style={{ color: '#ffffff' }}>
-                    {currentlyActive.nama}
-                  </p>
-                  <p className="text-sm font-mono" style={{ color: THEME.muted }}>
-                    {currentlyActive.nim}
-                  </p>
-                  {opProgressText && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <Camera className="size-3.5" style={{ color: THEME.gold }} />
-                      <span className="text-xs font-medium" style={{ color: THEME.gold }}>
-                        {opProgressText}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  <p className="text-lg italic" style={{ color: THEME.muted }}>
-                    Semua peserta telah dipanggil
-                  </p>
-                </div>
-              )}
-
-              {renderCallButton()}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Sent Students (photoshoot) */}
-        {photoshoot && renderSentStudents()}
+      <div className="flex flex-col h-full min-w-0" style={{ backgroundColor: THEME.bg }}>
+        {renderTopBar({ condensed: false })}
+        <div className="flex flex-row gap-3 flex-1 min-h-0 p-3 min-w-0">
+          {renderAntreanColumn({ isCompact: false })}
+          {renderProsesColumn({ isCompact: false })}
+          {renderSelesaiColumn({ isCompact: false })}
+        </div>
       </div>
-
-      {/* RIGHT: Full-height participant list — selalu terlihat penuh, tidak terdesak */}
-      <Card
-        className="flex-1 min-h-0 border rounded-xl overflow-hidden flex flex-col"
-        style={{ backgroundColor: THEME.card, borderColor: THEME.border }}
-      >
-        <div
-          className="shrink-0 flex items-center justify-between px-4 py-2.5"
-          style={{ borderBottom: `1px solid ${THEME.border}` }}
-        >
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold" style={{ color: '#ffffff' }}>
-              {photoshoot ? 'Daftar Peserta' : 'Sisa Antrean'}
-            </h3>
-            <span
-              className="text-xs font-bold px-2 py-0.5 rounded-full"
-              style={{
-                backgroundColor: remainingCount > 10 ? 'rgba(239,68,68,0.2)' : remainingCount > 0 ? `${THEME.gold}33` : `${THEME.border}44`,
-                color: remainingCount > 10 ? '#ef4444' : remainingCount > 0 ? (photoshoot ? THEME.emerald : THEME.gold) : THEME.muted,
-                border: `1px solid ${remainingCount > 10 ? 'rgba(239,68,68,0.33)' : remainingCount > 0 ? `${THEME.gold}55` : THEME.border}`,
-              }}
-            >
-              {remainingCount}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <NetworkQualityBadge />
-            <span className="text-xs" style={{ color: THEME.muted }}>
-              {photoshoot ? (dualPhotoshoot ? '2 Kamera' : 'Photoshoot') : `Channel ${myChannel}`}
-            </span>
-          </div>
-        </div>
-
-        <div
-          className="shrink-0 grid grid-cols-[36px_90px_1fr_80px] gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider"
-          style={{
-            backgroundColor: THEME.panel,
-            color: THEME.muted,
-            borderBottom: `1px solid ${THEME.border}`,
-          }}
-        >
-          <span>No</span>
-          <span>NIM</span>
-          <span>Nama Lengkap</span>
-          <span className="text-right">Status</span>
-        </div>
-
-        <ScrollArea className="flex-1 min-h-0">
-          <div className="flex flex-col">
-            {channelStudents.length === 0 ? (
-              <div className="flex items-center justify-center py-12">
-                <p className="text-sm" style={{ color: THEME.muted }}>
-                  Tidak ada peserta
-                </p>
-              </div>
-            ) : (
-              channelStudents.map((student, idx) => {
-                const isActive = isActiveStatus(student.status)
-                const isNext = !photoshoot && student.id === nextPending?.id && student.status === 'pending'
-
-                return (
-                  <div
-                    key={student.id}
-                    ref={isActive ? activeRowRef : isNext ? nextRowRef : undefined}
-                    className="grid grid-cols-[36px_90px_1fr_80px] gap-2 items-center px-4 py-2 transition-colors duration-200 cursor-pointer"
-                    style={getRowStyle(student)}
-                    onClick={() => {
-                      if (photoshoot) {
-                        setSelectedStudent(student)
-                        setSearchQuery(student.nama)
-                      }
-                    }}
-                  >
-                    <span className="text-xs font-mono" style={{ color: THEME.muted }}>{idx + 1}</span>
-                    <span className="text-xs font-mono truncate" style={{ color: THEME.muted }}>{student.nim}</span>
-                    <span
-                      className={`text-sm font-medium truncate ${student.status === 'done' ? 'line-through' : ''}`}
-                      style={{ color: isActive ? THEME.gold : selectedStudent?.id === student.id ? THEME.emerald : student.status === 'sent' ? THEME.cyan : student.status === 'done' ? THEME.muted : '#ffffff' }}
-                    >
-                      {student.nama}
-                    </span>
-                    <div className="flex justify-end">{renderStatusBadge(student.status)}</div>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </ScrollArea>
-      </Card>
       {renderMonitorLock()}
       {renderLockToggle()}
-    </div>
     </>
   )
 }
