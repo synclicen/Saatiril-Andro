@@ -361,9 +361,22 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
 
     const updatedProject = {
       ...latestProject,
-      database: latestProject.database.map((s) =>
-        s.id === nextPending.id ? { ...s, status: newStatus } : s
-      ),
+      database: latestProject.database.map((s) => {
+        if (s.id === nextPending.id) return { ...s, status: newStatus }
+        // Wisuda sequential: reset any OTHER stale 'active_N' on this channel.
+        // Only 1 student should be 'active_N' at a time. When the MC moves on to
+        // the next, a previously-called student that's still 'active_N' (not yet
+        // photographed → not 'done') goes back to 'pending' (queue), OR to 'done'
+        // if it was photographed (in photoHistory). Without this, stale 'active_N'
+        // accumulate in PROSES (user saw PROSES=8 when only 1 should be active).
+        if (s.status === `active_${myChannel}`) {
+          const photographed = latestProject.photoHistory.some(
+            (h) => h.student.id === s.id && h.channel === myChannel,
+          )
+          return { ...s, status: (photographed ? 'done' : 'pending') as StudentStatus }
+        }
+        return s
+      }),
     }
     updateCurrentProject(updatedProject)
     setOpProgressText('')

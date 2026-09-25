@@ -469,9 +469,23 @@ export default function AdminDashboard() {
       if (!curProj) return
       const isPs = isPhotoshootMode(curProj.config.mode)
       const newStatus = (isPs ? 'sent' : `active_${data.channel}`) as StudentStatus
-      const updatedDb = curProj.database.map((s: any) =>
-        s.id === data.student.id ? { ...s, status: newStatus } : s
-      )
+      const updatedDb = curProj.database.map((s: any) => {
+        if (s.id === data.student.id) return { ...s, status: newStatus }
+        // Wisuda sequential (non-photoshoot): reset any OTHER stale 'active_N'
+        // on the called channel — only 1 should be active at a time. When the
+        // MC calls the next, a previously-called student still 'active_N' (not
+        // photographed) goes back to 'pending' (queue), OR to 'done' if it was
+        // photographed (in photoHistory). Without this, stale 'active_N' accu-
+        // mulate in PROSES (mirrors the MC's handleCallNow fix). Photoshoot
+        // mode uses 'sent' (not 'active_N') so it's unaffected.
+        if (!isPs && s.status === `active_${data.channel}`) {
+          const photographed = curProj.photoHistory.some(
+            (h: any) => h.student.id === s.id && h.channel === data.channel,
+          )
+          return { ...s, status: (photographed ? 'done' : 'pending') as StudentStatus }
+        }
+        return s
+      })
       updateCurrentProject({ ...curProj, database: updatedDb })
       if (!isPs) {
         useSaatirilStore.getState().setOpCurrentTarget({ ...data.student, status: newStatus })
