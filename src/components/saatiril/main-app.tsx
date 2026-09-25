@@ -761,13 +761,28 @@ export function MainApp() {
             <div className={mobileTab === 'admin' ? 'h-full overflow-y-auto p-2' : 'hidden'}>
               <AdminDashboard />
             </div>
-            {mobileTab === 'mc' && (
+            {mobileTab === 'mc' ? (
               <div className="h-full overflow-hidden" style={{ backgroundColor: THEME.panel }}>
                 <McPanel />
               </div>
+            ) : (
+              // Always mounted (hidden) so McPanel socket listeners + state persist
+              // across tab switches — admin can take over MC instantly.
+              <div className="hidden">
+                <McPanel />
+              </div>
             )}
-            {mobileTab === 'operator' && (
+            {mobileTab === 'operator' ? (
               <div className="h-full relative">
+                <OperatorPanel
+                  isAppFullscreen={appFullscreen}
+                  onToggleAppFullscreen={toggleAppFullscreen}
+                />
+              </div>
+            ) : (
+              // Always mounted (hidden) so OperatorPanel socket listeners +
+              // mcCallBuffer persist — admin can take over Operator instantly.
+              <div className="hidden">
                 <OperatorPanel
                   isAppFullscreen={appFullscreen}
                   onToggleAppFullscreen={toggleAppFullscreen}
@@ -818,8 +833,17 @@ export function MainApp() {
         ════════════════════════════════════════════════════════════════════════ */}
         {!isMobile && (
           <>
-            {/* ── LIVE VIEW: MC sidebar + Operator panel side by side ──────────── */}
-            {activeView === 'live' && (
+            {/* ── LIVE VIEW: MC sidebar + Operator panel side by side ────────────
+                Always mounted (hidden via CSS when activeView !== 'live') so McPanel +
+                OperatorPanel socket listeners (SYNC_DB, MC_CALL, PHOTOS_SAVED, OP_PROGRESS)
+                + local state (mcCallBuffer, opCurrentTarget, selectedStudent, etc.)
+                persist across tab switches. Previously, switching to Admin UNMOUNTED these
+                panels → their listeners dropped (missed MC_CALL/SYNC_DB) + local state
+                (mcCallBuffer) was LOST → admin's Operator Panel showed an empty queue
+                while the Operator APK (always mounted) had the full queue → desync.
+                Now the admin can take over (ambil alih) instantly from the MC/Operator
+                Panel without stale data. Camera stays ready (acceptable for takeover). */}
+            <div className={activeView === 'live' ? 'h-full' : 'hidden'}>
               <ResizablePanelGroup direction="horizontal" className="h-full">
                 {/* MC Sidebar (left, resizable) */}
                 {mcSidebarOpen && (
@@ -888,7 +912,7 @@ export function MainApp() {
                   </div>
                 </ResizablePanel>
               </ResizablePanelGroup>
-            )}
+            </div>
 
             {/* ── ADMIN VIEW: Full-screen admin dashboard ────────────────────────
                 AdminDashboard is ALWAYS mounted (hidden via CSS when activeView !==
