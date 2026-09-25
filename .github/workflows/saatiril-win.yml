@@ -92,12 +92,57 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -u
           REPO="${{ github.repository }}"
           PORTABLE=$(find dist-electron -name "*-Portable.exe" | head -1)
           cp "$PORTABLE" dist-electron/saatiril-portable.exe
-          if gh release view latest --repo "$REPO" 2>/dev/null; then
-            gh release delete-asset latest saatiril-portable.exe --yes --repo "$REPO" 2>/dev/null || true
-            gh release upload latest dist-electron/saatiril-portable.exe --clobber --repo "$REPO"
+          ASSET_NAME="saatiril-portable.exe"
+
+          # Robust helper: delete an existing release asset by NAME using the
+          # GitHub REST API + jq. `gh release delete-asset ... 2>/dev/null || true`
+          # silently swallows delete failures (pagination quirks, transient
+          # errors), leaving `gh release upload --clobber` to crash with HTTP
+          # 422 "ReleaseAsset.name already exists". This function fetches the
+          # release JSON, resolves the asset ID by exact name match, and
+          # DELETEs it directly by ID. Safe to call when the asset is absent.
+          # jq is pre-installed on all GitHub Actions runners (incl. windows).
+          delete_asset_by_name() {
+            local name="$1"
+            local rel_json asset_id code
+            rel_json=$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/releases/tags/latest")
+            asset_id=$(printf '%s' "$rel_json" \
+              | jq -r --arg n "$name" '.assets[] | select(.name==$n) | .id' 2>/dev/null \
+              | head -1)
+            if [ -n "$asset_id" ]; then
+              echo "  Found existing $name (asset id: $asset_id) — deleting via API"
+              code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: token ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${REPO}/releases/assets/${asset_id}")
+              echo "  DELETE returned HTTP $code"
+              # 204 = deleted, 404 = already gone — both fine.
+              case "$code" in
+                204|404) echo "  Existing $name removed (or already absent)";;
+                *) echo "  WARNING: delete returned $code — will still try --clobber upload";;
+              esac
+            else
+              echo "  No existing $name found on release — nothing to delete"
+            fi
+          }
+
+          if gh release view latest --repo "$REPO" >/dev/null 2>&1; then
+            echo "=== Release 'latest' exists — replacing $ASSET_NAME ==="
+            delete_asset_by_name "$ASSET_NAME"
+            # Belt-and-suspenders: --clobber lets gh retry if a same-named
+            # asset reappeared between our delete and the upload.
+            gh release upload latest "dist-electron/${ASSET_NAME}" --clobber --repo "$REPO"
           else
-            gh release create latest dist-electron/saatiril-portable.exe --title "Saatiril Andro - Latest" --notes "Build #${{ github.run_number }}" --prerelease --repo "$REPO"
+            echo "=== Release 'latest' does NOT exist — creating ==="
+            gh release create latest "dist-electron/${ASSET_NAME}" \
+              --title "Saatiril Andro - Latest" \
+              --notes "Build #${{ github.run_number }}" \
+              --prerelease --repo "$REPO"
           fi
+          echo "=== Upload step finished ==="

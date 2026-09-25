@@ -96,33 +96,75 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set +e
+          set -u
           REPO="${{ github.repository }}"
-          
+
+          # Robust helper: delete an existing release asset by NAME using the
+          # GitHub REST API + jq. `gh release delete-asset ... 2>/dev/null || true`
+          # silently swallows delete failures, which then makes
+          # `gh release upload` crash with HTTP 422 "name already exists".
+          # This fetches the release JSON, resolves the asset ID by exact
+          # name, and DELETEs it directly. Safe to call when absent.
+          # jq is pre-installed on all GitHub Actions runners (incl. windows).
+          delete_asset_by_name() {
+            local name="$1"
+            local rel_json asset_id code
+            rel_json=$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/releases/tags/latest")
+            asset_id=$(printf '%s' "$rel_json" \
+              | jq -r --arg n "$name" '.assets[] | select(.name==$n) | .id' 2>/dev/null \
+              | head -1)
+            if [ -n "$asset_id" ]; then
+              echo "  Found existing $name (asset id: $asset_id) — deleting via API"
+              code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: token ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${REPO}/releases/assets/${asset_id}")
+              echo "  DELETE returned HTTP $code"
+              case "$code" in
+                204|404) echo "  Existing $name removed (or already absent)";;
+                *) echo "  WARNING: delete returned $code — will still try --clobber upload";;
+              esac
+            else
+              echo "  No existing $name found on release — nothing to delete"
+            fi
+          }
+
+          # Ensure the 'latest' release exists; create if missing.
+          if ! gh release view latest --repo "$REPO" >/dev/null 2>&1; then
+            echo "=== Release 'latest' missing — creating empty release ==="
+            gh release create latest --title "Saatiril Andro - Latest" \
+              --notes "Build #${{ github.run_number }}" \
+              --prerelease --repo "$REPO"
+          fi
+
           echo "=== Searching for MC exe ==="
           find . -name "saatiril-mc-electron.exe" -not -path "./node_modules/*" 2>/dev/null
           MC_EXE=$(find . -name "saatiril-mc-electron.exe" -not -path "./node_modules/*" 2>/dev/null | head -1)
           if [ -n "$MC_EXE" ]; then
             echo "Found MC: $MC_EXE ($(ls -lh "$MC_EXE" | awk '{print $5}'))"
             cp "$MC_EXE" saatiril-mc-electron.exe
-            gh release delete-asset latest saatiril-mc-electron.exe --yes --repo "$REPO" 2>/dev/null || true
-            gh release upload latest saatiril-mc-electron.exe --repo "$REPO" && echo "MC uploaded" || echo "MC upload failed"
+            delete_asset_by_name "saatiril-mc-electron.exe"
+            gh release upload latest saatiril-mc-electron.exe --clobber --repo "$REPO" \
+              && echo "MC uploaded" || echo "MC upload failed"
           else
             echo "MC not found"
           fi
-          
+
           echo "=== Searching for Operator exe ==="
           find . -name "saatiril-operator-electron.exe" -not -path "./node_modules/*" 2>/dev/null
           OP_EXE=$(find . -name "saatiril-operator-electron.exe" -not -path "./node_modules/*" 2>/dev/null | head -1)
           if [ -n "$OP_EXE" ]; then
             echo "Found Operator: $OP_EXE ($(ls -lh "$OP_EXE" | awk '{print $5}'))"
             cp "$OP_EXE" saatiril-operator-electron.exe
-            gh release delete-asset latest saatiril-operator-electron.exe --yes --repo "$REPO" 2>/dev/null || true
-            gh release upload latest saatiril-operator-electron.exe --repo "$REPO" && echo "Operator uploaded" || echo "Operator upload failed"
+            delete_asset_by_name "saatiril-operator-electron.exe"
+            gh release upload latest saatiril-operator-electron.exe --clobber --repo "$REPO" \
+              && echo "Operator uploaded" || echo "Operator upload failed"
           else
             echo "Operator not found"
           fi
-          
+
           echo "=== Done ==="
           exit 0
 
