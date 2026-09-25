@@ -566,11 +566,19 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   }, [startCamera, cameraActive])
 
   useEffect(() => {
-    if (selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
+    // Gate on cameraActive too — otherwise selecting/changing a device while the
+    // admin's OperatorPanel is hidden (admin on Admin/MC tab, cameraActive=false)
+    // would call startCamera(selectedDeviceId) and GRAB the camera even though
+    // the admin isn't viewing the Operator → the Operator Electron App (if
+    // running on the same laptop) can't activate its camera (NotReadableError).
+    // This was the root cause of the dual-photoshoot camera conflict: device
+    // selections triggered by the channel selector / device list bypassed the
+    // cameraActive gate. Now the camera only starts when cameraActive is true.
+    if (cameraActive && selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
       selectedDeviceRef.current = selectedDeviceId
       queueMicrotask(() => void startCamera(selectedDeviceId))
     }
-  }, [selectedDeviceId, startCamera])
+  }, [selectedDeviceId, startCamera, cameraActive])
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices) return
