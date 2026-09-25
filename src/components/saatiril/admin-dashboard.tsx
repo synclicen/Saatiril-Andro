@@ -381,6 +381,22 @@ export default function AdminDashboard() {
         database: updatedDatabase,
         photoHistory: newHistory,
       })
+
+      // ── Sync ALL clients with the 'done' status + photoHistory entry ──────
+      // The operator (sender of PHOTOS_SAVED) does NOT receive its own
+      // lan-message broadcast (socket.broadcast.emit excludes sender), so it
+      // relies on its OWN handlePhotosSaved for the local 'done' update. To
+      // guarantee EVERY surface (MC App, Operator App, Portable's MC/Operator
+      // panels) stays perfectly in sync — same data, same status — emit a
+      // lightweight SYNC_DB (photos stripped) right after the admin updates.
+      // This is the single source of truth: the admin's state, propagated.
+      const strippedForSync = {
+        ...proj,
+        database: updatedDatabase,
+        config: { ...proj.config, sessionPassword: proj.config.sessionPassword != null ? '__PASSWORD_SET__' : null },
+        photoHistory: newHistory.map((h) => ({ ...h, photos: [] })),
+      }
+      emitLocal('SYNC_DB', { project: strippedForSync })
     }
 
     const handleSyncDb = (data: SyncDbData) => {
@@ -441,7 +457,7 @@ export default function AdminDashboard() {
       const curProj = useSaatirilStore.getState().currentProject
       if (!curProj) return
       const isPs = isPhotoshootMode(curProj.config.mode)
-      const newStatus = (isPs ? 'sent' : `active_${'$'}{data.channel}`) as StudentStatus
+      const newStatus = (isPs ? 'sent' : `active_${data.channel}`) as StudentStatus
       const updatedDb = curProj.database.map((s: any) =>
         s.id === data.student.id ? { ...s, status: newStatus } : s
       )
