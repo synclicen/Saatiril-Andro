@@ -223,9 +223,20 @@ interface SyncDbData {
 export interface OperatorPanelProps {
   isAppFullscreen?: boolean
   onToggleAppFullscreen?: () => void
+  /**
+   * Whether the camera should be active (getUserMedia held). When false, the
+   * camera tracks are released so ANOTHER app (e.g. the Operator Electron App
+   * on the same laptop) can use the camera. The admin's portable.exe passes
+   * cameraActive={activeView === 'live'} so its (always-mounted) OperatorPanel
+   * only holds the camera when the admin is actually viewing the Operator —
+   * freeing it for the Operator App while the admin is on the Admin/MC tab.
+   * The Operator Electron App uses the default (true) since it's the main view.
+   * Socket listeners + state (mcCallBuffer etc.) stay active regardless.
+   */
+  cameraActive?: boolean
 }
 
-export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }: OperatorPanelProps) {
+export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, cameraActive = true }: OperatorPanelProps) {
   const isMobile = useIsMobile()
   const { toast } = useToast()
 
@@ -528,14 +539,21 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
   )
 
   useEffect(() => {
-    queueMicrotask(() => void startCamera())
+    // Gate the camera on cameraActive: when the admin's OperatorPanel is hidden
+    // (admin on Admin/MC tab), release the camera so the Operator Electron App
+    // (if running on the same laptop) can use it. When cameraActive becomes
+    // true (admin switches to Live/Operator view), re-start the camera.
+    if (cameraActive) {
+      queueMicrotask(() => void startCamera())
+    }
     return () => {
+      // Always release on cleanup (unmount OR cameraActive flip to false).
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
     }
-  }, [startCamera])
+  }, [startCamera, cameraActive])
 
   useEffect(() => {
     if (selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
