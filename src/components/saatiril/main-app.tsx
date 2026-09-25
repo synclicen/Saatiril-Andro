@@ -64,9 +64,15 @@ export function MainApp() {
   const loadProjectsFromStorage = useSaatirilStore((s) => s.loadProjectsFromStorage)
 
   // ── Local state ────────────────────────────────────────────────────────────
-  const [activeView, setActiveView] = useState<MainView>('live')
+  // Default to the Admin tab when the app/project opens — the admin should
+  // land on the dashboard (project overview, links, stats) first, NOT the
+  // MC+Operator / Operator view. The admin can switch to Live/Operator when
+  // ready to take over (ambil alih). Previously defaulted to 'live' / 'operator'
+  // which opened MC+Operator immediately (and mounted the camera) on project
+  // start, before the admin was ready.
+  const [activeView, setActiveView] = useState<MainView>('admin')
   const [mcSidebarOpen, setMcSidebarOpen] = useState(true)
-  const [mobileTab, setMobileTab] = useState<MobileTab>('operator')
+  const [mobileTab, setMobileTab] = useState<MobileTab>('admin')
   const isMobile = useIsMobile()
   const [appFullscreen, setAppFullscreen] = useState(false)
   const [serverConnected, setServerConnected] = useState(false)
