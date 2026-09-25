@@ -747,12 +747,20 @@ export function MainApp() {
         ════════════════════════════════════════════════════════════════════════ */}
         {isMobile && (
           <>
-            {/* Mobile tab content */}
-            {mobileTab === 'admin' && (
-              <div className="h-full overflow-y-auto p-2">
-                <AdminDashboard />
-              </div>
-            )}
+            {/* Mobile tab content.
+                CRITICAL: AdminDashboard is ALWAYS mounted (hidden via CSS when
+                not the active tab) so its socket listeners — handleRequestState,
+                handleMcCallAlways, handlePhotosSaved (which saves photos to disk +
+                updates the Disk counter), handleSyncDb, handleStudentReset — stay
+                registered even while the admin views MC/Operator. Previously,
+                switching to MC/Operator tab UNMOUNTED AdminDashboard → the admin
+                stopped responding to REQUEST_STATE (MC APK / Operator showed
+                'Belum ada proyek aktif') AND stopped saving photos (Disk: 0
+                tersimpan + fewer photos on disk). McPanel + OperatorPanel stay
+                conditionally rendered so the admin's camera isn't always on. */}
+            <div className={mobileTab === 'admin' ? 'h-full overflow-y-auto p-2' : 'hidden'}>
+              <AdminDashboard />
+            </div>
             {mobileTab === 'mc' && (
               <div className="h-full overflow-hidden" style={{ backgroundColor: THEME.panel }}>
                 <McPanel />
@@ -882,12 +890,19 @@ export function MainApp() {
               </ResizablePanelGroup>
             )}
 
-            {/* ── ADMIN VIEW: Full-screen admin dashboard ──────────────────────── */}
-            {activeView === 'admin' && (
-              <div className="h-full overflow-y-auto p-3 sm:p-4 md:p-6">
-                <AdminDashboard />
-              </div>
-            )}
+            {/* ── ADMIN VIEW: Full-screen admin dashboard ────────────────────────
+                AdminDashboard is ALWAYS mounted (hidden via CSS when activeView !==
+                'admin') so its socket listeners (handleRequestState,
+                handleMcCallAlways, handlePhotosSaved — saves to disk + updates the
+                Disk counter, handleSyncDb, handleStudentReset) stay registered even
+                while the admin is on the Live (MC+Operator) view. Previously,
+                switching to Live UNMOUNTED AdminDashboard → admin stopped responding
+                to REQUEST_STATE (MC APK/Operator showed 'Belum ada proyek aktif')
+                AND stopped saving photos (Disk: 0 tersimpan + fewer photos on disk).
+                The Live view's McPanel+OperatorPanel stay conditionally rendered. */}
+            <div className={activeView === 'admin' ? 'h-full overflow-y-auto p-3 sm:p-4 md:p-6' : 'hidden'}>
+              <AdminDashboard />
+            </div>
           </>
         )}
       </main>

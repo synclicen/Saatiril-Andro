@@ -210,14 +210,13 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
       }
     }, 10000)
 
-    // Cleanup on unmount
-    return () => {
-      clearInterval(syncInterval)
-    }
-
     // Load any cached projects from localStorage (for offline resilience).
     // If the admin is temporarily offline, the MC/Operator can still see
     // the last-known project state instead of a blank "waiting for sync".
+    // CRITICAL: this MUST run before the return (cleanup) — previously it was
+    // placed AFTER the return statement, making it unreachable dead code, so
+    // the MC/Operator could never recover a cached project while waiting for
+    // the admin's REQUEST_STATE response (showing 'Belum ada proyek aktif').
     try {
       useSaatirilStore.getState().loadProjectsFromStorage()
       const store = useSaatirilStore.getState()
@@ -227,6 +226,11 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
       }
     } catch (e) {
       console.error('[SAATIRIL] Failed to load projects from storage:', e)
+    }
+
+    // Cleanup on unmount
+    return () => {
+      clearInterval(syncInterval)
     }
   }, [])
 
