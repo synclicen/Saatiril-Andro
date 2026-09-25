@@ -21,6 +21,7 @@ import {
   CloudUpload,
   Folder,
   Link2Off,
+  Send,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import * as XLSX from 'xlsx'
@@ -171,6 +172,16 @@ export default function AdminDashboard() {
   )
   const sentCount = useMemo(
     () => database.filter((s) => s.status === 'sent').length,
+    [database],
+  )
+  // ANTREAN = pending (belum dipanggil/dikirim) — mirrors MC panel's 4 pills
+  const antreanCount = useMemo(
+    () => database.filter((s) => s.status === 'pending').length,
+    [database],
+  )
+  // PROSES = sent + active_N (sedang dengan operator / difoto) — mirrors MC panel
+  const prosesCount = useMemo(
+    () => database.filter((s) => s.status === 'sent' || s.status.startsWith('active_')).length,
     [database],
   )
 
@@ -1044,30 +1055,41 @@ export default function AdminDashboard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 flex-1 min-h-0">
-        {/* ── Stats: Total / Selesai / Belum ── */}
-        <div className="grid grid-cols-3 gap-2 shrink-0">
-          <div className="rounded-lg bg-[#1a0b2e]/60 px-2.5 py-2.5 text-center">
-            <div className="flex items-center justify-center gap-1.5 mb-1">
-              <Users className="size-3 text-[#c4b5fd]" />
-              <span className="text-[10px] uppercase tracking-wider text-[#c4b5fd]/70">Total</span>
+        {/* ── Stats: ANTREAN / PROSES / SELESAI / TOTAL (mirrors MC panel) ─────
+            4 pills sinkron dengan halaman MC + Operator agar semua user pantau
+            progres simultan dengan kategori yang sama. */}
+        <div className="grid grid-cols-4 gap-1.5 shrink-0">
+          {/* ANTREAN (pending) */}
+          <div className="rounded-lg bg-[#1a0b2e]/60 px-1.5 py-2 text-center border border-[#533485]/40">
+            <div className="flex items-center justify-center gap-1 mb-0.5">
+              <Users className="size-2.5 text-[#c4b5fd]/70" />
             </div>
-            <span className="text-2xl font-bold" style={{ color: GOLD }}>
-              {totalPeserta}
-            </span>
+            <span className="text-lg font-bold text-[#c4b5fd]">{antreanCount}</span>
+            <span className="block text-[8px] uppercase tracking-wider text-[#c4b5fd]/70">Antrean</span>
           </div>
-          <div className="rounded-lg bg-[#1a0b2e]/60 px-2.5 py-2.5 text-center">
-            <div className="flex items-center justify-center gap-1.5 mb-1">
-              <CheckCircle2 className="size-3 text-emerald-400" />
-              <span className="text-[10px] uppercase tracking-wider text-[#c4b5fd]/70">Selesai</span>
+          {/* PROSES (sent + active) */}
+          <div className="rounded-lg bg-[#1a0b2e]/60 px-1.5 py-2 text-center border border-cyan-500/30">
+            <div className="flex items-center justify-center gap-1 mb-0.5">
+              <Send className="size-2.5 text-cyan-400/70" />
             </div>
-            <span className="text-2xl font-bold text-emerald-400">{doneCount}</span>
+            <span className="text-lg font-bold text-cyan-400">{prosesCount}</span>
+            <span className="block text-[8px] uppercase tracking-wider text-cyan-400/70">Proses</span>
           </div>
-          <div className="rounded-lg bg-[#1a0b2e]/60 px-2.5 py-2.5 text-center">
-            <div className="flex items-center justify-center gap-1.5 mb-1">
-              <XCircle className="size-3 text-amber-400" />
-              <span className="text-[10px] uppercase tracking-wider text-[#c4b5fd]/70">Belum</span>
+          {/* SELESAI (done) */}
+          <div className="rounded-lg bg-[#1a0b2e]/60 px-1.5 py-2 text-center border border-emerald-500/30">
+            <div className="flex items-center justify-center gap-1 mb-0.5">
+              <CheckCircle2 className="size-2.5 text-emerald-400/70" />
             </div>
-            <span className="text-2xl font-bold text-amber-400">{belumCount}</span>
+            <span className="text-lg font-bold text-emerald-400">{doneCount}</span>
+            <span className="block text-[8px] uppercase tracking-wider text-emerald-400/70">Selesai</span>
+          </div>
+          {/* TOTAL */}
+          <div className="rounded-lg bg-[#1a0b2e]/60 px-1.5 py-2 text-center border border-amber-500/30">
+            <div className="flex items-center justify-center gap-1 mb-0.5">
+              <Users className="size-2.5 text-amber-400/70" />
+            </div>
+            <span className="text-lg font-bold text-amber-400">{totalPeserta}</span>
+            <span className="block text-[8px] uppercase tracking-wider text-amber-400/70">Total</span>
           </div>
         </div>
 

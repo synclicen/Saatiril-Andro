@@ -413,6 +413,18 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
     return channelStudents.filter((s) => s.status === 'pending').length
   }, [channelStudents])
 
+  // 4 stat pills (mirrors MC panel): ANTREAN / PROSES / SELESAI / TOTAL —
+  // per-channel counts so operator + MC + admin all see the same 4 categories
+  // (sinkron + simultan). ANTREAN=pending, PROSES=sent+active, SELESAI=done.
+  const opAntreanCount = remainingCount
+  const opProsesCount = useMemo<number>(() => {
+    return channelStudents.filter((s) => s.status === 'sent' || s.status.startsWith('active_')).length
+  }, [channelStudents])
+  const opSelesaiCount = useMemo<number>(() => {
+    return channelStudents.filter((s) => s.status === 'done').length
+  }, [channelStudents])
+  const opTotalCount = channelStudents.length
+
   const hasActiveTarget = opCurrentTarget !== null && !!opCurrentTarget.id && (opCurrentTarget.nama !== undefined || opCurrentTarget.nim !== undefined)
 
   const capturePhase = useMemo<CapturePhase>(() => {
@@ -2303,6 +2315,34 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }
   // ── DESKTOP LAYOUT ──────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ backgroundColor: THEME.bg }}>
+      {/* ── 4 stat pills: ANTREAN / PROSES / SELESAI / TOTAL (mirrors MC panel) ──
+          Per-channel counts so operator + MC + admin pantau progres simultan
+          with the same 4 categories. Always visible at the top of the panel. */}
+      <div
+        className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 overflow-x-auto"
+        style={{ backgroundColor: THEME.panel, borderBottom: `1px solid ${THEME.border}` }}
+      >
+        {/* ANTREAN (pending) */}
+        <div className="flex flex-col items-center justify-center rounded-md shrink-0 px-2 py-0.5 min-w-[48px]" style={{ backgroundColor: `${THEME.border}33`, border: `1px solid ${THEME.muted}44` }}>
+          <span className="font-bold leading-none text-sm" style={{ color: THEME.muted }}>{opAntreanCount}</span>
+          <span className="uppercase tracking-wider font-semibold leading-tight text-[7px]" style={{ color: THEME.muted }}>Antrean</span>
+        </div>
+        {/* PROSES (sent + active) */}
+        <div className="flex flex-col items-center justify-center rounded-md shrink-0 px-2 py-0.5 min-w-[48px]" style={{ backgroundColor: `#06b6d422`, border: `1px solid #06b6d444` }}>
+          <span className="font-bold leading-none text-sm" style={{ color: '#06b6d4' }}>{opProsesCount}</span>
+          <span className="uppercase tracking-wider font-semibold leading-tight text-[7px]" style={{ color: '#06b6d4' }}>Proses</span>
+        </div>
+        {/* SELESAI (done) */}
+        <div className="flex flex-col items-center justify-center rounded-md shrink-0 px-2 py-0.5 min-w-[48px]" style={{ backgroundColor: `#22c55e22`, border: `1px solid #22c55e44` }}>
+          <span className="font-bold leading-none text-sm" style={{ color: '#22c55e' }}>{opSelesaiCount}</span>
+          <span className="uppercase tracking-wider font-semibold leading-tight text-[7px]" style={{ color: '#22c55e' }}>Selesai</span>
+        </div>
+        {/* TOTAL */}
+        <div className="flex flex-col items-center justify-center rounded-md shrink-0 px-2 py-0.5 min-w-[48px]" style={{ backgroundColor: `${THEME.gold}22`, border: `1px solid ${THEME.gold}44` }}>
+          <span className="font-bold leading-none text-sm" style={{ color: THEME.gold }}>{opTotalCount}</span>
+          <span className="uppercase tracking-wider font-semibold leading-tight text-[7px]" style={{ color: THEME.gold }}>Total</span>
+        </div>
+      </div>
       {/* Main resizable area */}
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         {/* LEFT: Camera zone + capture button */}
