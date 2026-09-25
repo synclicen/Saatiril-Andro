@@ -5,7 +5,11 @@ on:
     branches: [main]
     paths:
       - 'electron-clients/**'
-      - 'src/app/page.tsx'
+      - 'src/**'
+      - 'public/**'
+      - 'prisma/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/saatiril-electron-clients.yml'
   workflow_dispatch:
 
