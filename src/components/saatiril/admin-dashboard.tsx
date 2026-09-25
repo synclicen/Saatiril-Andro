@@ -715,16 +715,27 @@ export default function AdminDashboard() {
       // operator.html which had drifted from the React panels.)
       const path = '/?role=' + role
 
+      // Include the session password so the browser MC/Operator page can
+      // authenticate with the admin's socket server. Without it, if the admin
+      // set a session password, the browser page loads with no password →
+      // identify without the hash → auth-failed → MC_CALL/SYNC_DB rejected
+      // → "doesn't work" in Chrome. (Electron Apps collect the password via
+      // connection.html; the browser page relies on the ?password= URL param.)
+      const pwd = (currentProject?.config?.sessionPassword && currentProject.config.sessionPassword !== '__PASSWORD_SET__')
+        ? currentProject.config.sessionPassword
+        : (currentProject ? (localStorage.getItem('saatiril_pwd_plain_' + currentProject.id) || '') : '')
+      const pwdParam = pwd ? `&password=${encodeURIComponent(pwd)}` : ''
+
       if (isElectron) {
         try {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          return `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23`
+          return `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23${pwdParam}`
         } catch {
           const hostname = window.location.hostname
           const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
-          return `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23`
+          return `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23${pwdParam}`
         }
       } else {
         const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
@@ -761,10 +772,10 @@ export default function AdminDashboard() {
           }
         }
 
-        return `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23`
+        return `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23${pwdParam}`
       }
     },
-    [lanInfo],
+    [lanInfo, currentProject],
   )
 
   // ── Generate download link helper ────────────────────────────────
@@ -899,18 +910,24 @@ export default function AdminDashboard() {
       // operator.html which had drifted from the React panels.)
       const path = '/?role=' + role
 
+      // Include the session password (see generateLink for rationale).
+      const pwd = (currentProject?.config?.sessionPassword && currentProject.config.sessionPassword !== '__PASSWORD_SET__')
+        ? currentProject.config.sessionPassword
+        : (currentProject ? (localStorage.getItem('saatiril_pwd_plain_' + currentProject.id) || '') : '')
+      const pwdParam = pwd ? `&password=${encodeURIComponent(pwd)}` : ''
+
       let url: string
       if (isElectron) {
         try {
           const info = lanInfo || (await api.getLanInfo())
           const ips = info.ips
           const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
-          url = `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23`
+          url = `http://${lanIP}:${info.httpPort}${path}&channel=${channel}&socketPort=${info.socketPort}&v=23${pwdParam}`
         } catch {
           const hostname = window.location.hostname
           const params = new URLSearchParams(window.location.search)
           const socketPort = params.get('socketPort') || '3003'
-          url = `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23`
+          url = `http://${hostname}:3000${path}&channel=${channel}&socketPort=${socketPort}&v=23${pwdParam}`
         }
       } else {
         // Web/sandbox mode: include socketPort so LAN clients can connect to the Socket.io server
@@ -953,7 +970,7 @@ export default function AdminDashboard() {
           }
         }
 
-        url = `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23`
+        url = `${origin}${path}&channel=${channel}&socketPort=${socketPort}&v=23${pwdParam}`
       }
       try {
         if (navigator.clipboard) {
@@ -978,7 +995,7 @@ export default function AdminDashboard() {
         })
       }
     },
-    [toast, lanInfo],
+    [toast, lanInfo, currentProject],
   )
 
   // ── Export participants to Excel ─────────────────────────────────
