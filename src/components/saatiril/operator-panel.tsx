@@ -380,7 +380,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
   // ── Operator queue: derived from database + MC_CALL buffer ──────────────────
   const opQueue = useMemo<Student[]>(() => {
-    if (!photoshoot || !currentProject) return []
+    if (!currentProject) return []
     const alreadyPhotographed = new Set(
       currentProject.photoHistory
         .filter((h) => h.channel === myChannel)
@@ -390,28 +390,25 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       currentProject.database.filter((s) => s.status === 'done').map((s) => s.id)
     )
     const dbQueueIds = new Set<string>()
-    // dbItems: students with status 'sent' (MC sent them, not yet photographed).
-    // NOTE: do NOT exclude via alreadyPhotographed here. A 'sent' student is, by
-    // definition, NOT yet photographed (photographed students are 'done'). The
-    // alreadyPhotographed check previously excluded 'sent' students when the
-    // operator's localStorage had STALE photoHistory entries (from a previous
-    // session or a reset whose cleared photoHistory didn't persist before close).
-    // That stale check caused the operator to LOSE the queue after close+reopen —
-    // the PROSES count was correct (DB has 'sent' students) but the queue list was
-    // empty (alreadyPhotographed wrongly excluded them). Now 'sent' students
-    // always show in the queue regardless of stale photoHistory, so the operator
-    // recovers the full queue after reopen. (Re-photographing a 'sent' student
-    // that's inconsistently in photoHistory is safe — the versioned filename
-    // logic creates a new version, and the photoHistory entry is overwritten.)
+    // dbItems: students to photograph = 'sent' (photoshoot) OR 'active_N'
+    // (wisuda). Works in BOTH modes so the operator recovers the queue after
+    // close+reopen regardless of mode. Previously dbItems filtered ONLY for
+    // 'sent' (photoshoot) AND had a !photoshoot early-return → in wisuda mode
+    // (where students are 'active_N') the queue was ALWAYS empty after reopen,
+    // even though the DB had the active students (PROSES count was correct).
+    // 'sent'/'active_N' = NOT yet photographed (photographed = 'done' = excluded
+    // via doneIds). No alreadyPhotographed check (a 'sent'/'active_N' student
+    // is by definition not photographed; the check caused stale-photoHistory
+    // exclusion after reopen — see commit f96e64f).
     const dbItems = currentProject.database.filter(
-      (s) => s.status === 'sent' && !doneIds.has(s.id)
+      (s) => (s.status === 'sent' || isActiveStatus(s.status)) && !doneIds.has(s.id)
     )
     dbItems.forEach((s) => dbQueueIds.add(s.id))
     const bufferItems = mcCallBuffer.filter(
       (s) => !dbQueueIds.has(s.id) && !doneIds.has(s.id) && !alreadyPhotographed.has(s.id)
     )
     return [...dbItems, ...bufferItems]
-  }, [photoshoot, currentProject, myChannel, mcCallBuffer])
+  }, [currentProject, myChannel, mcCallBuffer])
 
   const opSearchResults = useMemo<Student[]>(() => {
     if (!opSearchQuery.trim()) return opQueue
