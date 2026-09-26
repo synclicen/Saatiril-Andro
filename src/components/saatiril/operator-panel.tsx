@@ -353,7 +353,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     const observer = new ResizeObserver(updateSize)
     observer.observe(zone)
     return () => observer.disconnect()
-  }, [aspectRatio, isMobile])
+  }, [aspectRatio, isMobile, hasProject])
 
   // ── Preload frame image ──────────────────────────────────────────────────
   useEffect(() => {
