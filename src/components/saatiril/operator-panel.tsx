@@ -2417,6 +2417,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           <span className="font-bold leading-none text-sm" style={{ color: THEME.gold }}>{opTotalCount}</span>
           <span className="uppercase tracking-wider font-semibold leading-tight text-[7px]" style={{ color: THEME.gold }}>Total</span>
         </div>
+        {typeof window !== 'undefined' && (window as any).saatirilAPI?.backToLogin && (
+          <button
+            onClick={() => (window as any).saatirilAPI.backToLogin()}
+            className="flex items-center gap-1 rounded-md cursor-pointer transition-all hover:brightness-125 shrink-0 px-1.5 py-0.5 text-[8px]"
+            style={{
+              backgroundColor: `${THEME.border}33`,
+              color: THEME.muted,
+              border: `1px solid ${THEME.border}`,
+            }}
+            title="Kembali ke halaman login (ganti server / retry)"
+          >
+            ← Login
+          </button>
+        )}
       </div>
       {/* Main resizable area */}
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">

@@ -142,6 +142,19 @@ ipcMain.on('connect-to-server', async (_e: any, connectUrl: string) => {
 
 ipcMain.handle('get-connection-info', () => parseArgs())
 
+// Back to login screen — user wants to reconnect / change server / retry after
+// a failed login, without closing the app. Stops the local server (so the old
+// app page is no longer served) + re-loads connection.html. Also releases the
+// camera (if active) so it doesn't stay grabbed.
+ipcMain.on('back-to-login', () => {
+  console.log('[OP] Back to login requested')
+  if (localServer) {
+    try { localServer.close() } catch {}
+    localServer = null
+  }
+  mainWindow?.loadFile(path.join(__dirname, 'connection.html'), { query: { role: 'operator' } })
+})
+
 // Save photo to disk (operator local copy — redundancy with admin)
 ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string }) => {
   try {

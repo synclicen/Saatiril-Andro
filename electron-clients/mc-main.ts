@@ -174,6 +174,18 @@ ipcMain.on('connect-to-server', async (_e: any, connectUrl: string) => {
 
 ipcMain.handle('get-connection-info', () => parseArgs())
 
+// Back to login screen — user wants to reconnect / change server / retry after
+// a failed login, without closing the app. Stops the local server (so the old
+// app page is no longer served) + re-loads connection.html.
+ipcMain.on('back-to-login', () => {
+  console.log('[MC] Back to login requested')
+  if (localServer) {
+    try { localServer.close() } catch {}
+    localServer = null
+  }
+  mainWindow?.loadFile(path.join(__dirname, 'connection.html'), { query: { role: 'mc' } })
+})
+
 // Save photo to disk (registered so the shared preload's savePhoto IPC does
 // not throw "No handler registered" — the MC exe does not currently capture
 // photos, but the preload is shared with the operator exe, so the handler

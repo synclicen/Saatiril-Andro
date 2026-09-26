@@ -783,6 +783,20 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
             {photoshoot ? (dualPhotoshoot ? '2 Kamera' : 'Photoshoot') : `Channel ${myChannel}`}
           </span>
           <NetworkQualityBadge />
+          {typeof window !== 'undefined' && (window as any).saatirilAPI?.backToLogin && (
+            <button
+              onClick={() => (window as any).saatirilAPI.backToLogin()}
+              className={`flex items-center gap-1 rounded-md cursor-pointer transition-all hover:brightness-125 ${condensed ? 'px-1.5 py-0.5 text-[8px]' : 'px-2 py-1 text-[10px]'}`}
+              style={{
+                backgroundColor: `${THEME.border}33`,
+                color: THEME.muted,
+                border: `1px solid ${THEME.border}`,
+              }}
+              title="Kembali ke halaman login (ganti server / retry)"
+            >
+              ← Login
+            </button>
+          )}
         </div>
       </div>
     )

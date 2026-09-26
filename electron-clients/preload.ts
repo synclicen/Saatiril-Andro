@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('saatirilAPI', {
   isElectron: true,
   connectToServer: (url: string) => ipcRenderer.send('connect-to-server', url),
+  backToLogin: () => ipcRenderer.send('back-to-login'),
   getConnectionInfo: () => ipcRenderer.invoke('get-connection-info'),
   getLanInfo: () => Promise.resolve({ httpPort: 3000, socketPort: 3003, ips: [] }),
   // Saves photo to operator's local disk via IPC. Admin ALSO saves via PHOTOS_SAVED — redundancy.

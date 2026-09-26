@@ -43,6 +43,8 @@ interface SaatirilAPI {
   isElectron: boolean
   isAndroid?: boolean
   platform?: string
+  connectToServer?: (url: string) => void
+  backToLogin?: () => void
   selectFolder: (defaultPath: string) => Promise<string | null>
   createFolder: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string }) => Promise<string | null>
