@@ -1245,11 +1245,20 @@ function createWindow() {
   // user's choice.
   function handleMinimize(e: Electron.Event) {
     e.preventDefault()
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-    }
+    // Defer the restore slightly (setImmediate) so the minimize event fully
+    // processes — calling restore()/show() SYNCHRONOUSLY can conflict with the
+    // OS minimize on Windows and cause a BLANK screen (the GPU re-renders
+    // blank). Only restore if the window IS minimized (if e.preventDefault()
+    // worked, the window is still visible — calling restore/show on a visible
+    // window causes a blank flash on Windows). Don't call show() — restore()
+    // is enough to un-minimize, and show() on a visible window is what caused
+    // the blank screen the user reported.
+    setImmediate(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isMinimized()) {
+        mainWindow.restore()
+        mainWindow.focus()
+      }
+    })
     // @ts-ignore — mainWindow is checked for null before this
     dialog.showMessageBox(mainWindow as any, {
       type: 'warning', title: 'Jangan Minimize!',
@@ -1264,7 +1273,10 @@ function createWindow() {
         // @ts-ignore — minimize event exists at runtime
         mainWindow?.once('restore', () => { if (mainWindow) mainWindow.on('minimize', handleMinimize) })
       }
-      // else: Tetap Buka — already restored synchronously above, nothing more.
+      // else: Tetap Buka — if the OS minimized (race), the setImmediate restore
+      // above already brought it back. If e.preventDefault() worked, it was
+      // never minimized. No blank screen (we never called show() on a visible
+      // window).
     })
   }
   // @ts-ignore — minimize event exists at runtime

@@ -82,11 +82,18 @@ function createWindow() {
   function handleMinimize(e) {
     e.preventDefault()
     const { dialog } = require('electron')
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-    }
+    // Defer the restore (setImmediate) so the minimize event fully processes —
+    // calling restore()/show() synchronously conflicts with the OS minimize on
+    // Windows and causes a BLANK screen. Only restore if IS minimized (if
+    // e.preventDefault() worked, the window is visible — restore/show on a
+    // visible window causes a blank flash). Don't call show() — restore() is
+    // enough to un-minimize; show() on a visible window caused the blank screen.
+    setImmediate(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isMinimized()) {
+        mainWindow.restore()
+        mainWindow.focus()
+      }
+    })
     dialog.showMessageBox(mainWindow!, {
       type: 'warning', title: 'Jangan Minimize!',
       message: 'Saatiril Operator sedang berjalan!',
@@ -99,7 +106,8 @@ function createWindow() {
         mainWindow!.minimize()
         mainWindow!.once('restore', () => { mainWindow!.on('minimize', handleMinimize) })
       }
-      // else: Tetap Buka — already restored synchronously above, nothing more.
+      // else: Tetap Buka — setImmediate restore above handled the OS-race case;
+      // if e.preventDefault() worked, the window was never minimized. No blank.
     })
   }
   mainWindow.on('minimize', handleMinimize)
