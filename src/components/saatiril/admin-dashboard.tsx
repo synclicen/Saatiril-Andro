@@ -150,10 +150,41 @@ export default function AdminDashboard() {
     diskSaveStatsRef.current = diskSaveStats
   }, [diskSaveStats])
 
+  // Session flag for the first-success toast (separate from diskSaveStats.saved
+  // so the toast still fires once per session even after refreshDiskCount sets
+  // saved to the actual on-disk count on reopen).
+  const sessionSavedRef = useRef(false)
+
   // Store
   const currentProject = useSaatirilStore((s) => s.currentProject)
   const updateCurrentProject = useSaatirilStore((s) => s.updateCurrentProject)
   const lastSavedAt = useSaatirilStore((s) => s.lastSavedAt)
+
+  // ── Disk photo count (persists across project close/reopen + app restart) ─
+  // The in-memory diskSaveStats.saved resets to 0 when AdminDashboard unmounts
+  // (project close/reopen, app restart). This calls the count-photos IPC to
+  // count the ACTUAL .jpg/.png files in targetFolder on mount + whenever the
+  // targetFolder changes. The badge then shows the real on-disk count — never
+  // resets to 0 unless the folder is genuinely empty (the user's complaint:
+  // 'after exiting + reopening the project, Disk: 0 tersimpan').
+  const refreshDiskCount = useCallback(async () => {
+    const api = window.saatirilAPI
+    const targetFolder = currentProject?.config?.targetFolder
+    if (api?.countPhotos && targetFolder) {
+      try {
+        const count = await api.countPhotos({ targetFolder })
+        setDiskSaveStats(prev => ({ ...prev, saved: count }))
+      } catch (err) {
+        console.error('[SAATIRIL ADMIN] countPhotos failed:', err)
+      }
+    } else if (!targetFolder) {
+      setDiskSaveStats(prev => ({ ...prev, saved: 0 }))
+    }
+  }, [currentProject?.config?.targetFolder])
+
+  useEffect(() => {
+    refreshDiskCount()
+  }, [refreshDiskCount])
 
   // ── Computed values ──────────────────────────────────────────────
   const mode = currentProject?.config.mode ?? 'single'
@@ -323,12 +354,13 @@ export default function AdminDashboard() {
                 description: `${failedNow} foto tidak tersimpan. ${lastError ?? 'Cek ruang disk & folder target.'}`,
                 variant: 'destructive',
               })
-            } else if (savedNow > 0 && prev.saved === 0) {
+            } else if (savedNow > 0 && !sessionSavedRef.current) {
               const folderDesc = hasFolder ? targetFolder : 'folder browser (File System Access)'
               toast({
                 title: 'Foto Tersimpan ke Disk',
                 description: `${savedNames.join(', ')} → ${folderDesc}`,
               })
+              sessionSavedRef.current = true
             }
             setDiskSaveStats({
               saved: prev.saved + savedNow,
@@ -336,6 +368,16 @@ export default function AdminDashboard() {
               lastFile,
               lastError,
             })
+            // Refresh the badge with the ACTUAL on-disk count (count-photos IPC).
+            // This overrides the session-cumulative saved with the real file count,
+            // so the badge persists correctly across project close/reopen + shows
+            // the true number of photos in targetFolder.
+            const api2 = window.saatirilAPI
+            if (api2?.countPhotos && targetFolder) {
+              api2.countPhotos({ targetFolder }).then((count: number) => {
+                setDiskSaveStats(prev2 => ({ ...prev2, saved: count }))
+              }).catch((err: Error) => console.error('[SAATIRIL ADMIN] countPhotos refresh failed:', err))
+            }
           })
         }
       }

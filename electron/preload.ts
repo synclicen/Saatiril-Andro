@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)
   },
+  countPhotos: (data: { targetFolder: string }): Promise<number> => {
+    return ipcRenderer.invoke('count-photos', data)
+  },
 
   getLanInfo: (): Promise<{
     httpPort: number

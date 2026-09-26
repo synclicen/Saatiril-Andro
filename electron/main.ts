@@ -903,6 +903,22 @@ function registerIpcHandlers() {
     }
   })
 
+  // Count photos on disk (for the Disk badge — persists across project
+  // close/reopen + app restart, unlike the in-memory diskSaveStats counter
+  // which reset to 0). Called on AdminDashboard mount + after each save.
+  ipcMain.handle('count-photos', async (_event, data: { targetFolder: string }) => {
+    try {
+      const { targetFolder } = data
+      if (!targetFolder || !fs.existsSync(targetFolder)) return 0
+      const files = fs.readdirSync(targetFolder)
+      const photos = files.filter(f => /\.(jpg|jpeg|png)$/i.test(f))
+      return photos.length
+    } catch (err: any) {
+      console.error('[SAATIRIL] count-photos failed:', err.message)
+      return 0
+    }
+  })
+
   // ── Google Drive / cloud backup folder ────────────────────────────────
   // Admin picks a folder (e.g. G:\My Drive\Saatiril\ via Google Drive for
   // Desktop, or any cloud-synced folder). Photos are copied there after
