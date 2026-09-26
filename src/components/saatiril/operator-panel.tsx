@@ -525,22 +525,34 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         await enumerateVideoDevices()
       } catch (err) {
         console.error('[SAATIRIL OP] Camera access failed:', err)
-        if (isMobile && !deviceId) {
-          try {
-            const fallbackConstraints: MediaStreamConstraints = {
-              video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
-              audio: false,
-            }
-            const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
-            streamRef.current = stream
-            setCameraAvailable(true)
-            if (videoRef.current) videoRef.current.srcObject = stream
-            await enumerateVideoDevices()
-          } catch (fallbackErr) {
-            console.error('[SAATIRIL OP] Camera fallback also failed:', fallbackErr)
-            setCameraAvailable(false)
+        // Fallback: retry with looser constraints. Helps capture cards (Elgato
+        // Cam Link, Blackmagic, AverMedia, etc.) that may not support the ideal
+        // 1920x1080 constraint, professional cameras via capture card that
+        // output at non-standard resolutions/frame rates, and mobile devices
+        // where facingMode fails. Without this fallback, a capture card that
+        // can't do 1080p-ideal would show 'camera not available' even though
+        // it can stream at its native resolution.
+        try {
+          let fallbackConstraints: MediaStreamConstraints
+          if (deviceId) {
+            // Desktop / capture card: retry with JUST the deviceId (drop the
+            // resolution constraint so the card streams at its native resolution).
+            fallbackConstraints = { video: { deviceId: { exact: deviceId } }, audio: false }
+          } else if (isMobile) {
+            // Mobile: retry without facingMode (some phones reject 'environment').
+            fallbackConstraints = { video: { width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }
+          } else {
+            // Desktop default (no device selected): retry with the most permissive.
+            fallbackConstraints = { video: true, audio: false }
           }
-        } else {
+          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+          streamRef.current = stream
+          setCameraAvailable(true)
+          if (videoRef.current) videoRef.current.srcObject = stream
+          await enumerateVideoDevices()
+          console.log('[SAATIRIL OP] Camera fallback succeeded (looser constraints)')
+        } catch (fallbackErr) {
+          console.error('[SAATIRIL OP] Camera fallback also failed:', fallbackErr)
           setCameraAvailable(false)
         }
       }
