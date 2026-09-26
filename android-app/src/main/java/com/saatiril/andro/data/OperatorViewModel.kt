@@ -177,13 +177,24 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
             val alreadyPhotographed = proj.photoHistory
                 .filter { it.channel == myCh }
                 .map { it.student.id }.toSet()
+            val doneIds = db.filter { it.status == "done" }.map { it.id }.toSet()
 
+            // dbItems: students to photograph = 'sent' OR 'active_N', NOT 'done'.
+            // NOTE: do NOT exclude via alreadyPhotographed here. A 'sent'/'active_N'
+            // student is, by definition, NOT yet photographed (photographed students
+            // are 'done' = excluded via doneIds). The alreadyPhotographed check
+            // previously excluded 'sent' students when the operator's persisted
+            // photoHistory had STALE entries (from a previous session or a reset
+            // whose cleared photoHistory didn't persist before close). That caused
+            // the operator to LOSE the queue after close+reopen — the PROSES count
+            // was correct (DB has 'sent' students) but the queue list was empty.
+            // Now 'sent'/'active_N' students always show in the queue regardless of
+            // stale photoHistory (mirrors the Electron fix: commits f96e64f + 85b5017).
             val sentFromDb = db.filter { student ->
                 (student.status == "sent" || isActiveStatus(student.status)) &&
-                !alreadyPhotographed.contains(student.id)
+                !doneIds.contains(student.id)
             }
             val sentIds = sentFromDb.map { it.id }.toSet()
-            val doneIds = db.filter { it.status == "done" }.map { it.id }.toSet()
 
             val bufferAdditions = _mcCallBuffer.value.filter {
                 !sentIds.contains(it.id) && !doneIds.contains(it.id) && !alreadyPhotographed.contains(it.id)

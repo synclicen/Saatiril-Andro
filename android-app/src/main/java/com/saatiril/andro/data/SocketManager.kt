@@ -47,7 +47,7 @@ class SocketManager {
             SocketEvents.STUDENT_DONE,
             SocketEvents.STUDENT_RESET
         )
-        private const val MAX_QUEUE_SIZE = 100  // was 50, increased for ceremonies
+        private const val MAX_QUEUE_SIZE = 2000  // was 100, raised for 4000+ participant ceremonies (mirrors Electron socket.ts MAX_QUEUE_SIZE)
         private const val MAX_RETRIES = 5       // was 3, more retries for crowded WiFi
 
         fun sha256(input: String): String {
