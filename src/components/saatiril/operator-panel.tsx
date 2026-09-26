@@ -585,7 +585,24 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         streamRef.current = null
       }
     }
-  }, [startCamera, cameraActive, hasProject])
+  }, [startCamera, cameraActive])
+
+  useEffect(() => {
+    // Re-attach the EXISTING camera stream to the <video> element when the
+    // project loads (the <video> wasn't rendered while !currentProject — the
+    // 'Belum ada proyek aktif' screen showed instead, so videoRef.current was
+    // null + the stream couldn't attach on the initial startCamera). When the
+    // project loads, hasProject flips false→true → the <video> renders → this
+    // effect re-attaches the existing stream (NO stop/re-obtain — that raced on
+    // Windows + caused 'NO CAMERA SIGNAL'). This is why wisuda camera showed
+    // black: the operator started before the project loaded → stream obtained
+    // but unattached → video element rendered later but the camera useEffect
+    // didn't re-run → stream stayed unattached. In photoshoot the project was
+    // often already loaded (localStorage) so the <video> rendered immediately.
+    if (streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current
+    }
+  }, [hasProject])
 
   useEffect(() => {
     // Gate on cameraActive too — otherwise selecting/changing a device while the
