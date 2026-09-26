@@ -242,6 +242,16 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
   // ── Store ────────────────────────────────────────────────────────────────
   const currentProject = useSaatirilStore((s) => s.currentProject)
+  // Boolean mirror — used as a dep in the camera useEffect so the camera
+  // re-starts when the project loads (the <video> element isn't rendered while
+  // !currentProject — the 'Belum ada proyek aktif' screen shows instead, so
+  // videoRef.current is null + the stream can't attach). When the project
+  // loads, hasProject flips false→true → the useEffect re-runs → startCamera
+  // re-obtains the stream + attaches it to the now-rendered <video> element.
+  // Without this, the camera showed black in wisuda mode (operator started
+  // before the project loaded → stream obtained but unattached → video element
+  // rendered later but the useEffect didn't re-run → stream stayed unattached).
+  const hasProject = !!currentProject
   const myChannel = useSaatirilStore((s) => s.myChannel)
   const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTarget)
   const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotos)
@@ -575,7 +585,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         streamRef.current = null
       }
     }
-  }, [startCamera, cameraActive])
+  }, [startCamera, cameraActive, hasProject])
 
   useEffect(() => {
     // Gate on cameraActive too — otherwise selecting/changing a device while the
