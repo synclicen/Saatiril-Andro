@@ -766,7 +766,7 @@ function startSocketServer(): Promise<void> {
         if (payload.event === 'PHOTOS_SAVED') {
           for (const [id, clientInfo] of clientRegistry) {
             if (clientInfo.role === 'admin' && id !== socket.id) {
-              io.sockets.sockets.get(id)?.emit('lan-message', payload)
+              socketServer!.sockets.sockets.get(id)?.emit('lan-message', payload)
             }
           }
           return
