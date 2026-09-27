@@ -752,6 +752,25 @@ function startSocketServer(): Promise<void> {
           }
           return
         }
+        // ── Don't relay PHOTOS_SAVED to MC/Operator — only to admin ────────
+        // PHOTOS_SAVED carries 1-5MB of base64 photo data. If relayed to MC/
+        // Operator, socket.io may BATCH it with the preceding STUDENT_DONE
+        // (lightweight, ~50 bytes) into one WebSocket frame. The MC can't
+        // process STUDENT_DONE until the ENTIRE frame (including 5MB) downloads
+        // over WiFi — causing a multi-second delay before MC can call the next
+        // student. By NOT relaying PHOTOS_SAVED to MC/Operator, their WebSocket
+        // only receives STUDENT_DONE (instant) → MC unblocks immediately.
+        // MC/Operator get the status update (student='done') via the admin's 3s
+        // periodic SYNC_DB broadcast instead. The admin (role='admin') is the
+        // only one that needs PHOTOS_SAVED (to save photos to disk + display).
+        if (payload.event === 'PHOTOS_SAVED') {
+          for (const [id, clientInfo] of clientRegistry) {
+            if (clientInfo.role === 'admin' && id !== socket.id) {
+              io.sockets.sockets.get(id)?.emit('lan-message', payload)
+            }
+          }
+          return
+        }
         socket.broadcast.emit('lan-message', payload)
       })
 
