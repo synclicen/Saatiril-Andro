@@ -648,8 +648,8 @@ function startSocketServer(): Promise<void> {
       // This allows APK MC/Operator to connect to Electron server
       path: '/',
       cors: { origin: '*', methods: ['GET', 'POST'] },
-      pingInterval: 5000,
-      pingTimeout: 15000,
+      pingInterval: 3000,   // Faster dead-connection detection (3s)
+      pingTimeout: 30000,   // More tolerant of WiFi congestion (30s — don't disconnect during brief outages)
       maxHttpBufferSize: MAX_HTTP_BUFFER,
       connectionStateRecovery: { maxDisconnectionDuration: 5 * 60 * 1000 },
       transports: ['websocket', 'polling'],

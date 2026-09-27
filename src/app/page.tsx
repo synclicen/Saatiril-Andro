@@ -200,7 +200,9 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
       })
     })
 
-    // Also send periodic REQUEST_STATE every 10 seconds for sync resilience
+    // Also send periodic REQUEST_STATE every 3 seconds for sync resilience
+    // (matches admin's 3s SYNC_DB broadcast — faster sync recovery after
+    // WiFi outage + ensures the operator/MC always have the latest state).
     const syncInterval = setInterval(() => {
       if (socket.connected) {
         socket.emit('lan-message', {
@@ -208,7 +210,7 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
           data: { role: role, channel: channelNum }
         })
       }
-    }, 10000)
+    }, 3000)
 
     // Load any cached projects from localStorage (for offline resilience).
     // If the admin is temporarily offline, the MC/Operator can still see
