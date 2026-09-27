@@ -48,7 +48,7 @@ class SocketManager {
             SocketEvents.STUDENT_RESET
         )
         private const val MAX_QUEUE_SIZE = 2000  // was 100, raised for 4000+ participant ceremonies (mirrors Electron socket.ts MAX_QUEUE_SIZE)
-        private const val MAX_RETRIES = 5       // was 3, more retries for crowded WiFi
+        private const val MAX_RETRIES = 20    // was 5 — too few for 4000+ participants with WiFi issues. 20 retries = events are almost never dropped (mirrors Electron socket.ts).
 
         fun sha256(input: String): String {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -157,9 +157,9 @@ class SocketManager {
                 transports = arrayOf("websocket", "polling")
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE  // Never give up during ceremony!
-                reconnectionDelay = 500              // Start faster (500ms instead of 1000ms)
-                reconnectionDelayMax = 5_000         // Max 5s between retries (faster recovery)
-                timeout = 10_000                      // 10s timeout (was 15s, faster fail detection)
+                reconnectionDelay = 300              // Start at 300ms (faster reconnect for instant recovery — mirrors Electron)
+                reconnectionDelayMax = 3_000         // Max 3s between retries (faster recovery from WiFi outage — mirrors Electron)
+                timeout = 5_000                      // 5s timeout (faster fail detection — mirrors Electron)
                 forceNew = true
             }
 
