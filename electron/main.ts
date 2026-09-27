@@ -766,7 +766,6 @@ function startSocketServer(): Promise<void> {
             event: 'PHOTOS_SAVED',
             data: { ...payload.data, photos: [] },
           }
-          const strippedPacket = JSON.stringify(strippedPayload)
           for (const [id, clientInfo] of clientRegistry) {
             if (id === socket.id) continue
             if (!clientInfo.authenticated) continue
