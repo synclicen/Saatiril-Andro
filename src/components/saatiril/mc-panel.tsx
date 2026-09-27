@@ -1294,7 +1294,10 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
         className="flex items-center justify-center h-full"
         style={{ backgroundColor: THEME.bg, color: THEME.muted }}
       >
-        <p className="text-sm opacity-60">Belum ada proyek aktif</p>
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="size-8 animate-spin" style={{ color: THEME.gold }} />
+          <p className="text-sm opacity-60">Memuat proyek...</p>
+        </div>
       </div>
     )
   }
