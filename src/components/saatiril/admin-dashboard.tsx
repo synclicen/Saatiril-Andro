@@ -609,19 +609,15 @@ export default function AdminDashboard() {
     }
     onLocal('BLE_TRIGGER', handleBLETrigger)
 
-    // ── Periodic SYNC_DB broadcast (every 10s) ──────────────────────────────
+    // ── Periodic SYNC_DB broadcast (every 3s) ──────────────────────────────
     // Ensures ALL connected clients (even pending_auth — wrong/no session
-    // password) receive the current project. The server's lan-message relay
-    // sends to ALL sockets regardless of the RECEIVER's auth, so even
-    // pending_auth clients receive + process the SYNC_DB (the client-side
-    // lan-message handler doesn't check auth). This fixes "Belum ada proyek
-    // aktif" on Operator/MC when:
-    //   1. They connect AFTER the admin created the project (missed the
-    //      initial SYNC_DB emission from project-setup).
-    //   2. They're in pending_auth (wrong/no session password) → their
-    //      REQUEST_STATE is ignored by the server → the admin's
-    //      handleRequestState never fires → no SYNC_DB response.
-    // The periodic broadcast ensures they get the project within 10s.
+    // password) receive the current project FAST. The server's lan-message
+    // relay sends to ALL sockets regardless of the RECEIVER's auth, so even
+    // pending_auth clients receive + process the SYNC_DB. This fixes the
+    // "Belum ada proyek aktif" flash the user sees: the operator/MC start with
+    // currentProject=null (showing "Belum ada proyek aktif") until the project
+    // arrives via this broadcast (or via REQUEST_STATE if authenticated). With
+    // a 3s interval, the max delay is 3s — the "Belum" screen barely flashes.
     const syncInterval = setInterval(() => {
       const curProj = useSaatirilStore.getState().currentProject
       if (!curProj) return
@@ -631,7 +627,7 @@ export default function AdminDashboard() {
         photoHistory: curProj.photoHistory.map((h: any) => ({ ...h, photos: [] })),
       }
       emitLocal('SYNC_DB', { project: stripped })
-    }, 10000)
+    }, 3000)
 
     return () => {
       clearInterval(syncInterval)
