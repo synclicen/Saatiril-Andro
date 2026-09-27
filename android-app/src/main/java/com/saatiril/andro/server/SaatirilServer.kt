@@ -571,11 +571,33 @@ object SaatirilServer {
         val data = obj.get("data")
         totalMessagesRelayed++
 
-        // 1) Relay to all OTHER authenticated clients (dumb relay, matches Node server)
+        // 1) Relay to all OTHER authenticated clients.
+        // CRITICAL FIX (mirrors electron/main.ts d8615e1): DON'T relay
+        // PHOTOS_SAVED to MC/Operator — only to admin-role clients. The
+        // PHOTOS_SAVED payload carries 1-5MB of base64 photo data. If relayed
+        // to MC/Operator, socket.io may batch it with the preceding
+        // STUDENT_DONE (lightweight, ~50 bytes) into one WebSocket frame.
+        // The MC can't process STUDENT_DONE until the ENTIRE frame (including
+        // 5MB) downloads over WiFi — causing a multi-second delay before MC
+        // can call the next student. By NOT relaying PHOTOS_SAVED to MC/
+        // Operator, their WebSocket only receives STUDENT_DONE (instant) →
+        // MC unblocks immediately. MC/Operator get the status update via the
+        // admin's 3s periodic SYNC_DB broadcast. The admin (role='admin')
+        // is the only one that needs PHOTOS_SAVED (to save photos to disk).
         val relayPacket = EngineIO.encodeSioEvent("lan-message", obj)
-        sessions.values.toList().forEach { s ->
-            if (s.sid != session.sid && s.authenticated) {
-                sendToSession(s, relayPacket)
+        if (event == "PHOTOS_SAVED") {
+            // Only relay to admin-role clients (not MC/Operator)
+            sessions.values.toList().forEach { s ->
+                if (s.sid != session.sid && s.authenticated && s.role == "admin") {
+                    sendToSession(s, relayPacket)
+                }
+            }
+        } else {
+            // All other events: relay to ALL authenticated clients (dumb relay)
+            sessions.values.toList().forEach { s ->
+                if (s.sid != session.sid && s.authenticated) {
+                    sendToSession(s, relayPacket)
+                }
             }
         }
 
