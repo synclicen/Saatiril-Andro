@@ -752,31 +752,6 @@ function startSocketServer(): Promise<void> {
           }
           return
         }
-        // ── Relay PHOTOS_SAVED smartly: full to admin, stripped to MC/Operator ─
-        // PHOTOS_SAVED carries 1-5MB of base64 photo data. Relaying the full
-        // payload to MC/Operator causes socket.io to BATCH it with the preceding
-        // STUDENT_DONE (lightweight) → MC can't process STUDENT_DONE until the
-        // 5MB frame downloads over WiFi → multi-second delay.
-        // FIX: relay the FULL payload to admin (needs photos for disk save) +
-        // a STRIPPED version (photos: [] — ~100 bytes) to MC/Operator. The MC
-        // processes the stripped version for completion check (marks student
-        // 'done') WITHOUT downloading 5MB. The admin gets the full photos.
-        if (payload.event === 'PHOTOS_SAVED') {
-          const strippedPayload = {
-            event: 'PHOTOS_SAVED',
-            data: { ...payload.data, photos: [] },
-          }
-          for (const [id, clientInfo] of clientRegistry) {
-            if (id === socket.id) continue
-            if (clientInfo.role === 'unknown' || clientInfo.role === 'pending_auth') continue
-            if (clientInfo.role === 'admin') {
-              socketServer!.sockets.sockets.get(id)?.emit('lan-message', payload)
-            } else {
-              socketServer!.sockets.sockets.get(id)?.emit('lan-message', strippedPayload)
-            }
-          }
-          return
-        }
         socket.broadcast.emit('lan-message', payload)
       })
 

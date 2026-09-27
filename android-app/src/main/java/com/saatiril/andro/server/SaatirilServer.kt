@@ -571,40 +571,11 @@ object SaatirilServer {
         val data = obj.get("data")
         totalMessagesRelayed++
 
-        // 1) Relay to all OTHER authenticated clients.
-        // CRITICAL FIX (mirrors electron/main.ts): relay PHOTOS_SAVED smartly.
-        // FULL payload (1-5MB base64 photos) to admin (needs photos for disk
-        // save). STRIPPED payload (photos: [] — ~100 bytes) to MC/Operator.
-        // The stripped version lets MC check completion + mark 'done' WITHOUT
-        // downloading 5MB (which blocked the WebSocket + delayed STUDENT_DONE).
+        // 1) Relay to all OTHER authenticated clients (dumb relay, matches Node server)
         val relayPacket = EngineIO.encodeSioEvent("lan-message", obj)
-        if (event == "PHOTOS_SAVED") {
-            val strippedData = (data as? JsonObject)?.let { d ->
-                JsonObject().apply {
-                    d.entrySet().forEach { (k, v) -> if (k != "photos") add(k, v) }
-                    add("photos", com.google.gson.JsonArray())
-                }
-            } ?: data
-            val strippedObj = JsonObject().apply {
-                addProperty("event", "PHOTOS_SAVED")
-                add("data", strippedData)
-            }
-            val strippedPacket = EngineIO.encodeSioEvent("lan-message", strippedObj)
-            sessions.values.toList().forEach { s ->
-                if (s.sid != session.sid && s.authenticated) {
-                    if (s.role == "admin") {
-                        sendToSession(s, relayPacket)        // full payload to admin
-                    } else {
-                        sendToSession(s, strippedPacket)     // stripped to MC/Operator
-                    }
-                }
-            }
-        } else {
-            // All other events: relay to ALL authenticated clients (dumb relay)
-            sessions.values.toList().forEach { s ->
-                if (s.sid != session.sid && s.authenticated) {
-                    sendToSession(s, relayPacket)
-                }
+        sessions.values.toList().forEach { s ->
+            if (s.sid != session.sid && s.authenticated) {
+                sendToSession(s, relayPacket)
             }
         }
 
