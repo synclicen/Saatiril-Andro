@@ -768,7 +768,7 @@ function startSocketServer(): Promise<void> {
           }
           for (const [id, clientInfo] of clientRegistry) {
             if (id === socket.id) continue
-            if (!clientInfo.authenticated) continue
+            if (clientInfo.role === 'unknown' || clientInfo.role === 'pending_auth') continue
             if (clientInfo.role === 'admin') {
               socketServer!.sockets.sockets.get(id)?.emit('lan-message', payload)
             } else {
