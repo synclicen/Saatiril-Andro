@@ -752,21 +752,28 @@ function startSocketServer(): Promise<void> {
           }
           return
         }
-        // ── Don't relay PHOTOS_SAVED to MC/Operator — only to admin ────────
-        // PHOTOS_SAVED carries 1-5MB of base64 photo data. If relayed to MC/
-        // Operator, socket.io may BATCH it with the preceding STUDENT_DONE
-        // (lightweight, ~50 bytes) into one WebSocket frame. The MC can't
-        // process STUDENT_DONE until the ENTIRE frame (including 5MB) downloads
-        // over WiFi — causing a multi-second delay before MC can call the next
-        // student. By NOT relaying PHOTOS_SAVED to MC/Operator, their WebSocket
-        // only receives STUDENT_DONE (instant) → MC unblocks immediately.
-        // MC/Operator get the status update (student='done') via the admin's 3s
-        // periodic SYNC_DB broadcast instead. The admin (role='admin') is the
-        // only one that needs PHOTOS_SAVED (to save photos to disk + display).
+        // ── Relay PHOTOS_SAVED smartly: full to admin, stripped to MC/Operator ─
+        // PHOTOS_SAVED carries 1-5MB of base64 photo data. Relaying the full
+        // payload to MC/Operator causes socket.io to BATCH it with the preceding
+        // STUDENT_DONE (lightweight) → MC can't process STUDENT_DONE until the
+        // 5MB frame downloads over WiFi → multi-second delay.
+        // FIX: relay the FULL payload to admin (needs photos for disk save) +
+        // a STRIPPED version (photos: [] — ~100 bytes) to MC/Operator. The MC
+        // processes the stripped version for completion check (marks student
+        // 'done') WITHOUT downloading 5MB. The admin gets the full photos.
         if (payload.event === 'PHOTOS_SAVED') {
+          const strippedPayload = {
+            event: 'PHOTOS_SAVED',
+            data: { ...payload.data, photos: [] },
+          }
+          const strippedPacket = JSON.stringify(strippedPayload)
           for (const [id, clientInfo] of clientRegistry) {
-            if (clientInfo.role === 'admin' && id !== socket.id) {
+            if (id === socket.id) continue
+            if (!clientInfo.authenticated) continue
+            if (clientInfo.role === 'admin') {
               socketServer!.sockets.sockets.get(id)?.emit('lan-message', payload)
+            } else {
+              socketServer!.sockets.sockets.get(id)?.emit('lan-message', strippedPayload)
             }
           }
           return

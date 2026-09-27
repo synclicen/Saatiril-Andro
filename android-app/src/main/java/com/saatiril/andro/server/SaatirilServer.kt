@@ -572,24 +572,31 @@ object SaatirilServer {
         totalMessagesRelayed++
 
         // 1) Relay to all OTHER authenticated clients.
-        // CRITICAL FIX (mirrors electron/main.ts d8615e1): DON'T relay
-        // PHOTOS_SAVED to MC/Operator — only to admin-role clients. The
-        // PHOTOS_SAVED payload carries 1-5MB of base64 photo data. If relayed
-        // to MC/Operator, socket.io may batch it with the preceding
-        // STUDENT_DONE (lightweight, ~50 bytes) into one WebSocket frame.
-        // The MC can't process STUDENT_DONE until the ENTIRE frame (including
-        // 5MB) downloads over WiFi — causing a multi-second delay before MC
-        // can call the next student. By NOT relaying PHOTOS_SAVED to MC/
-        // Operator, their WebSocket only receives STUDENT_DONE (instant) →
-        // MC unblocks immediately. MC/Operator get the status update via the
-        // admin's 3s periodic SYNC_DB broadcast. The admin (role='admin')
-        // is the only one that needs PHOTOS_SAVED (to save photos to disk).
+        // CRITICAL FIX (mirrors electron/main.ts): relay PHOTOS_SAVED smartly.
+        // FULL payload (1-5MB base64 photos) to admin (needs photos for disk
+        // save). STRIPPED payload (photos: [] — ~100 bytes) to MC/Operator.
+        // The stripped version lets MC check completion + mark 'done' WITHOUT
+        // downloading 5MB (which blocked the WebSocket + delayed STUDENT_DONE).
         val relayPacket = EngineIO.encodeSioEvent("lan-message", obj)
         if (event == "PHOTOS_SAVED") {
-            // Only relay to admin-role clients (not MC/Operator)
+            val strippedData = (data as? JsonObject)?.let { d ->
+                JsonObject().apply {
+                    d.entrySet().forEach { (k, v) -> if (k != "photos") add(k, v) }
+                    add("photos", com.google.gson.JsonArray())
+                }
+            } ?: data
+            val strippedObj = JsonObject().apply {
+                addProperty("event", "PHOTOS_SAVED")
+                add("data", strippedData)
+            }
+            val strippedPacket = EngineIO.encodeSioEvent("lan-message", strippedObj)
             sessions.values.toList().forEach { s ->
-                if (s.sid != session.sid && s.authenticated && s.role == "admin") {
-                    sendToSession(s, relayPacket)
+                if (s.sid != session.sid && s.authenticated) {
+                    if (s.role == "admin") {
+                        sendToSession(s, relayPacket)        // full payload to admin
+                    } else {
+                        sendToSession(s, strippedPacket)     // stripped to MC/Operator
+                    }
                 }
             }
         } else {
