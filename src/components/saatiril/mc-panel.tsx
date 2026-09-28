@@ -197,13 +197,27 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
   // This event fires BEFORE the heavy PHOTOS_SAVED payload arrives, so MC
   // can immediately call the next student without waiting for photo transfer.
   useEffect(() => {
-    const handleStudentDone = (data: { studentId: string; channel: number }) => {
+    const handleStudentDone = (data: { studentId: string; channel: number; _relayed?: boolean }) => {
       if (photoshoot) return // photoshoot mode uses PHOTOS_SAVED for channel completion
       if (data.channel !== myChannelRef.current) return
       console.log('[SAATIRIL MC] STUDENT_DONE received — immediate unblock:', data.studentId, 'Ch.', data.channel)
       updateStudentStatus(data.studentId, 'done')
       setOpProgressText('')
       saveProjectsToStorageNow()
+      // ── Re-emit STUDENT_DONE from the admin's side for browser MC clients ──
+      // The admin's MC panel (portable.exe) gets STUDENT_DONE via the relay
+      // (admin's socket → server is localhost = instant) — that's why the
+      // portable's MC unblocks instantly. But a browser MC Page on a SEPARATE
+      // device gets STUDENT_DONE from the OPERATOR APP (operator → WiFi →
+      // server → WiFi → browser MC = 2 WiFi hops, AND may be batched behind
+      // the heavy PHOTOS_SAVED 5MB → stuck for seconds). By re-emitting from
+      // the admin (localhost → server → WiFi → browser MC = only 1 WiFi hop,
+      // ~50 bytes, instant), the browser MC Page gets unblocked FAST — matching
+      // the portable's instant behaviour. The _relayed flag prevents infinite
+      // loops (a re-emitted event won't re-emit again).
+      if (!data._relayed) {
+        emitLocal('STUDENT_DONE', { ...data, _relayed: true })
+      }
     }
 
     onLocal('STUDENT_DONE', handleStudentDone)
