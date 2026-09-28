@@ -889,6 +889,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           photos: allPhotos,
           channel: myChannel,
         }
+        saveProjectsToStorageNow()
         setMcCallBuffer((prev) => prev.filter((s) => s.id !== student.id))
 
         // ── VERSIONED FILENAME ────────────────────────────────────────────────
@@ -901,9 +902,6 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         console.log('[SAATIRIL OP] Emitting PHOTOS_SAVED for student:', student.nama, 'channel:', myChannel, 'version:', version)
 
         // PHOTOS_SAVED for Admin/gallery (contains photos for display + version)
-        // CRITICAL: emit BEFORE saveProjectsToStorageNow() — the localStorage
-        // save is SYNCHRONOUS + blocks the thread for 100-500ms (4000 students).
-        // Emitting FIRST ensures the admin + MC get the event instantly.
         emitLocal('PHOTOS_SAVED', {
           student: { ...student, status: student.status },
           photos: allPhotos,
@@ -991,6 +989,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           photos: allPhotos,
           channel: myChannel,
         }
+        updateStudentStatus(student.id, 'done')
+        saveProjectsToStorageNow()
 
         // ── VERSIONED FILENAMES ───────────────────────────────────────────────
         // Standard mode: 2 photos (Toga + Ijazah), both share the same version.
@@ -1005,9 +1005,6 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
         // PRIORITY 1: STUDENT_DONE — lightweight event for IMMEDIATE MC unblocking
         // This fires BEFORE the heavy PHOTOS_SAVED so MC can call next student instantly
-        // CRITICAL: emit BEFORE any local state updates or localStorage saves —
-        // those are SYNCHRONOUS + BLOCK the thread for 100-500ms (4000 students),
-        // delaying STUDENT_DONE. The Fullset emits FIRST, then does local state.
         emitLocal('STUDENT_DONE', {
           studentId: student.id,
           channel: myChannel,
