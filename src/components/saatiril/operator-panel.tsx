@@ -223,35 +223,14 @@ interface SyncDbData {
 export interface OperatorPanelProps {
   isAppFullscreen?: boolean
   onToggleAppFullscreen?: () => void
-  /**
-   * Whether the camera should be active (getUserMedia held). When false, the
-   * camera tracks are released so ANOTHER app (e.g. the Operator Electron App
-   * on the same laptop) can use the camera. The admin's portable.exe passes
-   * cameraActive={activeView === 'live'} so its (always-mounted) OperatorPanel
-   * only holds the camera when the admin is actually viewing the Operator —
-   * freeing it for the Operator App while the admin is on the Admin/MC tab.
-   * The Operator Electron App uses the default (true) since it's the main view.
-   * Socket listeners + state (mcCallBuffer etc.) stay active regardless.
-   */
-  cameraActive?: boolean
 }
 
-export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, cameraActive = true }: OperatorPanelProps) {
+export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen }: OperatorPanelProps) {
   const isMobile = useIsMobile()
   const { toast } = useToast()
 
   // ── Store ────────────────────────────────────────────────────────────────
   const currentProject = useSaatirilStore((s) => s.currentProject)
-  // Boolean mirror — used as a dep in the camera useEffect so the camera
-  // re-starts when the project loads (the <video> element isn't rendered while
-  // !currentProject — the 'Belum ada proyek aktif' screen shows instead, so
-  // videoRef.current is null + the stream can't attach). When the project
-  // loads, hasProject flips false→true → the useEffect re-runs → startCamera
-  // re-obtains the stream + attaches it to the now-rendered <video> element.
-  // Without this, the camera showed black in wisuda mode (operator started
-  // before the project loaded → stream obtained but unattached → video element
-  // rendered later but the useEffect didn't re-run → stream stayed unattached).
-  const hasProject = !!currentProject
   const myChannel = useSaatirilStore((s) => s.myChannel)
   const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTarget)
   const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotos)
@@ -353,7 +332,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     const observer = new ResizeObserver(updateSize)
     observer.observe(zone)
     return () => observer.disconnect()
-  }, [aspectRatio, isMobile, hasProject])
+  }, [aspectRatio, isMobile])
 
   // ── Preload frame image ──────────────────────────────────────────────────
   useEffect(() => {
@@ -535,34 +514,22 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         await enumerateVideoDevices()
       } catch (err) {
         console.error('[SAATIRIL OP] Camera access failed:', err)
-        // Fallback: retry with looser constraints. Helps capture cards (Elgato
-        // Cam Link, Blackmagic, AverMedia, etc.) that may not support the ideal
-        // 1920x1080 constraint, professional cameras via capture card that
-        // output at non-standard resolutions/frame rates, and mobile devices
-        // where facingMode fails. Without this fallback, a capture card that
-        // can't do 1080p-ideal would show 'camera not available' even though
-        // it can stream at its native resolution.
-        try {
-          let fallbackConstraints: MediaStreamConstraints
-          if (deviceId) {
-            // Desktop / capture card: retry with JUST the deviceId (drop the
-            // resolution constraint so the card streams at its native resolution).
-            fallbackConstraints = { video: { deviceId: { exact: deviceId } }, audio: false }
-          } else if (isMobile) {
-            // Mobile: retry without facingMode (some phones reject 'environment').
-            fallbackConstraints = { video: { width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }
-          } else {
-            // Desktop default (no device selected): retry with the most permissive.
-            fallbackConstraints = { video: true, audio: false }
+        if (isMobile && !deviceId) {
+          try {
+            const fallbackConstraints: MediaStreamConstraints = {
+              video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+              audio: false,
+            }
+            const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+            streamRef.current = stream
+            setCameraAvailable(true)
+            if (videoRef.current) videoRef.current.srcObject = stream
+            await enumerateVideoDevices()
+          } catch (fallbackErr) {
+            console.error('[SAATIRIL OP] Camera fallback also failed:', fallbackErr)
+            setCameraAvailable(false)
           }
-          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
-          streamRef.current = stream
-          setCameraAvailable(true)
-          if (videoRef.current) videoRef.current.srcObject = stream
-          await enumerateVideoDevices()
-          console.log('[SAATIRIL OP] Camera fallback succeeded (looser constraints)')
-        } catch (fallbackErr) {
-          console.error('[SAATIRIL OP] Camera fallback also failed:', fallbackErr)
+        } else {
           setCameraAvailable(false)
         }
       }
@@ -571,53 +538,21 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   )
 
   useEffect(() => {
-    // Gate the camera on cameraActive: when the admin's OperatorPanel is hidden
-    // (admin on Admin/MC tab), release the camera so the Operator Electron App
-    // (if running on the same laptop) can use it. When cameraActive becomes
-    // true (admin switches to Live/Operator view), re-start the camera.
-    if (cameraActive) {
-      queueMicrotask(() => void startCamera())
-    }
+    queueMicrotask(() => void startCamera())
     return () => {
-      // Always release on cleanup (unmount OR cameraActive flip to false).
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
     }
-  }, [startCamera, cameraActive])
+  }, [startCamera])
 
   useEffect(() => {
-    // Re-attach the EXISTING camera stream to the <video> element when the
-    // project loads (the <video> wasn't rendered while !currentProject — the
-    // 'Belum ada proyek aktif' screen showed instead, so videoRef.current was
-    // null + the stream couldn't attach on the initial startCamera). When the
-    // project loads, hasProject flips false→true → the <video> renders → this
-    // effect re-attaches the existing stream (NO stop/re-obtain — that raced on
-    // Windows + caused 'NO CAMERA SIGNAL'). This is why wisuda camera showed
-    // black: the operator started before the project loaded → stream obtained
-    // but unattached → video element rendered later but the camera useEffect
-    // didn't re-run → stream stayed unattached. In photoshoot the project was
-    // often already loaded (localStorage) so the <video> rendered immediately.
-    if (streamRef.current && videoRef.current) {
-      videoRef.current.srcObject = streamRef.current
-    }
-  }, [hasProject])
-
-  useEffect(() => {
-    // Gate on cameraActive too — otherwise selecting/changing a device while the
-    // admin's OperatorPanel is hidden (admin on Admin/MC tab, cameraActive=false)
-    // would call startCamera(selectedDeviceId) and GRAB the camera even though
-    // the admin isn't viewing the Operator → the Operator Electron App (if
-    // running on the same laptop) can't activate its camera (NotReadableError).
-    // This was the root cause of the dual-photoshoot camera conflict: device
-    // selections triggered by the channel selector / device list bypassed the
-    // cameraActive gate. Now the camera only starts when cameraActive is true.
-    if (cameraActive && selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
+    if (selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
       selectedDeviceRef.current = selectedDeviceId
       queueMicrotask(() => void startCamera(selectedDeviceId))
     }
-  }, [selectedDeviceId, startCamera, cameraActive])
+  }, [selectedDeviceId, startCamera])
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices) return

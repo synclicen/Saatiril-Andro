@@ -788,13 +788,10 @@ export function MainApp() {
             ) : (
               // Always mounted (hidden) so OperatorPanel socket listeners +
               // mcCallBuffer persist — admin can take over Operator instantly.
-              // cameraActive={false}: the hidden instance releases the camera so
-              // the Operator Electron App (if running on the same laptop) can use it.
               <div className="hidden">
                 <OperatorPanel
                   isAppFullscreen={appFullscreen}
                   onToggleAppFullscreen={toggleAppFullscreen}
-                  cameraActive={false}
                 />
               </div>
             )}
@@ -917,7 +914,6 @@ export function MainApp() {
                     <OperatorPanel
                       isAppFullscreen={appFullscreen}
                       onToggleAppFullscreen={toggleAppFullscreen}
-                      cameraActive={activeView === 'live'}
                     />
                   </div>
                 </ResizablePanel>
