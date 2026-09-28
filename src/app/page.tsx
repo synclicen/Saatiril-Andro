@@ -210,7 +210,7 @@ function ClientApp({ role }: { role: 'mc' | 'operator' }) {
           data: { role: role, channel: channelNum }
         })
       }
-    }, 3000)
+    }, 10000)
 
     // Load any cached projects from localStorage (for offline resilience).
     // If the admin is temporarily offline, the MC/Operator can still see

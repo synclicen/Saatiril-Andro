@@ -609,28 +609,7 @@ export default function AdminDashboard() {
     }
     onLocal('BLE_TRIGGER', handleBLETrigger)
 
-    // ── Periodic SYNC_DB broadcast (every 3s) ──────────────────────────────
-    // Ensures ALL connected clients (even pending_auth — wrong/no session
-    // password) receive the current project FAST. The server's lan-message
-    // relay sends to ALL sockets regardless of the RECEIVER's auth, so even
-    // pending_auth clients receive + process the SYNC_DB. This fixes the
-    // "Belum ada proyek aktif" flash the user sees: the operator/MC start with
-    // currentProject=null (showing "Belum ada proyek aktif") until the project
-    // arrives via this broadcast (or via REQUEST_STATE if authenticated). With
-    // a 3s interval, the max delay is 3s — the "Belum" screen barely flashes.
-    const syncInterval = setInterval(() => {
-      const curProj = useSaatirilStore.getState().currentProject
-      if (!curProj) return
-      const stripped = {
-        ...curProj,
-        config: { ...curProj.config, sessionPassword: curProj.config.sessionPassword != null ? '__PASSWORD_SET__' : null },
-        photoHistory: curProj.photoHistory.map((h: any) => ({ ...h, photos: [] })),
-      }
-      emitLocal('SYNC_DB', { project: stripped })
-    }, 3000)
-
     return () => {
-      clearInterval(syncInterval)
       offLocal('PHOTOS_SAVED', handlePhotosSaved)
       offLocal('SYNC_DB', handleSyncDb)
       offLocal('MC_CALL', handleMcCallAlways)

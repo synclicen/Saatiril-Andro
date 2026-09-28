@@ -306,7 +306,7 @@ const eventQueue: QueuedEvent[] = []
 // 4000+ participant event are never dropped from the offline queue during
 // extended WiFi congestion.
 const MAX_QUEUE_SIZE = 2000
-const MAX_RETRIES = 20    // Was 5 — too few for 4000+ participants with WiFi issues. 20 retries = events are almost never dropped.
+const MAX_RETRIES = 5     // More retries for unreliable WiFi
 const CRITICAL_EVENTS = new Set(['PHOTOS_SAVED', 'MC_CALL', 'SYNC_DB', 'STUDENT_DONE', 'STUDENT_RESET'])
 
 // ─── Pending session password ──────────────────────────────────────────────
@@ -371,9 +371,9 @@ export function connectSocket(): Socket {
     forceNew: true,
     reconnection: true,
     reconnectionAttempts: Infinity,    // Never give up during ceremony!
-    reconnectionDelay: 300,            // Start at 300ms (faster reconnect for instant recovery)
-    reconnectionDelayMax: 3000,        // Max 3s between retries (faster recovery from WiFi outage)
-    timeout: 5000,                     // 5s connection timeout (faster fail detection)
+    reconnectionDelay: 500,            // Start at 500ms (faster for crowded WiFi)
+    reconnectionDelayMax: 5000,        // Max 5s between retries (faster recovery)
+    timeout: 10000,                    // 10s connection timeout (faster fail detection)
   }
 
   // For sandbox/web mode, add XTransformPort as a query parameter
