@@ -2335,7 +2335,7 @@ export default function AdminDashboard() {
             <div className="flex flex-1 flex-col gap-1">
               <div className="flex h-20 items-center justify-center overflow-hidden rounded-md bg-[#2a164a]/80 border border-[#533485]/30">
                 {photos[0] ? (
-                  <img src={photos[0]} alt="Foto" className="h-full w-full object-cover" />
+                  <img src={photos[0]} alt="Foto" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                 ) : (
                   <ImageIcon className="size-5 text-[#533485]" />
                 )}
@@ -2393,7 +2393,7 @@ export default function AdminDashboard() {
           <div className="flex flex-1 flex-col gap-1">
             <div className="flex h-16 items-center justify-center overflow-hidden rounded-md bg-[#2a164a]/80 border border-[#533485]/30">
               {photos[0] ? (
-                <img src={photos[0]} alt="Toga" className="h-full w-full object-cover" />
+                <img src={photos[0]} alt="Toga" loading="lazy" decoding="async" className="h-full w-full object-cover" />
               ) : (
                 <ImageIcon className="size-5 text-[#533485]" />
               )}
@@ -2406,7 +2406,7 @@ export default function AdminDashboard() {
           <div className="flex flex-1 flex-col gap-1">
             <div className="flex h-16 items-center justify-center overflow-hidden rounded-md bg-[#2a164a]/80 border border-[#533485]/30">
               {photos[1] ? (
-                <img src={photos[1]} alt="Ijazah" className="h-full w-full object-cover" />
+                <img src={photos[1]} alt="Ijazah" loading="lazy" decoding="async" className="h-full w-full object-cover" />
               ) : (
                 <ImageIcon className="size-5 text-[#533485]" />
               )}
@@ -2433,7 +2433,7 @@ export default function AdminDashboard() {
             className="text-[10px] border-[#533485]/50"
             style={{ backgroundColor: 'rgba(212,175,55,0.15)', color: GOLD }}
           >
-            {photoHistory.length} foto
+            {photoHistory.length} foto{photoHistory.length > 30 ? ' (30 terbaru)' : ''}
           </Badge>
         </CardTitle>
       </CardHeader>
@@ -2453,8 +2453,17 @@ export default function AdminDashboard() {
           </div>
         ) : (
           <ScrollArea className="h-full">
+            {/* PERF: only render the 30 most-recent items (newest first) instead
+                of all 200. Each item has 1-2 <img src="data:...2.5MB"> tags —
+                rendering all 200 (= up to 400 images) on every PHOTOS_SAVED
+                blocked the admin's main thread for 100s of ms to seconds, which
+                delayed the NEXT student's STUDENT_DONE re-emit and caused
+                intermittent lag on the browser MC Page. The full 200 stay in
+                the store (for SYNC_DB + disk saves) — only the RENDER is capped.
+                Disk saves in handlePhotosSaved are unaffected (they use the full
+                photo data, not the rendered gallery). */}
             <div className="grid grid-cols-1 gap-3 pr-2 sm:grid-cols-2">
-              {photoHistory.map((item, idx) => renderPhotoItem(item, idx))}
+              {photoHistory.slice(-30).reverse().map((item, idx) => renderPhotoItem(item, idx))}
             </div>
           </ScrollArea>
         )}
