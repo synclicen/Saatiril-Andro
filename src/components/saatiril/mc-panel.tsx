@@ -359,24 +359,17 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
     const latestProject = useSaatirilStore.getState().currentProject
     if (!latestProject) return
 
+    // Imitate Saatiril-Fullset: simple map — only update the called student's
+    // status to active_N. No stale-reset scan (the O(n × photoHistory) scan on
+    // every call was the wisuda-specific slowdown — photoshoot uses
+    // handleSendToOperator so it was unaffected, which is why only wisuda felt
+    // slow). In normal flow STUDENT_DONE marks the previous student 'done'
+    // before the MC calls the next, so there are no stale active_N to reset.
     const updatedProject = {
       ...latestProject,
-      database: latestProject.database.map((s) => {
-        if (s.id === nextPending.id) return { ...s, status: newStatus }
-        // Wisuda sequential: reset any OTHER stale 'active_N' on this channel.
-        // Only 1 student should be 'active_N' at a time. When the MC moves on to
-        // the next, a previously-called student that's still 'active_N' (not yet
-        // photographed → not 'done') goes back to 'pending' (queue), OR to 'done'
-        // if it was photographed (in photoHistory). Without this, stale 'active_N'
-        // accumulate in PROSES (user saw PROSES=8 when only 1 should be active).
-        if (s.status === `active_${myChannel}`) {
-          const photographed = latestProject.photoHistory.some(
-            (h) => h.student.id === s.id && h.channel === myChannel,
-          )
-          return { ...s, status: (photographed ? 'done' : 'pending') as StudentStatus }
-        }
-        return s
-      }),
+      database: latestProject.database.map((s) =>
+        s.id === nextPending.id ? { ...s, status: newStatus } : s
+      ),
     }
     updateCurrentProject(updatedProject)
     setOpProgressText('')
