@@ -530,7 +530,7 @@ export default function AdminDashboard() {
       })
       updateCurrentProject({ ...curProj, database: updatedDb })
       if (!isPs) {
-        useSaatirilStore.getState().setOpCurrentTarget({ ...data.student, status: newStatus })
+        useSaatirilStore.getState().setOpCurrentTarget({ ...data.student, status: newStatus }, data.channel)
       }
       const stripped = {
         ...curProj,

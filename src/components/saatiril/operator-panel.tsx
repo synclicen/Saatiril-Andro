@@ -271,11 +271,34 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // omitted, fall back to the store's myChannel (single-channel default).
   const myChannel = channel ?? storeChannel
   const setMyChannel = useSaatirilStore((s) => s.setMyChannel)
-  const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTarget)
-  const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotos)
-  const setOpCurrentTarget = useSaatirilStore((s) => s.setOpCurrentTarget)
-  const addOpCapturedPhoto = useSaatirilStore((s) => s.addOpCapturedPhoto)
-  const resetOpState = useSaatirilStore((s) => s.resetOpState)
+  // ── Per-channel operator state ──────────────────────────────────────
+  // The store keys opCurrentTargets / opCapturedPhotosByChannel by channel so
+  // that 2 OperatorPanel instances in the dual 50/50 layout (channel 1 +
+  // channel 2) each get their OWN target + photos — when channel 1 captures,
+  // channel 2's button + capturePhase stay unaffected (was the user's bug:
+  // channel 2's foto button activated + followed channel 1's captures).
+  const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTargets[myChannel] ?? null)
+  const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotosByChannel[myChannel] ?? [])
+  const _setOpCurrentTarget = useSaatirilStore((s) => s.setOpCurrentTarget)
+  const _addOpCapturedPhoto = useSaatirilStore((s) => s.addOpCapturedPhoto)
+  const _resetOpState = useSaatirilStore((s) => s.resetOpState)
+  // Wrappers that auto-pass myChannel so existing call sites stay unchanged
+  // (setOpCurrentTarget(target) / addOpCapturedPhoto(photo) / resetOpState()
+  // all route to THIS channel's slice). useCallback keeps identity stable
+  // across renders unless myChannel changes (then dependent useEffects
+  // correctly re-sync to the new channel's slice).
+  const setOpCurrentTarget = useCallback(
+    (target: Student | null) => _setOpCurrentTarget(target, myChannel),
+    [_setOpCurrentTarget, myChannel],
+  )
+  const addOpCapturedPhoto = useCallback(
+    (photo: string) => _addOpCapturedPhoto(photo, myChannel),
+    [_addOpCapturedPhoto, myChannel],
+  )
+  const resetOpState = useCallback(
+    (channel?: number) => _resetOpState(channel ?? myChannel),
+    [_resetOpState, myChannel],
+  )
   const updateStudentStatus = useSaatirilStore((s) => s.updateStudentStatus)
   const updateCurrentProject = useSaatirilStore((s) => s.updateCurrentProject)
   const saveProjectsToStorageNow = useSaatirilStore((s) => s.saveProjectsToStorageNow)
@@ -760,7 +783,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       setMcCallBuffer((prev) => prev.filter((s) => s.id !== data.studentId))
 
       // 2. Clear active target if it matches
-      setOpCurrentTarget((cur) => (cur?.id === data.studentId ? null : cur))
+      // Clear active target if it matches — read current (per-channel) + set.
+      // (Was a functional updater `setOpCurrentTarget((cur) => ...)` which the
+      // store action doesn't support — now reads fresh from getState + sets.)
+      const _cur = useSaatirilStore.getState().opCurrentTargets[myChannelRef.current] ?? null
+      setOpCurrentTarget(_cur?.id === data.studentId ? null : _cur)
 
       // 3. Remove this channel's photoHistory entry + reset status locally
       //    (bypasses mergeDatabases priority which would otherwise ignore the
@@ -837,7 +864,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       // considered done. If our current target is now 'done' (because the OTHER
       // operator took the photo), clear our target + captured photos so we don't
       // take a redundant photo. This realizes the "1 camera is enough" rule.
-      const curTarget = useSaatirilStore.getState().opCurrentTarget
+      const curTarget = useSaatirilStore.getState().opCurrentTargets[myChannelRef.current] ?? null
       if (curTarget && doneIds.has(curTarget.id)) {
         console.log('[SAATIRIL OP] SYNC_DB: current target is now done — clearing (other operator finished):', curTarget.nama)
         resetOpState()
@@ -858,8 +885,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
       addOpCapturedPhoto(dataUrl)
 
-      const currentPhotos = useSaatirilStore.getState().opCapturedPhotos
-      const currentTarget = useSaatirilStore.getState().opCurrentTarget
+      const currentPhotos = useSaatirilStore.getState().opCapturedPhotosByChannel[myChannel] ?? []
+      const currentTarget = useSaatirilStore.getState().opCurrentTargets[myChannel] ?? null
       const photoCount = currentPhotos.length
       const currentMode = useSaatirilStore.getState().currentProject?.config.mode ?? 'single'
       const isPhotoshoot = isPhotoshootMode(currentMode)

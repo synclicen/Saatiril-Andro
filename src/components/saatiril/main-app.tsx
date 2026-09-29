@@ -415,7 +415,8 @@ export function MainApp() {
       updateCurrentProject({ ...curProj, database: updatedDb })
 
       // Set opCurrentTarget so operator panel picks it up when mounted
-      useSaatirilStore.getState().setOpCurrentTarget(updatedStudent)
+      // (per-channel — data.channel routes to the right channel's slice)
+      useSaatirilStore.getState().setOpCurrentTarget(updatedStudent, data.channel)
 
       // Broadcast SYNC_DB to all clients so browser MC + other operators
       // get the corrected status (matches Android pushSyncDb after handleMcCall)
@@ -434,7 +435,7 @@ export function MainApp() {
       )
       const cleanedHistory = curProj.photoHistory.filter((h: any) => h.student.id !== data.studentId)
       updateCurrentProject({ ...curProj, database: updatedDb, photoHistory: cleanedHistory })
-      useSaatirilStore.getState().setOpCurrentTarget(null)
+      useSaatirilStore.getState().setOpCurrentTarget(null, data.channel)
       console.log('[SAATIRIL MAIN] STUDENT_RESET processed:', data.studentId)
     }
     onLocal('STUDENT_RESET', handleStudentResetAlways)

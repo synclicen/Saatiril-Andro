@@ -363,9 +363,11 @@ interface SaatirilState {
   currentScreen: AppScreen
   currentTab: AppTab
 
-  // Operator state
-  opCurrentTarget: Student | null
-  opCapturedPhotos: string[]
+  // Operator state — PER-CHANNEL (keyed by channel number) so that 2
+  // OperatorPanel instances in the dual 50/50 layout (channel 1 + channel 2)
+  // don't share the same target/photos. Each channel has its own slice.
+  opCurrentTargets: Record<number, Student | null>
+  opCapturedPhotosByChannel: Record<number, string[]>
 
   // Actions
   setProjects: (projects: Project[]) => void
@@ -377,10 +379,10 @@ interface SaatirilState {
   setMyChannel: (channel: number) => void
   setCurrentScreen: (screen: AppScreen) => void
   setCurrentTab: (tab: AppTab) => void
-  setOpCurrentTarget: (target: Student | null) => void
-  setOpCapturedPhotos: (photos: string[]) => void
-  addOpCapturedPhoto: (photo: string) => void
-  resetOpState: () => void
+  setOpCurrentTarget: (target: Student | null, channel: number) => void
+  setOpCapturedPhotos: (photos: string[], channel: number) => void
+  addOpCapturedPhoto: (photo: string, channel: number) => void
+  resetOpState: (channel?: number) => void
   loadProjectsFromStorage: () => void
   saveProjectsToStorage: () => void
   saveProjectsToStorageNow: () => void
@@ -490,8 +492,8 @@ export const useSaatirilStore = create<SaatirilState>((set, get) => ({
   myChannel: 1,
   currentScreen: 'hub',
   currentTab: 'admin',
-  opCurrentTarget: null,
-  opCapturedPhotos: [],
+  opCurrentTargets: {},
+  opCapturedPhotosByChannel: {},
 
   setProjects: (projects) => set({ projects }),
   addProject: (project) => set((s) => {
@@ -588,10 +590,12 @@ export const useSaatirilStore = create<SaatirilState>((set, get) => ({
   setMyChannel: (channel) => set({ myChannel: channel }),
   setCurrentScreen: (screen) => set({ currentScreen: screen }),
   setCurrentTab: (tab) => set({ currentTab: tab }),
-  setOpCurrentTarget: (target) => set({ opCurrentTarget: target }),
-  setOpCapturedPhotos: (photos) => set({ opCapturedPhotos: photos }),
-  addOpCapturedPhoto: (photo) => set((s) => ({ opCapturedPhotos: [...s.opCapturedPhotos, photo] })),
-  resetOpState: () => set({ opCurrentTarget: null, opCapturedPhotos: [] }),
+  setOpCurrentTarget: (target, channel) => set((s) => ({ opCurrentTargets: { ...s.opCurrentTargets, [channel]: target } })),
+  setOpCapturedPhotos: (photos, channel) => set((s) => ({ opCapturedPhotosByChannel: { ...s.opCapturedPhotosByChannel, [channel]: photos } })),
+  addOpCapturedPhoto: (photo, channel) => set((s) => ({ opCapturedPhotosByChannel: { ...s.opCapturedPhotosByChannel, [channel]: [...(s.opCapturedPhotosByChannel[channel] ?? []), photo] } })),
+  resetOpState: (channel) => set((s) => channel
+    ? { opCurrentTargets: { ...s.opCurrentTargets, [channel]: null }, opCapturedPhotosByChannel: { ...s.opCapturedPhotosByChannel, [channel]: [] } }
+    : { opCurrentTargets: {}, opCapturedPhotosByChannel: {} }),
 
   loadProjectsFromStorage: () => {
     try {
