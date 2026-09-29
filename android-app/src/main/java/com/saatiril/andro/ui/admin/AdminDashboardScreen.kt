@@ -83,28 +83,23 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
         com.saatiril.andro.vpn.CeremonyModeManager.onPermissionResult(context, result.resultCode)
     }
 
-    // Google Drive backup folder picker (SAF)
+    // Google Drive backup folder picker (SAF) — PER-PROJECT (opt-in).
     val driveFolderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
-            viewModel.driveBackupManager.setBackupFolder(uri)
-        }
-    }
-    // Refresh upload stats periodically
-    var driveStats by remember { mutableStateOf<com.saatiril.andro.backup.UploadStats?>(null) }
-    var driveConnected by remember { mutableStateOf(viewModel.driveBackupManager.hasBackupFolder()) }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        while (true) {
-            try {
-                driveStats = viewModel.driveBackupManager.getStats()
-                driveConnected = viewModel.driveBackupManager.hasBackupFolder()
-            } catch (e: Exception) {
-                // Silently ignore stats errors — don't crash the dashboard
+            // Take persistable permission + save the Uri string to THIS
+            // project's config.driveFolder (per-project, not global).
+            val uriStr = viewModel.driveBackupManager.takeProjectBackupPermission(uri)
+            if (uriStr != null) {
+                viewModel.setProjectDriveFolder(uriStr)
             }
-            kotlinx.coroutines.delay(3000)
         }
     }
+    // PER-PROJECT drive connection state (derived from the current project's
+    // config.driveFolder, not the global DriveBackupManager folder). NOT
+    // auto-connected — null until the admin explicitly picks a folder.
+    val driveConnected = project?.config?.driveFolder != null
 
     val proj = project
     val db = proj?.database ?: emptyList()
@@ -306,56 +301,35 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                     Column(Modifier.weight(1f)) {
                         Text("Google Drive Backup", style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp))
                         Text(
-                            if (driveConnected) "Terhubung — upload otomatis aktif" else "Belum diatur — foto hanya tersimpan lokal",
+                            if (driveConnected) "Terhubung (proyek ini) — copy otomatis aktif" else "Per-proyek — belum diatur (foto hanya lokal)",
                             style = TextStyle(color = if (driveConnected) CYAN else MUTED, fontSize = 10.sp)
                         )
                     }
                 }
 
-                if (driveConnected && driveStats != null) {
-                    val stats = driveStats!!
-                    val uploaded = stats.totalUploaded
-                    val pending = stats.pending + stats.uploading
-                    val failed = stats.failed
-                    val totalAll = uploaded + pending + failed
-                    val progress = if (totalAll > 0) uploaded.toFloat() / totalAll else 0f
-
-                    // Progress bar
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Upload progress", style = TextStyle(color = MUTED, fontSize = 10.sp))
-                            Text("$uploaded / $totalAll", style = TextStyle(color = CYAN, fontSize = 10.sp, fontWeight = FontWeight.Bold))
-                        }
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                            color = CYAN, trackColor = BORDER
+                if (driveConnected) {
+                    // Show the project's drive folder Uri (per-project) + status.
+                    val driveFolder = project?.config?.driveFolder
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = PANEL.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            driveFolder ?: "",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Antri: ${stats.pending}", style = TextStyle(color = MUTED, fontSize = 9.sp))
-                            if (stats.uploading > 0) Text("Upload: ${stats.uploading}", style = TextStyle(color = GOLD, fontSize = 9.sp))
-                            if (failed > 0) Text("Gagal: $failed", style = TextStyle(color = RED, fontSize = 9.sp))
-                            Text("✓ $uploaded", style = TextStyle(color = GREEN, fontSize = 9.sp))
-                        }
                     }
-
-                    if (failed > 0) {
-                        OutlinedButton(
-                            onClick = { viewModel.driveBackupManager.retryAllFailed() },
-                            modifier = Modifier.fillMaxWidth().height(34.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AMBER),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, AMBER),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Retry $failed Gagal", fontSize = 10.sp)
-                        }
-                    }
-
+                    Text(
+                        "✅ Foto proyek ini otomatis di-copy ke folder di atas setelah disimpan lokal. " +
+                        "⚠️ Hanya berlaku untuk proyek ${project?.name ?: "ini"} — proyek lain perlu diatur folder-nya sendiri.",
+                        style = TextStyle(color = MUTED, fontSize = 9.sp)
+                    )
                     OutlinedButton(
-                        onClick = { viewModel.driveBackupManager.clearBackupFolder(); driveConnected = false },
+                        onClick = { viewModel.setProjectDriveFolder(null) },
                         modifier = Modifier.fillMaxWidth().height(34.dp),
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = RED),
@@ -364,7 +338,7 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                     ) {
                         Icon(Icons.Default.LinkOff, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Putuskan Backup", fontSize = 10.sp)
+                        Text("Putuskan Backup (proyek ini)", fontSize = 10.sp)
                     }
                 } else {
                     // Not connected — show "Pick folder" button + explanation
@@ -376,11 +350,12 @@ fun AdminDashboardScreen(viewModel: AdminViewModel) {
                     ) {
                         Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
                         Spacer(Modifier.width(6.dp))
-                        Text("Pilih Folder Google Drive", color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Pilih Folder untuk Proyek Ini", color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Text(
-                        "Foto tetap disimpan ke folder lokal HP, lalu di-upload otomatis ke Google Drive di background. " +
-                        "Tidak butuh internet saat prosesi — upload antri dan dikirim saat internet tersedia.",
+                        "Per-proyek — TIDAK otomatis terhubung saat membuat proyek. " +
+                        "Pilih folder untuk proyek INI saja. Tiap proyek bisa punya folder sendiri (atau tidak sama sekali). " +
+                        "Foto di-copy ke folder ini setelah disimpan lokal.",
                         style = TextStyle(color = MUTED, fontSize = 9.sp)
                     )
                 }

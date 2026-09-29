@@ -149,6 +149,97 @@ class DriveBackupManager(private val context: Context) {
     }
 
     /**
+     * Upload a single photo to a SPECIFIC project's backup folder (PER-PROJECT).
+     * @param treeUriString the project's driveFolder (SAF tree Uri string from
+     *   ProjectConfig.driveFolder). null/empty → skip (no backup for this
+     *   project — NOT auto-connected). Synchronous local SAF copy (fast —
+     *   called from Dispatchers.IO in AdminViewModel.handlePhotosSaved).
+     *   No retry queue (the global enqueueUpload has the queue; the per-project
+     *   case is a direct copy).
+     * @return true if the copy succeeded, false if skipped or failed.
+     */
+    fun uploadPhotoForProject(localUri: String, filename: String, treeUriString: String?): Boolean {
+        if (treeUriString.isNullOrEmpty()) {
+            Log.i(TAG, "uploadPhotoForProject: no driveFolder for this project — skipping (local save only)")
+            return false
+        }
+        val treeUri = try { Uri.parse(treeUriString) } catch (_: Exception) { return false }
+        // Reuse the core upload logic with the project's treeUri (not the global).
+        return uploadPhotoToTreeUri(localUri, filename, treeUri)
+    }
+
+    /** Core upload logic — shared by uploadPhoto (global) + uploadPhotoForProject (per-project). */
+    private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri): Boolean {
+        // Normalize tree URI to document URI (same fix as PhotoSaver)
+        val parentDocUri = normalizeToDocumentUri(treeUri)
+
+        return try {
+            val docUri = DocumentsContract.createDocument(
+                resolver,
+                parentDocUri,
+                MIME_JPEG,
+                filename
+            ) ?: run {
+                Log.e(TAG, "uploadPhotoToTreeUri FAILED: createDocument returned null for '$filename'")
+                return false
+            }
+
+            val input: InputStream = resolver.openInputStream(Uri.parse(localUri))
+                ?: run {
+                    Log.e(TAG, "uploadPhotoToTreeUri FAILED: cannot open input stream for $localUri")
+                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
+                    return false
+                }
+
+            val output: OutputStream = resolver.openOutputStream(docUri)
+                ?: run {
+                    Log.e(TAG, "uploadPhotoToTreeUri FAILED: cannot open output stream for $docUri")
+                    input.close()
+                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
+                    return false
+                }
+
+            input.use { inp ->
+                output.use { out ->
+                    val buffer = ByteArray(8192)
+                    var read: Int
+                    while (inp.read(buffer).also { read = it } > 0) {
+                        out.write(buffer, 0, read)
+                    }
+                    out.flush()
+                }
+            }
+
+            Log.i(TAG, "uploadPhotoToTreeUri SUCCESS: $filename → $docUri")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "uploadPhotoToTreeUri EXCEPTION for $filename — ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Set the Google Drive backup folder for a SPECIFIC project (per-project).
+     * Takes the persistable URI permission (Android global, but the Uri string
+     * is stored per-project in the caller's ProjectConfig.driveFolder). The
+     * caller (AdminDashboardScreen) saves the returned Uri string to the
+     * current project's config.
+     * @return the treeUri string to store in ProjectConfig.driveFolder, or null on failure.
+     */
+    fun takeProjectBackupPermission(treeUri: Uri): String? {
+        return try {
+            resolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            treeUri.toString()
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Could not take persistable URI permission: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Enqueue a photo for upload. Called after PhotoSaver.savePhoto() succeeds.
      * The actual upload is done by [DriveUploadWorker] in the background.
      */

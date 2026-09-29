@@ -47,7 +47,15 @@ data class ProjectConfig(
     @SerializedName("sessionPassword")
     val sessionPassword: String? = null,
     @SerializedName("localFolder")
-    val localFolder: String = ""
+    val localFolder: String = "",
+    // Per-project Google Drive / cloud backup folder (SAF tree Uri string).
+    // null = no backup for this project. NOT auto-connected on project
+    // creation — the admin explicitly picks a folder per-project via the
+    // Admin tab's Google Drive section. Each project can have its own
+    // folder (or none). The persistable URI permission is taken globally
+    // (Android limitation) but the Uri string is stored per-project here.
+    @SerializedName("driveFolder")
+    val driveFolder: String? = null
 ) {
     fun parseAspectRatio(): Float {
         val parts = ratio.split(":")

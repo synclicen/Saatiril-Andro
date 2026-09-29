@@ -936,9 +936,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     val savedUri = photoSaver.savePhoto(photo, filenames[i])
                     if (savedUri != null) {
                         Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
-                        // Enqueue Google Drive backup (async, non-blocking)
-                        val projName = _project.value?.name?.replace(" ", "_") ?: "Saatiril"
-                        driveBackupManager.enqueueUpload(filenames[i], savedUri.toString(), projName)
+                        // Per-project Google Drive backup (PER-PROJECT, opt-in).
+                        // uploadPhotoForProject uses THIS project's driveFolder
+                        // (null = no backup for this project — NOT auto-connected).
+                        // Synchronous local SAF copy on Dispatchers.IO (fast).
+                        driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder)
                     } else {
                         Log.e(TAG, "❌ Photo save returned null: ${filenames[i]} " +
                             "(savePhoto returned null — check PhotoSaver logs)")
@@ -1081,6 +1083,21 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         pushSyncDb()
     }
 
+    /**
+     * Set the CURRENT project's Google Drive backup folder (PER-PROJECT, opt-in).
+     * @param folderUri the SAF tree Uri string (from DriveBackupManager.
+     *   takeProjectBackupPermission), or null to disable backup for this project.
+     * Updates the project's config.driveFolder + persists. NOT auto-connected —
+     * the admin explicitly calls this per-project. Each project can have its
+     * own folder (or none).
+     */
+    fun setProjectDriveFolder(folderUri: String?) {
+        _project.value?.let { proj ->
+            _project.value = proj.copy(config = proj.config.copy(driveFolder = folderUri))
+            saveProjects()
+        }
+    }
+
     /** Broadcast the current project state to all clients (SYNC_DB). */
     fun pushSyncDb() {
         val proj = _project.value ?: return
@@ -1156,9 +1173,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val savedUri = photoSaver.savePhoto(photo, filename)
                     if (savedUri != null) {
-                        // Enqueue Google Drive backup (async, non-blocking)
-                        val projName = proj.name.replace(" ", "_")
-                        driveBackupManager.enqueueUpload(filename, savedUri.toString(), projName)
+                        // Per-project Google Drive backup (PER-PROJECT, opt-in).
+                        // Uses THIS project's driveFolder (null = no backup —
+                        // NOT auto-connected). Synchronous local SAF copy.
+                        driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to save photo $filename: ${e.message}")
