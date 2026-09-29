@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('create-folder', folderPath)
   },
 
-  savePhoto: (data: { base64Data: string; filename: string; targetFolder: string }): Promise<string | null> => {
+  savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)
   },
   countPhotos: (data: { targetFolder: string }): Promise<number> => {

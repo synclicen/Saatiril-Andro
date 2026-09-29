@@ -284,6 +284,11 @@ export default function AdminDashboard() {
                   base64Data: item.base64Data,
                   filename: item.filename,
                   targetFolder,
+                  // Per-project Google Drive backup folder (null = no backup
+                  // for this project). Passed to the Electron savePhoto IPC
+                  // which copies the photo to this folder after the local save.
+                  // NOT auto-connected — the admin explicitly sets it per-project.
+                  backupFolder: proj.config?.driveFolder ?? null,
                 })
                 if (p) {
                   console.log(`[SAATIRIL ADMIN] Photo saved to disk (Electron IPC, v${version}): ${item.filename} → ${p}`)
@@ -1499,13 +1504,16 @@ export default function AdminDashboard() {
     )
   }
 
-  // ── Render: Google Drive / Cloud Backup ──────────────────────────
+  // ── Render: Google Drive / Cloud Backup (PER-PROJECT, opt-in) ──────
   const renderGoogleDriveBackup = () => {
     const api = window.saatirilAPI
     if (!api?.isElectron || !api.selectBackupFolder) return null // Only show in Electron
 
-    const isConnected = backupFolder != null && backupStats?.connected === true
-    const totalFiles = backupStats?.totalFiles ?? 0
+    // PER-PROJECT drive folder (from the current project's config). NOT
+    // auto-connected on project creation — the admin explicitly picks a
+    // folder per-project. Each project can have its own folder (or none).
+    const driveFolder = currentProject?.config?.driveFolder ?? null
+    const isConnected = driveFolder != null
 
     return (
       <Card className={`${PANEL} shadow-lg`} style={{ borderColor: isConnected ? '#06b6d4' : BORDER }}>
@@ -1513,9 +1521,13 @@ export default function AdminDashboard() {
           <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-[#c4b5fd]">
             <CloudUpload className="size-4" style={{ color: isConnected ? '#06b6d4' : GOLD }} />
             Google Drive Backup
-            {isConnected && (
+            {isConnected ? (
               <span className="ml-auto text-xs font-normal" style={{ color: '#06b6d4' }}>
-                ● Terhubung
+                ● Terhubung (proyek ini)
+              </span>
+            ) : (
+              <span className="ml-auto text-xs font-normal" style={{ color: '#c4b5fd', opacity: 0.7 }}>
+                Per-proyek
               </span>
             )}
           </CardTitle>
@@ -1525,37 +1537,42 @@ export default function AdminDashboard() {
             <div className="flex flex-col gap-2">
               <div className="rounded-md bg-[#1a0b2e]/60 border border-[#533485]/50 p-2">
                 <p className="break-all text-xs font-mono" style={{ color: '#c4b5fd' }}>
-                  {backupFolder}
+                  {driveFolder}
                 </p>
               </div>
-              <div className="flex items-center justify-between text-xs">
-                <span style={{ color: '#c4b5fd' }}>Foto terbackup:</span>
-                <span className="font-bold" style={{ color: '#06b6d4' }}>{totalFiles} file</span>
-              </div>
               <p className="text-xs" style={{ color: '#c4b5fd' }}>
-                ✅ Foto otomatis di-copy ke folder ini setelah disimpan lokal.
-                Google Drive Desktop akan sync ke cloud.
+                ✅ Foto proyek ini otomatis di-copy ke folder di atas setelah
+                disimpan lokal. Google Drive Desktop akan sync ke cloud.
+              </p>
+              <p className="text-xs" style={{ color: '#c4b5fd', opacity: 0.7 }}>
+                ⚠️ Hanya berlaku untuk proyek <strong>{currentProject?.name ?? 'ini'}</strong>. Proyek lain perlu diatur folder-nya sendiri.
               </p>
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full text-xs"
                 style={{ borderColor: '#ef4444', color: '#ef4444' }}
-                onClick={async () => {
-                  await api.clearBackupFolder()
-                  setBackupFolder(null)
-                  setBackupStats({ connected: false, totalFiles: 0 })
+                onClick={() => {
+                  // Clear THIS project's drive folder (set to null).
+                  if (currentProject) {
+                    updateCurrentProject({
+                      ...currentProject,
+                      config: { ...currentProject.config, driveFolder: null },
+                    })
+                  }
                 }}
               >
                 <Link2Off className="size-3 mr-1" />
-                Putuskan Backup
+                Putuskan Backup (proyek ini)
               </Button>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
               <p className="text-xs" style={{ color: '#c4b5fd' }}>
-                Backup otomatis foto ke Google Drive atau folder cloud lain.
-                Foto tetap disimpan lokal dulu, lalu di-copy ke folder backup.
+                Backup otomatis foto ke Google Drive atau folder cloud lain —
+                <strong> per-proyek</strong>. TIDAK otomatis terhubung saat
+                membuat proyek. Aktifkan hanya untuk proyek yang membutuhkan,
+                tiap proyek bisa punya folder sendiri (atau tidak sama sekali).
               </p>
               <Button
                 size="sm"
@@ -1563,19 +1580,22 @@ export default function AdminDashboard() {
                 style={{ backgroundColor: '#06b6d4', color: '#1a0b2e' }}
                 onClick={async () => {
                   const folder = await api.selectBackupFolder()
-                  if (folder) {
-                    setBackupFolder(folder)
-                    const stats = await api.getBackupStats()
-                    setBackupStats(stats)
+                  if (folder && currentProject) {
+                    // Save the folder to THIS project's config (per-project).
+                    updateCurrentProject({
+                      ...currentProject,
+                      config: { ...currentProject.config, driveFolder: folder },
+                    })
                   }
                 }}
               >
                 <Folder className="size-4 mr-2" />
-                Pilih Folder Google Drive
+                Pilih Folder untuk Proyek Ini
               </Button>
               <p className="text-xs" style={{ color: '#c4b5fd', opacity: 0.6 }}>
                 💡 Install Google Drive for Desktop, lalu pilih folder
-                "G:\My Drive\Saatiril" untuk auto-sync ke cloud.
+                "G:\My Drive\Saatiril" untuk auto-sync ke cloud. Tiap proyek
+                bisa punya folder sendiri (atau tidak sama sekali).
               </p>
             </div>
           )}

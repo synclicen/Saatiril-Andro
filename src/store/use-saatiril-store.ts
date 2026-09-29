@@ -21,6 +21,11 @@ export interface ProjectConfig {
   targetFolder: string
   frame: string | null
   sessionPassword?: string
+  // Per-project Google Drive / cloud backup folder (null = no backup for this
+  // project). NOT auto-connected on project creation — the admin explicitly
+  // picks a folder per-project via the Admin tab's Google Drive section.
+  // Each project can have its own folder (or none).
+  driveFolder?: string | null
 }
 
 // ─── Photoshoot mode helpers ──────────────────────────────────────────────────

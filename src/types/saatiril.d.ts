@@ -47,7 +47,7 @@ interface SaatirilAPI {
   backToLogin?: () => void
   selectFolder: (defaultPath: string) => Promise<string | null>
   createFolder: (path: string) => Promise<{ success: boolean; path?: string; error?: string }>
-  savePhoto: (data: { base64Data: string; filename: string; targetFolder: string }) => Promise<string | null>
+  savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null }) => Promise<string | null>
   countPhotos: (data: { targetFolder: string }) => Promise<number>
   getLanInfo: () => Promise<{
     httpPort: number

@@ -863,9 +863,9 @@ function registerIpcHandlers() {
   })
 
   // Save photo to disk
-  ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string }) => {
+  ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null }) => {
     try {
-      const { base64Data, filename, targetFolder } = data
+      const { base64Data, filename, targetFolder, backupFolder } = data
 
       // Ensure target folder exists
       fs.mkdirSync(targetFolder, { recursive: true })
@@ -879,15 +879,20 @@ function registerIpcHandlers() {
 
       console.log(`[SAATIRIL] Photo saved: ${filePath} (${(buffer.length / 1024).toFixed(1)}KB)`)
 
-      // ── Google Drive backup (if configured) ──
-      // Copies the saved photo to the backup folder (e.g. Google Drive desktop
-      // folder at G:\My Drive\Saatiril\). Google Drive for Desktop auto-syncs
-      // the file to the cloud. If the folder is not accessible (e.g. Drive
-      // not running), the backup silently fails — the local copy is still safe.
+      // ── Google Drive / cloud backup (PER-PROJECT, opt-in) ──
+      // Copies the saved photo to THIS project's backup folder (e.g. Google
+      // Drive desktop folder) if the admin explicitly set one for this
+      // project. NOT auto-connected — the admin picks a folder per-project
+      // via the Admin tab's Google Drive section. If driveFolder is null/
+      // undefined, no backup (the local copy is still safe). Each project
+      // can have its own folder (or none).
       try {
-        const backupFolder = getBackupFolder()
-        if (backupFolder) {
-          const backupPath = path.join(backupFolder, filename)
+        // Prefer the per-project backupFolder passed in the savePhoto call.
+        // Fall back to the legacy global getBackupFolder() for backward
+        // compat with older callers that don't pass backupFolder.
+        const backupFolderToUse = backupFolder ?? getBackupFolder()
+        if (backupFolderToUse) {
+          const backupPath = path.join(backupFolderToUse, filename)
           fs.writeFileSync(backupPath, buffer)
           console.log(`[SAATIRIL] Photo backup: ${backupPath}`)
         }
