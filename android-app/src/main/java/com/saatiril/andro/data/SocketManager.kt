@@ -154,7 +154,17 @@ class SocketManager {
             val options = IO.Options().apply {
                 path = "/"  // ktor (APK) server uses path '/'
                 // Electron server uses '/socket.io/' — handled by allowEIO3 + path fallback
-                transports = arrayOf("websocket", "polling")
+                // WEBSOCKET-ONLY: skip the Engine.IO v3 polling handshake (which
+                // can fail due to OkHttp/library conflicts OR custom-server format
+                // mismatches) + connect DIRECTLY via WebSocket — exactly like the
+                // browser MC page (raw ws://?EIO=3&transport=websocket, sid=null →
+                // the server's "new WS-only session" path). This was the fix for
+                // "MC remote WiFi/LAN tidak bisa konek padahal browser bisa" — the
+                // browser connects via direct WebSocket (no polling), but the
+                // socket.io-client 2.1.0 with both transports did polling-first
+                // which failed. Websocket-only forces the direct-WS path that the
+                // server handles identically to the browser.
+                transports = arrayOf("websocket")
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE  // Never give up during ceremony!
                 reconnectionDelay = 500              // Start faster (500ms instead of 1000ms)
