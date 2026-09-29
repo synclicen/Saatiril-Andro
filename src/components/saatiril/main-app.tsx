@@ -74,6 +74,12 @@ export function MainApp() {
   const [mcSidebarOpen, setMcSidebarOpen] = useState(true)
   const [mobileTab, setMobileTab] = useState<MobileTab>('admin')
   const isMobile = useIsMobile()
+  // ── Dual 50/50 split view (user-selectable via the Jalur dropdown) ────
+  // When true, the live view renders BOTH channels (Jalur 1 + Jalur 2) side
+  // by side 50/50, compact. When false, the live view renders the selected
+  // single channel (myChannel) in the FULL MC sidebar + Operator layout.
+  // The user picks this via the 'Jalur 1 dan 2' option in the header dropdown.
+  const [dualSplitView, setDualSplitView] = useState(false)
   const [appFullscreen, setAppFullscreen] = useState(false)
   const [serverConnected, setServerConnected] = useState(false)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'degraded' | 'disconnected'>('disconnected')
@@ -457,7 +463,14 @@ export function MainApp() {
 
   const handleChannelSelect = useCallback(
     (channel: string) => {
-      setMyChannel(parseInt(channel, 10))
+      if (channel === 'both') {
+        // 'Jalur 1 dan 2' → compact 50/50 split (both channels in 1 screen)
+        setDualSplitView(true)
+      } else {
+        // 'Jalur 1' / 'Jalur 2' → full single-channel layout
+        setDualSplitView(false)
+        setMyChannel(parseInt(channel, 10))
+      }
     },
     [setMyChannel],
   )
@@ -528,7 +541,7 @@ export function MainApp() {
                 <span className="hidden text-[10px] font-medium uppercase tracking-wider sm:inline" style={{ color: THEME.muted }}>
                   Jalur
                 </span>
-                <Select value={String(myChannel)} onValueChange={handleChannelSelect}>
+                <Select value={dualSplitView ? 'both' : String(myChannel)} onValueChange={handleChannelSelect}>
                   <SelectTrigger
                     size="sm"
                     className="h-7 gap-1 border px-2 text-xs"
@@ -560,6 +573,13 @@ export function MainApp() {
                       style={{ color: THEME.cyan }}
                     >
                       Jalur 2 — Kanan
+                    </SelectItem>
+                    <SelectItem
+                      value="both"
+                      className="text-xs"
+                      style={{ color: THEME.gold }}
+                    >
+                      Jalur 1 dan 2 — 50/50
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -853,7 +873,7 @@ export function MainApp() {
                 Now the admin can take over (ambil alih) instantly from the MC/Operator
                 Panel without stale data. Camera stays ready (acceptable for takeover). */}
             <div className={activeView === 'live' ? 'h-full' : 'hidden'}>
-              {isDualModeVal ? (
+              {dualSplitView ? (
                 /* ═══ DUAL mode (dual photo wisuda / dual photoshoot) ═══
                    Jalur 1 + Jalur 2 side by side, 50/50. Each side = one channel:
                    MC panel (compact, top ~32%) + Operator camera (bottom ~68%).
