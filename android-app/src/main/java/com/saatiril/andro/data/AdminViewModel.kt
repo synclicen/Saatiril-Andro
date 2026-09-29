@@ -1093,8 +1093,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setProjectDriveFolder(folderUri: String?) {
         _project.value?.let { proj ->
-            _project.value = proj.copy(config = proj.config.copy(driveFolder = folderUri))
-            saveProjects()
+            val updated = proj.copy(config = proj.config.copy(driveFolder = folderUri))
+            _project.value = updated
+            projectStore.save(updated)
         }
     }
 
