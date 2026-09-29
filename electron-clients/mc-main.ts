@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, session, Menu, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as http from 'http'
@@ -13,6 +13,7 @@ function parseArgs() {
     if (arg.startsWith('--port=')) result.port = arg.slice(7)
     if (arg.startsWith('--channel=')) result.channel = arg.slice(10)
     if (arg.startsWith('--password=')) result.password = arg.slice(11)
+    if (arg.startsWith('--display=')) result.display = arg.slice(10)
   }
   return result
 }
@@ -57,8 +58,31 @@ function startLocalServer(outDir: string): Promise<number> {
 }
 
 function createWindow() {
+  const args = parseArgs()
+  // ── Multi-display: place MC on the EXTERNAL touch screen if present ───
+  // User setup: admin laptop runs portable.exe (admin + socket server), and
+  // an external touch screen is connected via HDMI cable / transmitter.
+  // The MC Electron App opens on the EXTERNAL screen (display 2) so the MC
+  // operator can stand at it — and since it's on the SAME machine as
+  // portable.exe, it connects via localhost (instant sync, NO WiFi lag).
+  // --display=N (1-indexed) overrides; default: auto-use display 2 if present.
+  // --display=1 forces the primary display (single-screen / fallback).
+  const displays = screen.getAllDisplays()
+  let targetDisplay = displays[0]
+  if (args.display) {
+    const n = parseInt(args.display, 10)
+    if (n >= 1 && n <= displays.length) targetDisplay = displays[n - 1]
+  } else if (displays.length > 1) {
+    targetDisplay = displays[1] // auto: external touch screen
+  }
+  const useExternal = targetDisplay !== displays[0]
+
   mainWindow = new BrowserWindow({
-    width: 420, height: 750, minWidth: 360, minHeight: 600,
+    width: useExternal ? targetDisplay.bounds.width : 420,
+    height: useExternal ? targetDisplay.bounds.height : 750,
+    x: targetDisplay.bounds.x,
+    y: targetDisplay.bounds.y,
+    minWidth: 360, minHeight: 600,
     title: 'Saatiril MC', backgroundColor: '#1a0b2e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -66,9 +90,11 @@ function createWindow() {
       webSecurity: false,
     }
   })
+  if (useExternal) {
+    mainWindow.setFullScreen(true)
+  }
   Menu.setApplicationMenu(null) // Remove menu bar
 
-  const args = parseArgs()
   if (args.host) {
     // Auto-connect: start local server, then load page with admin connection params
     startLocalServer(path.join(__dirname, 'out')).then((localPort) => {

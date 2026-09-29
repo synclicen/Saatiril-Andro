@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, session, Menu, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as http from 'http'
@@ -13,6 +13,7 @@ function parseArgs() {
     if (arg.startsWith('--port=')) result.port = arg.slice(7)
     if (arg.startsWith('--channel=')) result.channel = arg.slice(10)
     if (arg.startsWith('--password=')) result.password = arg.slice(11)
+    if (arg.startsWith('--display=')) result.display = arg.slice(10)
   }
   return result
 }
@@ -45,8 +46,29 @@ function startLocalServer(outDir: string): Promise<number> {
 }
 
 function createWindow() {
+  const args = parseArgs()
+  // ── Multi-display: place Operator on the EXTERNAL screen if present ───
+  // Mirror of mc-main.ts: if an external touch screen (display 2) is connected
+  // via HDMI cable / transmitter, open the Operator window on it (fullscreen).
+  // Since it runs on the SAME machine as portable.exe, it connects via
+  // localhost (instant sync, NO WiFi lag). --display=N overrides;
+  // --display=1 forces the primary display (single-screen / fallback).
+  const displays = screen.getAllDisplays()
+  let targetDisplay = displays[0]
+  if (args.display) {
+    const n = parseInt(args.display, 10)
+    if (n >= 1 && n <= displays.length) targetDisplay = displays[n - 1]
+  } else if (displays.length > 1) {
+    targetDisplay = displays[1] // auto: external screen
+  }
+  const useExternal = targetDisplay !== displays[0]
+
   mainWindow = new BrowserWindow({
-    width: 1280, height: 800, minWidth: 800, minHeight: 600,
+    width: useExternal ? targetDisplay.bounds.width : 1280,
+    height: useExternal ? targetDisplay.bounds.height : 800,
+    x: targetDisplay.bounds.x,
+    y: targetDisplay.bounds.y,
+    minWidth: 800, minHeight: 600,
     title: 'Saatiril Operator', backgroundColor: '#1a0b2e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -54,9 +76,11 @@ function createWindow() {
       webSecurity: false,
     }
   })
+  if (useExternal) {
+    mainWindow.setFullScreen(true)
+  }
   Menu.setApplicationMenu(null)
 
-  const args = parseArgs()
   if (args.host) {
     startLocalServer(path.join(__dirname, 'out')).then((localPort) => {
       const url = `http://127.0.0.1:${localPort}/?role=operator&host=${args.host}&channel=${args.channel || 1}&socketPort=3003&password=${encodeURIComponent(args.password || '')}`
