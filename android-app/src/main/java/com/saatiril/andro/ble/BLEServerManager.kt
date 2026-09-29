@@ -68,6 +68,10 @@ class BLEServerManager(private val context: Context) {
     // Callback for trigger actions from MC
     var onTriggerReceived: ((action: String, studentId: String?) -> Unit)? = null
 
+    /** Fires when an MC client connects — the AdminViewModel re-pushes the queue
+     *  data + next student so the freshly-connected MC gets the latest. */
+    var onClientConnected: (() -> Unit)? = null
+
     // Callbacks for data pushed from Electron admin (via admin-ble.html)
     var onNextStudentReceived: ((json: String) -> Unit)? = null
     var onQueueDataReceived: ((json: String) -> Unit)? = null
@@ -465,6 +469,11 @@ class BLEServerManager(private val context: Context) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     connectedDevices.add(device)
                     Log.i(TAG, "MC connected: ${device.address} (total=${connectedDevices.size})")
+                    // Re-push the queue data + next student to the freshly-connected MC.
+                    // The queue data was pushed at project-start time (before the MC
+                    // connected → notify was a no-op). The MC reads on connect, but
+                    // this re-push ensures it gets the LATEST data via notify too.
+                    onClientConnected?.invoke()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     connectedDevices.remove(device)

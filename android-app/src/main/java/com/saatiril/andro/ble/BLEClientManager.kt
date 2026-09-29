@@ -164,8 +164,18 @@ class BLEClientManager(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     isConnected = true
-                    Log.i(TAG, "Connected to Admin — discovering services...")
-                    gatt.discoverServices()
+                    Log.i(TAG, "Connected to Admin — requesting larger MTU...")
+                    // Request a larger MTU (517) BEFORE service discovery + reads.
+                    // The queue data JSON (~650-850B for 10 students) exceeds the
+                    // default 23-byte MTU (20B payload) → read truncates → JSON
+                    // parse fails → the queue list stays empty. With MTU 517, the
+                    // reads get the full payload (or long-read in 2 chunks).
+                    val ok = gatt.requestMtu(517)
+                    if (!ok) {
+                        Log.w(TAG, "requestMtu(517) failed — falling back to discoverServices with default MTU")
+                        gatt.discoverServices()
+                    }
+                    // If requestMtu succeeds, onMtuChanged fires → discoverServices there.
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     isConnected = false
@@ -174,6 +184,11 @@ class BLEClientManager(private val context: Context) {
                     onConnectionStateChanged?.invoke(false)
                 }
             }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            Log.i(TAG, "MTU changed to $mtu (status=$status) — discovering services...")
+            gatt.discoverServices()
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {

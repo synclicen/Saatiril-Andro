@@ -704,6 +704,13 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 handleBLETrigger(action, studentId)
             }
 
+            // Re-push queue data + next student when an MC connects (the data was
+            // pushed at project-start before the MC connected → notify was a no-op).
+            bleServerManager.onClientConnected = {
+                pushBLEQueueData()
+                pushBLENextStudent()
+            }
+
             // Send initial project info
             bleServerManager.updateProjectInfo(
                 projectName = proj.name,
