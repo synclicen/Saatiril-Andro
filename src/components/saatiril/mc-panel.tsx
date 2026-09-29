@@ -633,10 +633,14 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     const isSelected = photoshoot && selectedStudent?.id === student.id
 
     if (isActive) {
+      // Active participant being photographed — MOST prominent so the operator
+      // can compare this name with the one MC sent. Full gold bg + thick border
+      // + strong glow + bold text.
       return {
-        backgroundColor: `${THEME.gold}22`,
-        borderLeft: `4px solid ${THEME.gold}`,
-        boxShadow: `0 0 12px ${THEME.gold}44`,
+        backgroundColor: `${THEME.gold}33`,
+        borderLeft: `6px solid ${THEME.gold}`,
+        boxShadow: `0 0 20px ${THEME.gold}66`,
+        fontWeight: 700,
       }
     }
 
@@ -656,9 +660,14 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     }
 
     if (isNext) {
+      // Top pending participant — BUTTON-like so MC easily reads who to call
+      // next + presses PANGGIL SEKARANG. Prominent gold border + subtle glow
+      // + semi-bold text. Distinct from isActive (which is even more prominent).
       return {
-        backgroundColor: THEME.panel,
-        borderLeft: `4px solid ${THEME.gold}`,
+        backgroundColor: `${THEME.gold}1a`,
+        borderLeft: `5px solid ${THEME.gold}`,
+        boxShadow: `0 0 14px ${THEME.gold}44`,
+        fontWeight: 600,
       }
     }
 

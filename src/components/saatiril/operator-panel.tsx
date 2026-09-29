@@ -1484,9 +1484,23 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     const isSent = student.status === 'sent'
     const isNext = !photoshoot && student.id === nextPending?.id && student.status === 'pending'
     const isDone = student.status === 'done'
-    if (isActive) return { backgroundColor: `${THEME.gold}22`, borderLeft: `4px solid ${THEME.gold}`, boxShadow: `0 0 12px ${THEME.gold}44` }
+    if (isActive) return {
+      // Active participant being photographed — MOST prominent so the operator
+      // can compare this name with the one MC sent. Full gold bg + thick border
+      // + strong glow + bold text.
+      backgroundColor: `${THEME.gold}33`,
+      borderLeft: `6px solid ${THEME.gold}`,
+      boxShadow: `0 0 20px ${THEME.gold}66`,
+      fontWeight: 700,
+    }
     if (isSent) return { backgroundColor: `${THEME.cyan}11`, borderLeft: `4px solid ${THEME.cyan}` }
-    if (isNext) return { backgroundColor: THEME.panel, borderLeft: `4px solid ${THEME.gold}` }
+    if (isNext) return {
+      // Top pending — button-like (matches MC panel) for visual consistency.
+      backgroundColor: `${THEME.gold}1a`,
+      borderLeft: `5px solid ${THEME.gold}`,
+      boxShadow: `0 0 14px ${THEME.gold}44`,
+      fontWeight: 600,
+    }
     if (isDone) return { backgroundColor: '#22c55e0d', opacity: 0.55, borderLeft: `4px solid #22c55e66` }
     return { backgroundColor: THEME.panel, borderLeft: `4px solid ${THEME.border}` }
   }
