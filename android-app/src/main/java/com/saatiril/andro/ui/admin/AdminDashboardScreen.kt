@@ -645,7 +645,10 @@ private fun PhotoThumb(item: PhotoHistoryItem, project: Project?, onReset: () ->
     Card(modifier = Modifier.aspectRatio(0.75f).clip(RoundedCornerShape(8.dp)),
         colors = CardDefaults.cardColors(containerColor = CARD), shape = RoundedCornerShape(8.dp)) {
         Box(Modifier.fillMaxSize()) {
-            if (bitmap != null) Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Foto ${item.student.nama}", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            // Capture into a local val — `bitmap` is a produceState delegate
+            // (custom getter) so Kotlin can't smart-cast it to non-null inline.
+            val bmp = bitmap
+            if (bmp != null) Image(bitmap = bmp.asImageBitmap(), contentDescription = "Foto ${item.student.nama}", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Box(Modifier.fillMaxSize().background(PANEL), contentAlignment = Alignment.Center) { Icon(Icons.Default.BrokenImage, contentDescription = null, tint = MUTED, modifier = Modifier.size(20.dp)) }
             // Retake button: top-right refresh icon, calls viewModel.resetStudent (Fix #20)
             Box(
