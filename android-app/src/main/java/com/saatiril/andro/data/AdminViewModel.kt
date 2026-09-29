@@ -1013,10 +1013,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun callStudent(student: Student, channel: Int) {
         _project.value?.let { proj ->
+            // Simple map — only set the called student to active_N. No stale-reset
+            // scan (matches the Electron handleCallNow fix ce50e92: in normal flow
+            // STUDENT_DONE marks the previous student 'done' before the MC calls
+            // the next, so no stale active_N to reset).
             val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "active_$channel")
-                else if (isActiveStatus(s.status) && getActiveChannel(s.status) == channel) s.copy(status = "pending")
-                else s
+                if (s.id == student.id) s.copy(status = "active_$channel") else s
             }
             _project.value = proj.copy(database = updatedDb)
         }
@@ -1200,10 +1202,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val student = parseStudent(studentObj)
         val channel = obj.get("channel")?.takeIf { !it.isJsonNull }?.asInt ?: 1
         _project.value?.let { proj ->
+            // Simple map — only set the called student to active_N. No stale-reset
+            // scan (matches the Electron handleCallNow fix ce50e92: in normal flow
+            // STUDENT_DONE marks the previous student 'done' before the MC calls
+            // the next, so no stale active_N to reset).
             val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "active_$channel")
-                else if (isActiveStatus(s.status) && getActiveChannel(s.status) == channel) s.copy(status = "pending")
-                else s
+                if (s.id == student.id) s.copy(status = "active_$channel") else s
             }
             _project.value = proj.copy(database = updatedDb)
         }

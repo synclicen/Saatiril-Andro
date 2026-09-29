@@ -1,5 +1,6 @@
 package com.saatiril.andro.ui.admin
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +44,8 @@ import com.saatiril.andro.data.isActiveStatus
 import com.saatiril.andro.data.statusLabel
 import com.saatiril.andro.server.ClientInfo
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val BG = Color(0xFF1a0b2e)
 private val PANEL = Color(0xFF2a164a)
@@ -620,12 +623,18 @@ private fun QrCodeWithLabel(url: String, label: String, modifier: Modifier = Mod
 @Composable
 private fun PhotoThumb(item: PhotoHistoryItem, project: Project?, onReset: () -> Unit) {
     val firstPhoto = item.photos.firstOrNull() ?: return
-    val bitmap = remember(firstPhoto) {
-        try {
-            val pure = if (firstPhoto.contains(",")) firstPhoto.substringAfter(",") else firstPhoto
-            val bytes = Base64.decode(pure, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        } catch (e: Exception) { null }
+    // ASYNC decode (off the main thread) — was synchronous in `remember`,
+    // which blocked the UI 50-200ms per thumbnail (×18 = 1-3.6s jank when the
+    // gallery first appears). produceState runs the decode on
+    // Dispatchers.Default + the Image re-renders when the bitmap arrives.
+    val bitmap by produceState<Bitmap?>(null, firstPhoto) {
+        value = withContext(Dispatchers.Default) {
+            try {
+                val pure = if (firstPhoto.contains(",")) firstPhoto.substringAfter(",") else firstPhoto
+                val bytes = Base64.decode(pure, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) { null }
+        }
     }
     // Version-aware filename — retakes produce _v2, _v3, ... instead of overwriting (Fix #19)
     val version = project?.captureVersions?.get("${item.student.id}_${item.channel}") ?: 1

@@ -425,11 +425,24 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                     else -> MUTED
                 }
 
+                // HIGHLIGHT: active student → strong gold tint + 2dp gold border
+                // (MOST prominent). Next (standby w/ student) → button-like gold.
+                val domCardBg = when {
+                    statusPhase != "standby" -> GOLD.copy(alpha = 0.2f)
+                    studentName.isNotBlank() -> GOLD.copy(alpha = 0.1f)
+                    else -> PANEL
+                }
+                val domBorderWidth = if (statusPhase != "standby" || studentName.isNotBlank()) 2.dp else 1.dp
+                val domBorderColor = when {
+                    statusPhase != "standby" -> GOLD
+                    studentName.isNotBlank() -> GOLD.copy(alpha = 0.7f)
+                    else -> BORDER.copy(alpha = 0.4f)
+                }
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(4.dp),
-                    colors = CardDefaults.cardColors(containerColor = if (statusPhase != "standby") CARD.copy(alpha = 0.7f) else PANEL),
+                    colors = CardDefaults.cardColors(containerColor = domCardBg),
                     shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, phaseColor.copy(alpha = 0.7f))
+                    border = androidx.compose.foundation.BorderStroke(domBorderWidth, domBorderColor)
                 ) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         val phaseText = when (statusPhase) {
@@ -531,17 +544,22 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
                             val status = s?.optString("status") ?: "pending"
                             val isActive = status.startsWith("active")
                             val isDone = status == "done"
-                            val rowBg = when { isActive -> CARD.copy(alpha = 0.4f); isDone -> PANEL.copy(alpha = 0.3f); else -> PANEL }
+                            // HIGHLIGHT: first pending row (next to call) → button-like gold.
+                            val isFirstPending = i == 0 && status == "pending"
+                            val rowBg = when { isActive -> GOLD.copy(alpha = 0.18f); isFirstPending -> GOLD.copy(alpha = 0.1f); isDone -> PANEL.copy(alpha = 0.3f); else -> PANEL }
                             val dotColor = when { isActive -> GOLD; isDone -> GREEN.copy(alpha = 0.5f); else -> MUTED.copy(alpha = 0.3f) }
+                            val rowBorderWidth = if (isActive || isFirstPending) 1.5.dp else 1.dp
+                            val rowBorderColor = when { isActive -> GOLD; isFirstPending -> GOLD.copy(alpha = 0.7f); else -> BORDER.copy(alpha = 0.2f) }
 
                             Card(colors = CardDefaults.cardColors(containerColor = rowBg), shape = RoundedCornerShape(6.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.4f) else BORDER.copy(alpha = 0.2f)),
+                                border = androidx.compose.foundation.BorderStroke(rowBorderWidth, rowBorderColor),
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
                                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text("${i+1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 10.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
                                     Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(dotColor))
-                                    Text(name, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 11.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(name, style = TextStyle(color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 11.sp, fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))
+                                    else if (isFirstPending) Text("▶", style = TextStyle(color = GOLD, fontSize = 8.sp))
                                     if (isDone) Text("✓", style = TextStyle(color = GREEN, fontSize = 9.sp))
                                 }
                             }

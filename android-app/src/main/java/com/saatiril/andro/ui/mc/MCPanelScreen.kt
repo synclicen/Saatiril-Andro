@@ -282,23 +282,34 @@ fun MCPanelScreen(
 private fun MCQueueRow(number: Int, student: Student, channel: Int) {
     val isActive = isActiveStatus(student.status)
     val isDone = student.status == "done"
+    // HIGHLIGHT: first pending row (next to call) → button-like gold (matches
+    // the React panels' isNext). number==1 + pending = top of the queue.
+    val isFirstPending = number == 1 && student.status == "pending"
     val statusColor = when {
         isActive -> GOLD
         isDone -> GREEN.copy(alpha = 0.5f)
         else -> MUTED
     }
     val rowBg = when {
-        isActive -> CARD.copy(alpha = 0.4f)
+        isActive -> GOLD.copy(alpha = 0.18f)
+        isFirstPending -> GOLD.copy(alpha = 0.1f)
         isDone -> PANEL.copy(alpha = 0.3f)
         else -> PANEL
     }
+    val rowBorderWidth = if (isActive || isFirstPending) 1.5.dp else 1.dp
+    val rowBorderColor = when {
+        isActive -> GOLD
+        isFirstPending -> GOLD.copy(alpha = 0.7f)
+        else -> BORDER.copy(alpha = 0.2f)
+    }
     Card(colors = CardDefaults.cardColors(containerColor = rowBg), shape = RoundedCornerShape(6.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (isActive) GOLD.copy(alpha = 0.4f) else BORDER.copy(alpha = 0.2f))) {
+        border = androidx.compose.foundation.BorderStroke(rowBorderWidth, rowBorderColor)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("$number", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(16.dp))
             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(statusColor))
-            Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+            else if (isFirstPending) Text("▶", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
             if (isDone) Text("✓", style = TextStyle(color = GREEN, fontSize = 10.sp))
         }
     }
