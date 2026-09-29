@@ -221,6 +221,14 @@ interface SyncDbData {
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
+
+// STABLE empty array for the per-channel opCapturedPhotos selector fallback.
+// MUST be module-level (not `?? []` inline) so the selector returns the SAME
+// reference every call. `useSyncExternalStore` (Zustand v4) compares snapshots
+// via Object.is — a new `[]` each call triggers infinite re-render → React
+// error #185 "Maximum update depth exceeded". This constant is never mutated.
+const EMPTY_PHOTOS: string[] = []
+
 export interface OperatorPanelProps {
   isAppFullscreen?: boolean
   onToggleAppFullscreen?: () => void
@@ -278,7 +286,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // channel 2's button + capturePhase stay unaffected (was the user's bug:
   // channel 2's foto button activated + followed channel 1's captures).
   const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTargets[myChannel] ?? null)
-  const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotosByChannel[myChannel] ?? [])
+  const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotosByChannel[myChannel] ?? EMPTY_PHOTOS)
   const _setOpCurrentTarget = useSaatirilStore((s) => s.setOpCurrentTarget)
   const _addOpCapturedPhoto = useSaatirilStore((s) => s.addOpCapturedPhoto)
   const _resetOpState = useSaatirilStore((s) => s.resetOpState)
