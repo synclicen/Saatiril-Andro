@@ -174,11 +174,24 @@ fun MCPanelScreen(
                 else -> ""
             }
 
+            // ── Highlight (matches the React panels' getRowStyle):
+            //   active (being photographed) → strong gold tint bg + 2dp gold border
+            //     (MOST prominent — operator can compare this name with what MC sent).
+            //   next pending (ready to call) → subtle gold tint bg + 2dp gold border
+            //     (button-like — MC easily reads + presses PANGGIL).
+            //   else (habis) → plain panel + thin border.
+            val cardBg = if (hasActive) GOLD.copy(alpha = 0.2f) else if (nextPending != null) GOLD.copy(alpha = 0.1f) else PANEL
+            val cardBorderWidth = if (hasActive || nextPending != null) 2.dp else 1.dp
+            val cardBorderColor = when {
+                hasActive -> GOLD
+                nextPending != null -> GOLD.copy(alpha = 0.7f)
+                else -> BORDER.copy(alpha = 0.4f)
+            }
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = if (hasActive) CARD.copy(alpha = 0.7f) else PANEL),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
                 shape = RoundedCornerShape(10.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, if (hasActive) GOLD.copy(alpha = 0.7f) else BORDER.copy(alpha = 0.4f))
+                border = androidx.compose.foundation.BorderStroke(cardBorderWidth, cardBorderColor)
             ) {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(

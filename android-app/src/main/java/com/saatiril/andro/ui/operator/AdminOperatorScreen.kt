@@ -334,14 +334,21 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         // ─── Compact target info bar (single line, ~4% of screen) ───
+        // HIGHLIGHTED: gold-tinted bg + gold border + gold bold name so the
+        // operator can clearly read + compare this name with the one MC sent
+        // (matches the React OperatorPanel's isActive row highlight).
         activeStudent?.let { student ->
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(GOLD.copy(alpha = 0.18f))
+                    .border(1.5.dp, GOLD, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(Icons.Default.Person, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp))
-                Text(student.nama.take(25).ifBlank { student.nim.take(25) }, style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp), modifier = Modifier.weight(1f), maxLines = 1)
+                Text(student.nama.take(25).ifBlank { student.nim.take(25) }, style = TextStyle(color = GOLD, fontWeight = FontWeight.Black, fontSize = 12.sp), modifier = Modifier.weight(1f), maxLines = 1)
                 Text(student.nim.take(15), style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace))
                 Card(colors = CardDefaults.cardColors(containerColor = GOLD), shape = RoundedCornerShape(3.dp)) {
                     Text("Ch.$activeChannel", Modifier.padding(horizontal = 4.dp, vertical = 1.dp), style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 8.sp))

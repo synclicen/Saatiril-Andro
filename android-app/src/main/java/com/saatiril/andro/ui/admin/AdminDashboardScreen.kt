@@ -689,11 +689,16 @@ private fun StudentDbRow(student: Student, onReset: () -> Unit) {
         student.status == "done" -> GREEN
         else -> MUTED
     }
+    // HIGHLIGHT active student (being photographed): gold-tinted bg + gold
+    // border + bold name (matches the React panels' isActive row highlight).
+    val isActive = isActiveStatus(student.status)
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onReset),
-        colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(6.dp)) {
+        colors = CardDefaults.cardColors(containerColor = if (isActive) GOLD.copy(alpha = 0.18f) else PANEL),
+        shape = RoundedCornerShape(6.dp),
+        border = if (isActive) androidx.compose.foundation.BorderStroke(1.5.dp, GOLD) else null) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(student.nim.ifBlank { "-" }, Modifier.weight(0.9f), style = TextStyle(color = MUTED, fontSize = 11.sp, fontFamily = FontFamily.Monospace))
-            Text(student.nama.ifBlank { "(tanpa nama)" }, Modifier.weight(1.6f), style = TextStyle(color = Color.White, fontSize = 12.sp), maxLines = 1)
+            Text(student.nama.ifBlank { "(tanpa nama)" }, Modifier.weight(1.6f), style = TextStyle(color = if (isActive) GOLD else Color.White, fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal), maxLines = 1)
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(sc))
                 Text(statusLabel(student.status), style = TextStyle(color = sc, fontSize = 10.sp, fontWeight = FontWeight.Medium))
