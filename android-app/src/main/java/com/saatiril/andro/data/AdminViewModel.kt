@@ -679,6 +679,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── BLE Server for MC Remote ─────────────────────────────
     /** Start BLE GATT server for MC Remote trigger. */
+    /**
+     * Retry BLE advertising after the BLUETOOTH_ADVERTISE permission is granted.
+     * Called by MainScaffold's permission-request callback. At project-start
+     * time, startBLEServer ran but advertising FAILED silently because the
+     * permission was missing (Android 12+) — the MC remote couldn't find the
+     * admin during scan. After the user grants the permission, this restarts
+     * the advertising so the MC remote can discover + connect.
+     */
+    fun retryBleAdvertising() {
+        if (bleServerManager.isRunning()) {
+            bleServerManager.restartAdvertising()
+        } else {
+            startBLEServer()
+        }
+    }
+
     private fun startBLEServer() {
         try {
             val proj = _project.value ?: return

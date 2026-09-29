@@ -59,6 +59,39 @@ fun MainScaffold(viewModel: AdminViewModel) {
     // #7: Fullscreen immersive mode toggle
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? android.app.Activity
+
+    // ── Request BLE permissions (Android 12+) so the BLE server can advertise ──
+    // ROOT CAUSE of "MC remote tidak menemukan admin saat scan": the saatiril-
+    // andro.apk (admin) runs the BLE server (BleServerManager) but never
+    // requested BLUETOOTH_ADVERTISE at runtime → advertising failed silently on
+    // Android 12+ → the MC remote scanned but found nothing, even though the
+    // admin was active. Request BLUETOOTH_ADVERTISE + BLUETOOTH_CONNECT +
+    // ACCESS_FINE_LOCATION on launch; after granted, retry the BLE advertising
+    // (startBLEServer ran before the permission was granted → advertising
+    // failed → retry now that the permission is granted).
+    val blePermissionLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result[android.Manifest.permission.BLUETOOTH_ADVERTISE] == true) {
+            // Permission granted — retry the BLE advertising so the MC remote
+            // can discover + connect to the admin.
+            viewModel.retryBleAdvertising()
+        }
+    }
+    LaunchedEffect(Unit) {
+        val perms = arrayOf(
+            android.Manifest.permission.BLUETOOTH_ADVERTISE,
+            android.Manifest.permission.BLUETOOTH_CONNECT,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+        )
+        val needRequest = perms.any {
+            androidx.core.content.ContextCompat.checkSelfPermission(context, it) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (needRequest) {
+            blePermissionLauncher.launch(perms)
+        }
+    }
     LaunchedEffect(isFullscreen) {
         activity?.window?.let { window ->
             if (isFullscreen) {
