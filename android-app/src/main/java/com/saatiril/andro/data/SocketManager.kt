@@ -326,8 +326,10 @@ class SocketManager {
         listeners.clear()
         mainHandler.removeCallbacksAndMessages(null)
         reconnectHandler.removeCallbacksAndMessages(null)
-        try { httpClient.dispatcher.executorService.shutdown() } catch (_: Exception) {}
-        try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
+        // Note: do NOT access httpClient.dispatcher / connectionPool — those are
+        // package-private in OkHttp (inaccessible from Kotlin). The OkHttpClient
+        // is a singleton (built once via lazy) + is fine to leave running; its
+        // threads idle when no WebSocket is active. Garbage-collected on app exit.
     }
 
     fun isConnected(): Boolean = connected
