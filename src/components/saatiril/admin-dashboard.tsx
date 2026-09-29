@@ -1439,6 +1439,22 @@ export default function AdminDashboard() {
             </ul>
           </div>
 
+          {/* MODE 5: External touch screen via HDMI (NEW — instant, no WiFi) */}
+          <div>
+            <p className="text-xs font-bold mb-1" style={{ color: '#a78bfa' }}>
+              🖥️✨ MODE 5: External Touch Screen via HDMI (NEW — instant, no WiFi)
+            </p>
+            <ul className="space-y-0.5 pl-2">
+              <li className="text-xs text-[#c4b5fd]">• Laptop Admin: run portable.exe → buat proyek (admin + socket server)</li>
+              <li className="text-xs text-[#c4b5fd]">• Colok layar sentuh external via HDMI kabel / transmitter (jarak berapa pun)</li>
+              <li className="text-xs text-[#c4b5fd]">• Launch saatiril-mc-electron.exe --host=127.0.0.1 → auto fullscreen di external screen</li>
+              <li className="text-xs text-[#c4b5fd]">• Sync MC↔Operator = localhost (INSTANT, no WiFi congestion — HDMI hanya bawa sinyal display)</li>
+              <li className="text-xs text-[#c4b5fd]">• --display=1 force layar primer; --display=2/3 pilih display spesifik</li>
+              <li className="text-xs text-[#c4b5fd]">• Dual photo: 2 kamera USB capture → 2 Operator App (--channel=1/--channel=2) auto-pakai kamera berbeda</li>
+              <li className="text-xs text-[#c4b5fd]">• Cocok untuk wisuda 2 kamera + 2 operator + 2 MC di 1 laptop admin</li>
+            </ul>
+          </div>
+
           {/* Tips */}
           <div className="rounded-md p-2.5" style={{ backgroundColor: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.2)' }}>
             <p className="text-xs font-bold mb-1.5" style={{ color: GOLD }}>💡 Tips Penting</p>
@@ -1452,6 +1468,11 @@ export default function AdminDashboard() {
               <li className="text-xs text-[#c4b5fd]">• MC-Only APK (saatiril-mc.apk): APK terpisah untuk MC, terkunci penuh</li>
               <li className="text-xs text-[#c4b5fd]">• Operator Plan B: tombol 'PANGGIL MANUAL' jika MC terputus</li>
               <li className="text-xs text-[#c4b5fd]">• 3 APK: saatiril-andro.apk (full) + saatiril-mc.apk (MC) + saatiril-portable.exe (Electron)</li>
+              <li className="text-xs text-[#c4b5fd]">• ✨ Dual 50/50: mode dual photo/photoshoot → dropdown Jalur "Jalur 1 dan 2 — 50/50" → 2 kolom resizable (MC+Operator per channel, no scroll)</li>
+              <li className="text-xs text-[#c4b5fd]">• ✨ Jalur dropdown: "Jalur 1" / "Jalur 2" (full single channel) / "Jalur 1 dan 2" (compact 50/50 kedua channel)</li>
+              <li className="text-xs text-[#c4b5fd]">• ✨ Highlight: peserta teratas (siap dipanggil) = button-like gold ▶; peserta aktif (difoto) = gold prominent ◆</li>
+              <li className="text-xs text-[#c4b5fd]">• ✨ Per-channel camera: 2 Operator App di laptop sama auto-pakai kamera berbeda (no conflict, pilihan tersimpan per-channel)</li>
+              <li className="text-xs text-[#c4b5fd]">• ✨ Wisuda instant: STUDENT_DONE re-emit untuk browser MC + no stale-reset scan → MC panggil langsung setelah operator foto</li>
             </ul>
           </div>
 
