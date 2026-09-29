@@ -5,30 +5,59 @@ import android.os.Looper
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
-import io.socket.client.IO
-import io.socket.client.Socket
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URISyntaxException
 import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 
 /**
- * Manages Socket.io connection to the Saatiril server.
- * Handles authentication, event relay, and reconnection.
+ * Manages a RAW WebSocket connection to the Saatiril LAN server.
  *
- * Protocol compatibility: matches web client (socket.ts) and server (index.ts)
- * - path: "/" (must match server config)
- * - Events: identify, auth-requirement, auth-success, auth-failed, lan-message, saatiril-ping/pong
- * - LAN messages wrapped in { event, data } payload
- * - Critical events queued when disconnected and replayed on reconnect
+ * ─── Why raw WebSocket (not the socket.io-client library)? ──────────────
+ * The previous implementation used `io.socket:socket.io-client:2.1.0`.
+ * Despite the websocket-only-transport fix (transports = ["websocket"]),
+ * the library still failed to connect on some devices (OkHttp version
+ * conflicts / Engine.IO v3 handshake quirks with the custom SaatirilServer).
+ * The phone BROWSER connects fine via raw WebSocket (see McHtml.kt), so
+ * the server's WS path is sound — the library was the problem.
  *
- * FIXES in this version:
- * - Gson configured with FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES for
- *   compatibility with both camelCase and snake_case JSON from server
- * - Robust MC_CALL and SYNC_DB parsing with multiple fallback strategies
- * - Comprehensive logging at every stage of data flow
+ * This rewrite bypasses the socket.io-client library entirely and speaks
+ * Engine.IO v3 + Socket.IO framing manually over an `okhttp3.WebSocket`.
+ * This is the EXACT same approach the browser McHtml.kt uses (which works).
+ *
+ * ─── Protocol (mirrors McHtml.kt + SaatirilServer.handleWebSocket) ──────
+ * Connect URL:  ws://<host>:<port>/?EIO=3&transport=websocket
+ * On open:      (nothing — wait for server's Engine.IO OPEN packet).
+ * On text frame `0...`  → Engine.IO OPEN.  Send `40` (Socket.IO CONNECT).
+ * On text frame `2`     → Engine.IO PING.   Respond `3` (PONG).
+ * On text frame `4`     → Engine.IO MESSAGE. Parse sub-type (Socket.IO):
+ *   `40`  → CONNECT ack.   Send `42["identify", {role, channel, sessionPasswordHash?}]`.
+ *   `42…` → EVENT.         Parse `42["name", arg]`. Dispatch by event name.
+ *   `41`  → DISCONNECT.    Server closed the namespace.
+ *   `43…` → ACK (unused).
+ *   `44…` → ERROR.
+ * Send event:   `42` + JSON.stringify([name, data])
+ * Send raw:     just send the framed string (e.g. `40`, `3`, `2`).
+ *
+ * ─── Public API (UNCHANGED — callers need no changes) ──────────────────
+ * - connect(serverUrl, role, channel, password?)
+ * - disconnect(), destroy(), isConnected(), isAuthenticated(), getState()
+ * - on(event, listener), off(event, listener)
+ * - emitLanMessage(event, data)
+ * - requestState(), requestFrame(projectId), resendWithPassword(password)
+ * - sendStudentDone, sendPhotosSaved, sendOpProgress, sendMcCall,
+ *   sendStudentReset, sendStudentDoneFromMc, sendSyncDb
+ *
+ * The `ConnectionState` enum, `notifyListenersOnUiThread` mechanism,
+ * critical-event queue, and reconnection logic are all preserved.
  */
 class SocketManager {
     var onConnected: (() -> Unit)? = null
@@ -47,8 +76,15 @@ class SocketManager {
             SocketEvents.STUDENT_DONE,
             SocketEvents.STUDENT_RESET
         )
-        private const val MAX_QUEUE_SIZE = 2000  // was 100, raised for 4000+ participant ceremonies (mirrors Electron socket.ts MAX_QUEUE_SIZE)
-        private const val MAX_RETRIES = 5       // was 3, more retries for crowded WiFi
+        private const val MAX_QUEUE_SIZE = 2000  // raised for 4000+ participant ceremonies (mirrors Electron socket.ts MAX_QUEUE_SIZE)
+        private const val MAX_RETRIES = 5        // was 3, more retries for crowded WiFi
+
+        // Reconnection (mirrors the io.socket options we previously passed:
+        // reconnection=true, reconnectionAttempts=Infinity, reconnectionDelay=500,
+        // reconnectionDelayMax=5000, timeout=10000).
+        private const val RECONNECT_BASE_DELAY_MS = 500L
+        private const val RECONNECT_MAX_DELAY_MS = 5_000L
+        private const val CONNECT_TIMEOUT_MS = 10_000L
 
         fun sha256(input: String): String {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -57,40 +93,56 @@ class SocketManager {
         }
     }
 
-    // Gson with lower_case_with_underscores policy for snake_case compatibility
-    // but also handling camelCase via @SerializedName annotations on data classes
+    // Gson with the same field-naming strategy as before (camelCase default,
+    // honors @SerializedName). Used to serialize outgoing payloads and to
+    // parse incoming JSON into data classes (parseData<T>).
     private val gson: Gson = GsonBuilder()
         .setFieldNamingStrategy { f ->
-            // Use @SerializedName if present
             val annotation = f.getAnnotation(com.google.gson.annotations.SerializedName::class.java)
-            if (annotation != null) {
-                annotation.value
-            } else {
-                // Default: use the field name as-is (camelCase)
-                f.name
-            }
+            if (annotation != null) annotation.value else f.name
         }
         .create()
 
-    private var socket: Socket? = null
+    /**
+     * A single OkHttpClient is built once and reused for every WebSocket
+     * connection / reconnection. OkHttp is already a transitive dependency
+     * of `io.socket:socket.io-client:2.1.0`, so this introduces NO new
+     * dependencies.
+     */
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .retryOnConnectionFailure(true)
+            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)        // WebSocket = long-lived stream
+            .writeTimeout(10, TimeUnit.SECONDS)
+            .pingInterval(20, TimeUnit.SECONDS)            // OkHttp WS-level keepalive (defends against NAT timeouts)
+            .build()
+    }
 
-    // @Volatile ensures cross-thread visibility for connectionState
-    @Volatile
-    private var connectionState = ConnectionState.DISCONNECTED
+    @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var connected: Boolean = false
+    @Volatile private var hasConnectedOnce: Boolean = false
 
-    @Volatile
-    private var passwordHash: String? = null
+    @Volatile private var connectionState = ConnectionState.DISCONNECTED
+    @Volatile private var passwordHash: String? = null
+    @Volatile private var myChannel: Int = 1
+    @Volatile private var myRole: String = Roles.OPERATOR
+    @Volatile private var connectErrorCount: Int = 0
 
-    @Volatile
-    private var myChannel: Int = 1
+    // Reconnection state
+    @Volatile private var isExplicitlyDisconnected: Boolean = false
+    @Volatile private var reconnectAttempts: Int = 0
+    @Volatile private var serverUrl: String = ""
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val reconnectRunnable = Runnable {
+        if (!isExplicitlyDisconnected && webSocket == null) {
+            Log.i(TAG, "Reconnect attempt ${reconnectAttempts + 1}")
+            reconnectAttempts++
+            doConnect()
+        }
+    }
 
-    @Volatile
-    private var myRole: String = Roles.OPERATOR
-
-    @Volatile
-    private var connectErrorCount: Int = 0
-
-    private var pingIntervalJob: java.util.Timer? = null
+    private var pingTimer: java.util.Timer? = null
 
     // Main thread handler for posting listener notifications
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -110,33 +162,13 @@ class SocketManager {
     // ─── Connection ─────────────────────────────────────────────
 
     fun connect(serverUrl: String, role: String, channel: Int, password: String? = null) {
-        // Disconnect existing socket if any, but preserve ViewModel listeners
-        if (socket != null) {
-            Log.w(TAG, "Existing socket found, cleaning up before reconnect")
-            stopPingInterval()
-            try {
-                socket?.disconnect()
-                socket?.off()
-            } catch (e: Exception) {
-                Log.w(TAG, "Error disconnecting old socket: ${e.message}")
-            }
-            socket = null
-        }
-
-        myRole = role
-        myChannel = channel
-        passwordHash = password?.let { sha256(it) }
-        connectErrorCount = 0  // Reset error counter on new connection attempt
-        connectionState = ConnectionState.CONNECTING
-        notifyListenersOnUiThread("state_changed", connectionState)
-
-        // Validate URL BEFORE passing to IO.socket()
+        // Validate URL BEFORE doing anything.
         val validatedUrl: String
         try {
             val uri = URI(serverUrl)
             val scheme = uri.scheme?.lowercase()
-            if (scheme != "http" && scheme != "https") {
-                throw URISyntaxException(serverUrl, "Invalid scheme: must be http or https")
+            if (scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss") {
+                throw URISyntaxException(serverUrl, "Invalid scheme: must be http(s) or ws(s)")
             }
             if (uri.host.isNullOrBlank()) {
                 throw URISyntaxException(serverUrl, "Host is empty")
@@ -150,72 +182,138 @@ class SocketManager {
             return
         }
 
-        try {
-            val options = IO.Options().apply {
-                path = "/"  // ktor (APK) server uses path '/'
-                // Electron server uses '/socket.io/' — handled by allowEIO3 + path fallback
-                // WEBSOCKET-ONLY: skip the Engine.IO v3 polling handshake (which
-                // can fail due to OkHttp/library conflicts OR custom-server format
-                // mismatches) + connect DIRECTLY via WebSocket — exactly like the
-                // browser MC page (raw ws://?EIO=3&transport=websocket, sid=null →
-                // the server's "new WS-only session" path). This was the fix for
-                // "MC remote WiFi/LAN tidak bisa konek padahal browser bisa" — the
-                // browser connects via direct WebSocket (no polling), but the
-                // socket.io-client 2.1.0 with both transports did polling-first
-                // which failed. Websocket-only forces the direct-WS path that the
-                // server handles identically to the browser.
-                transports = arrayOf("websocket")
-                reconnection = true
-                reconnectionAttempts = Int.MAX_VALUE  // Never give up during ceremony!
-                reconnectionDelay = 500              // Start faster (500ms instead of 1000ms)
-                reconnectionDelayMax = 5_000         // Max 5s between retries (faster recovery)
-                timeout = 10_000                      // 10s timeout (was 15s, faster fail detection)
-                forceNew = true
-            }
+        // Tear down any existing socket, but preserve ViewModel listeners.
+        cleanupSocket()
 
-            socket = try {
-                IO.socket(validatedUrl, options)
-            } catch (e: NoSuchMethodError) {
-                Log.e(TAG, "OkHttp method not found — dependency conflict! ${e.message}", e)
-                connectionState = ConnectionState.DISCONNECTED
-                notifyListenersOnUiThread("state_changed", ConnectionState.DISCONNECTED)
-                notifyListenersOnUiThread("connection_error", "Library conflict: ${e.message}")
-                return
-            } catch (e: NoClassDefFoundError) {
-                Log.e(TAG, "OkHttp class not found — dependency conflict! ${e.message}", e)
-                connectionState = ConnectionState.DISCONNECTED
-                notifyListenersOnUiThread("state_changed", ConnectionState.DISCONNECTED)
-                notifyListenersOnUiThread("connection_error", "Library conflict: ${e.message}")
-                return
-            } catch (e: RuntimeException) {
-                Log.e(TAG, "Failed to create socket (runtime): ${e.message}", e)
-                connectionState = ConnectionState.DISCONNECTED
-                notifyListenersOnUiThread("state_changed", ConnectionState.DISCONNECTED)
-                notifyListenersOnUiThread("connection_error", "Gagal membuat koneksi: ${e.message}")
-                return
-            }
+        this.serverUrl = validatedUrl
+        myRole = role
+        myChannel = channel
+        passwordHash = password?.let { sha256(it) }
+        connectErrorCount = 0
+        reconnectAttempts = 0
+        isExplicitlyDisconnected = false
+        connectionState = ConnectionState.CONNECTING
+        notifyListenersOnUiThread("state_changed", connectionState)
 
-            setupSocketListeners()
-            socket?.connect()
+        doConnect()
+        Log.i(TAG, "Connecting to $validatedUrl as $myRole channel $channel")
+    }
 
-            Log.i(TAG, "Connecting to $validatedUrl as $myRole channel $channel")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create socket connection: ${e.message}", e)
+    private fun doConnect() {
+        val wsUrl = buildWsUrl(serverUrl)
+        if (wsUrl == null) {
             connectionState = ConnectionState.DISCONNECTED
             notifyListenersOnUiThread("state_changed", ConnectionState.DISCONNECTED)
-            notifyListenersOnUiThread("connection_error", e.message ?: "Connection failed")
+            notifyListenersOnUiThread("connection_error", "URL tidak valid")
+            return
+        }
+        try {
+            val request = Request.Builder().url(wsUrl).build()
+            webSocket = httpClient.newWebSocket(request, socketListener)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open WebSocket: ${e.message}", e)
+            connectionState = ConnectionState.DISCONNECTED
+            notifyListenersOnUiThread("state_changed", ConnectionState.DISCONNECTED)
+            notifyListenersOnUiThread("connection_error", "Gagal membuat koneksi: ${e.message}")
+            scheduleReconnect()
         }
     }
 
-    fun disconnect() {
+    private val socketListener: WebSocketListener = object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            // TCP+HTTP upgraded to a WebSocket. Do NOT send anything yet —
+            // wait for the server's Engine.IO OPEN packet (text frame "0{...}").
+            Log.d(TAG, "WebSocket transport open — waiting for Engine.IO OPEN")
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            try {
+                onEngineMessage(text)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onMessage: ${e.message}", e)
+            }
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            // Acknowledge the close handshake.
+            try { webSocket.close(1000, null) } catch (_: Exception) {}
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            Log.w(TAG, "WebSocket closed: code=$code reason=$reason")
+            handleSocketClosed("onClosed")
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            Log.e(TAG, "WebSocket failure: ${t.message}", t)
+            handleSocketClosed("onFailure")
+        }
+    }
+
+    private fun handleSocketClosed(source: String) {
+        // Null out the dead WS so reconnectRunnable (which gates on
+        // `webSocket == null`) will fire + doConnect() can build a fresh one.
+        webSocket = null
+        connected = false
+        connectionState = ConnectionState.DISCONNECTED
+        stopPingInterval()
+        notifyListenersOnUiThread("state_changed", connectionState)
+        onDisconnected?.invoke()
+
+        if (!isExplicitlyDisconnected) {
+            connectErrorCount++
+            if (connectErrorCount >= 3 && !hasConnectedOnce) {
+                // Repeated failures during the very first connect — surface a
+                // useful message instead of silently retrying forever.
+                Log.w(TAG, "Connection failed $connectErrorCount times — showing DISCONNECTED state")
+                notifyListenersOnUiThread(
+                    "connection_error",
+                    "Tidak dapat terhubung ke server. Pastikan:\n" +
+                    "1. IP & Port benar\n" +
+                    "2. Server berjalan di jaringan yang sama\n" +
+                    "3. Tidak ada firewall yang memblokir"
+                )
+            } else {
+                notifyListenersOnUiThread(
+                    "connection_error",
+                    "Koneksi terputus. Mencoba menyambung ulang otomatis... (percobaan $connectErrorCount)"
+                )
+            }
+            scheduleReconnect()
+        } else {
+            // Explicit user disconnect — do NOT schedule a reconnect.
+            // hasConnectedOnce stays as-is so a future connect() works.
+        }
+    }
+
+    private fun scheduleReconnect() {
+        reconnectHandler.removeCallbacksAndMessages(null)
+        // Exponential backoff capped at 5s: 500, 1000, 2000, 4000, 5000, 5000, ...
+        val exp = (RECONNECT_BASE_DELAY_MS * (1L shl reconnectAttempts.coerceAtMost(10)))
+            .coerceAtMost(RECONNECT_MAX_DELAY_MS)
+        Log.i(TAG, "Scheduling reconnect in ${exp}ms (attempt ${reconnectAttempts + 1})")
+        reconnectHandler.postDelayed(reconnectRunnable, exp)
+    }
+
+    private fun cleanupSocket() {
+        reconnectHandler.removeCallbacksAndMessages(null)
         stopPingInterval()
         try {
-            socket?.disconnect()
-            socket?.off()
+            webSocket?.let { ws ->
+                // Politely tell the server we're going away (Engine.IO CLOSE = "1").
+                try { ws.send("1") } catch (_: Exception) {}
+                try { ws.close(1000, "cleanup") } catch (_: Exception) {}
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Error during disconnect: ${e.message}")
+            Log.w(TAG, "Error cleaning up old socket: ${e.message}")
         }
-        socket = null
+        webSocket = null
+        connected = false
+    }
+
+    fun disconnect() {
+        isExplicitlyDisconnected = true
+        cleanupSocket()
         connectionState = ConnectionState.DISCONNECTED
         notifyListenersOnUiThread("state_changed", connectionState)
         synchronized(eventQueueLock) {
@@ -227,234 +325,218 @@ class SocketManager {
         disconnect()
         listeners.clear()
         mainHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.removeCallbacksAndMessages(null)
+        try { httpClient.dispatcher.executorService.shutdown() } catch (_: Exception) {}
+        try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
     }
 
-    fun isConnected(): Boolean = socket?.connected() == true
+    fun isConnected(): Boolean = connected
 
     fun isAuthenticated(): Boolean = connectionState == ConnectionState.AUTHENTICATED ||
             connectionState == ConnectionState.WAITING_FOR_DATA
 
     fun getState(): ConnectionState = connectionState
 
-    // ─── Socket Event Listeners ─────────────────────────────────
+    // ─── Engine.IO + Socket.IO packet handling ─────────────────
 
-    private fun setupSocketListeners() {
-        val s = socket ?: return
-
-        s.on(Socket.EVENT_CONNECT) {
-            try {
-                Log.i(TAG, "Socket connected")
-                connectErrorCount = 0  // Reset error counter on successful connect
-                connectionState = ConnectionState.CONNECTED
-                notifyListenersOnUiThread("state_changed", connectionState)
-                identify()
-                onConnected?.invoke()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in CONNECT handler: ${e.message}", e)
-            }
-        }
-
-        s.on(Socket.EVENT_DISCONNECT) { args ->
-            try {
-                Log.w(TAG, "Socket disconnected: ${args.getOrElse(0) { "unknown" }}")
-                connectionState = ConnectionState.DISCONNECTED
-                stopPingInterval()
-                notifyListenersOnUiThread("state_changed", connectionState)
-                onDisconnected?.invoke()
-
-                // If server initiated disconnect, schedule manual reconnect
-                val reason = args?.firstOrNull()?.toString() ?: ""
-                if (reason == "io server disconnect") {
-                    Log.i(TAG, "Server initiated disconnect — scheduling manual reconnect in 2s")
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        if (socket?.connected() != true) {
-                            socket?.connect()
-                        }
-                    }, 2000)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in DISCONNECT handler: ${e.message}", e)
-            }
-        }
-
-        s.on(Socket.EVENT_CONNECT_ERROR) { args ->
-            try {
-                val errorMsg = args.getOrElse(0) { "unknown" }
-                Log.e(TAG, "Connection error: $errorMsg")
-
-                // Count connect errors — if we keep failing, show DISCONNECTED
-                // with a useful error instead of staying stuck at CONNECTING forever.
-                connectErrorCount++
-                if (connectErrorCount >= 3) {
-                    Log.w(TAG, "Connection failed $connectErrorCount times — switching to DISCONNECTED state")
-                    connectionState = ConnectionState.DISCONNECTED
-                    notifyListenersOnUiThread("connection_error",
-                        "Tidak dapat terhubung ke server. Pastikan:\n" +
-                        "1. IP & Port benar\n" +
-                        "2. Server berjalan di jaringan yang sama\n" +
-                        "3. Tidak ada firewall yang memblokir"
-                    )
-                } else if (connectionState != ConnectionState.AUTHENTICATING &&
-                    connectionState != ConnectionState.AUTH_FAILED) {
-                    connectionState = ConnectionState.CONNECTING
-                    notifyListenersOnUiThread("connection_error", "Mencoba menghubungkan... (percobaan $connectErrorCount)")
-                }
-                notifyListenersOnUiThread("state_changed", connectionState)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in CONNECT_ERROR handler: ${e.message}", e)
-            }
-        }
-
-        s.on("reconnect_failed") {
-            try {
-                Log.e(TAG, "Reconnection failed after max attempts — starting manual retry")
-                // Manual retry every 3 seconds (like web client does every 5s)
-                val manualRetryHandler = Handler(Looper.getMainLooper())
-                val manualRetryRunnable = object : Runnable {
-                    override fun run() {
-                        if (socket?.connected() == true) return
-                        Log.i(TAG, "Manual reconnection attempt...")
-                        try {
-                            socket?.connect()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Manual reconnect error: ${e.message}")
-                        }
-                        manualRetryHandler.postDelayed(this, 3000)
-                    }
-                }
-                manualRetryHandler.postDelayed(manualRetryRunnable, 3000)
-                notifyListenersOnUiThread("connection_error",
-                    "Koneksi terputus. Mencoba menyambung ulang otomatis..."
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in RECONNECT_FAILED handler: ${e.message}", e)
-            }
-        }
-
-        s.on("reconnect_attempt") { args ->
-            try {
-                val attempt = args?.firstOrNull()
-                Log.i(TAG, "Reconnection attempt: $attempt")
-                if (connectErrorCount < 3) {
-                    notifyListenersOnUiThread("connection_error", "Menyambung ulang... (percobaan $attempt)")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in RECONNECT_ATTEMPT handler: ${e.message}", e)
-            }
-        }
-
-        s.on("reconnect") { args ->
-            try {
-                Log.i(TAG, "Reconnected after ${args?.firstOrNull()} attempts")
+    private fun onEngineMessage(raw: String) {
+        if (raw.isEmpty()) return
+        val type = raw[0]
+        val payload = if (raw.length > 1) raw.substring(1) else ""
+        when (type) {
+            '0' -> {
+                // Engine.IO OPEN — server hello. The payload is a JSON blob
+                // {"sid":"...","upgrades":[],"pingInterval":5000,"pingTimeout":15000,...}.
+                // We don't actually need the sid because we connected via
+                // ws-only (sid=null path on the server) — the server tracks us
+                // by the WS frame, not by sid. Just send the Socket.IO CONNECT.
+                Log.i(TAG, "Engine.IO OPEN received — sending socket.io CONNECT (40)")
                 connectErrorCount = 0
-                notifyListenersOnUiThread("reconnected", null)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in RECONNECT handler: ${e.message}", e)
-            }
-        }
-
-        // ── Auth events ──────────────────────────────────────────────
-
-        s.on(SocketEvents.AUTH_REQUIREMENT) { args ->
-            try {
-                val json = args.firstOrNull() as? JSONObject
-                val passwordRequired = json?.optBoolean("passwordRequired") ?: false
-                Log.i(TAG, "Auth requirement: passwordRequired=$passwordRequired")
-
-                if (passwordRequired) {
-                    connectionState = ConnectionState.AUTHENTICATING
-                    notifyListenersOnUiThread("password_required", null)
-                } else {
-                    if (connectionState == ConnectionState.AUTH_FAILED ||
-                        connectionState == ConnectionState.AUTHENTICATING) {
-                        passwordHash = null
-                        identify()
-                    }
+                if (hasConnectedOnce) {
+                    // This is a reconnect — let listeners know we're back.
+                    notifyListenersOnUiThread("reconnected", null)
                 }
-                notifyListenersOnUiThread("state_changed", connectionState)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling auth-requirement: ${e.message}", e)
+                hasConnectedOnce = true
+                sendRaw("40")  // Socket.IO CONNECT packet
             }
-        }
-
-        s.on(SocketEvents.AUTH_SUCCESS) { args ->
-            try {
-                val json = args.firstOrNull() as? JSONObject
-                Log.i(TAG, "Auth success: $json")
-                connectionState = ConnectionState.AUTHENTICATED
-                notifyListenersOnUiThread("auth_success", json?.toString())
-                notifyListenersOnUiThread("state_changed", connectionState)
-                startPingInterval()
-                flushEventQueue()
-                requestState()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling auth-success: ${e.message}", e)
+            '2' -> {
+                // Engine.IO PING (heartbeat). Server expects a PONG back.
+                sendRaw("3")
             }
-        }
-
-        s.on(SocketEvents.AUTH_FAILED) { args ->
-            try {
-                val json = args.firstOrNull() as? JSONObject
-                val reason = json?.optString("reason") ?: "unknown"
-                Log.w(TAG, "Auth failed: $reason")
-                connectionState = ConnectionState.AUTH_FAILED
-                notifyListenersOnUiThread("auth_failed", reason)
-                notifyListenersOnUiThread("state_changed", connectionState)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling auth-failed: ${e.message}", e)
+            '3' -> {
+                // Engine.IO PONG — in our protocol the client doesn't send
+                // Engine.IO PINGs (OkHttp's WS-level keepalive + the
+                // saatiril-ping app event keep the session alive); ignore.
             }
-        }
-
-        // ── Session password lifecycle ───────────────────────────────
-
-        s.on(SocketEvents.SET_SESSION_PASSWORD) { args ->
-            Log.i(TAG, "Session password set by admin")
-        }
-
-        s.on(SocketEvents.CLEAR_SESSION_PASSWORD) {
-            Log.i(TAG, "Session password cleared by admin")
-            if (connectionState == ConnectionState.AUTH_FAILED ||
-                connectionState == ConnectionState.AUTHENTICATING) {
-                passwordHash = null
-                identify()
+            '4' -> {
+                // Engine.IO MESSAGE — carries a Socket.IO packet in `payload`.
+                handleSioMessage(payload)
             }
-        }
-
-        // ── Latency measurement ──────────────────────────────────────
-
-        s.on(SocketEvents.SAATIRIL_PONG) { args ->
-            try {
-                val timestamp = when (val arg = args.firstOrNull()) {
-                    is Long -> arg
-                    is Int -> arg.toLong()
-                    is Double -> arg.toLong()
-                    is Number -> arg.toLong()
-                    else -> return@on
-                }
-                val latency = System.currentTimeMillis() - timestamp
-                notifyListenersOnUiThread("latency", latency)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling saatiril-pong: ${e.message}", e)
+            '1' -> {
+                // Engine.IO CLOSE — server is closing the connection.
+                Log.i(TAG, "Engine.IO CLOSE from server — closing WS")
+                try { webSocket?.close(1000, "server close") } catch (_: Exception) {}
             }
-        }
-
-        // ── LAN messages (main communication channel) ────────────────
-
-        s.on(SocketEvents.LAN_MESSAGE) { args ->
-            try {
-                val json = args.firstOrNull() as? JSONObject
-                if (json == null) {
-                    Log.w(TAG, "LAN_MESSAGE: args are null or not JSONObject — args types: ${args?.map { it?.javaClass?.simpleName }}")
-                    return@on
-                }
-                handleLanMessage(json)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error handling lan-message: ${e.message}", e)
+            '5' -> {
+                // Engine.IO UPGRADE — not used (we never do polling→WS upgrade;
+                // we connect directly via WS).
+            }
+            '6' -> {
+                // Engine.IO NOOP — used by polling transport to flush a long-poll;
+                // irrelevant for WS. Ignore.
+            }
+            else -> {
+                Log.d(TAG, "Unknown EIO type '$type' — payload preview: ${payload.take(80)}")
             }
         }
     }
 
-    // ─── LAN Message Handler ─────────────────────────────────────
+    private fun handleSioMessage(payload: String) {
+        if (payload.isEmpty()) return
+        val sioType = payload[0]
+        val rest = if (payload.length > 1) payload.substring(1) else ""
+        when (sioType) {
+            '0' -> {
+                // Socket.IO CONNECT ack — server accepted our namespace
+                // connection. This is the equivalent of the io.socket library's
+                // `Socket.EVENT_CONNECT`. Fire the same flow the old code did:
+                // set state → notify → identify → onConnected.
+                Log.i(TAG, "socket.io CONNECT ack (40) — invoking identify()")
+                connected = true
+                connectionState = ConnectionState.CONNECTED
+                notifyListenersOnUiThread("state_changed", connectionState)
+                identify()
+                onConnected?.invoke()
+            }
+            '2' -> {
+                // Socket.IO EVENT: 42["eventName", arg1, arg2, ...]
+                try {
+                    val arr = JSONArray(rest)
+                    if (arr.length() == 0) return
+                    val eventName = arr.optString(0)
+                    // The Saatiril protocol only ever sends one arg (the data
+                    // object). Use opt(1) which returns the typed Java object
+                    // (JSONObject / JSONArray / String / Number / Boolean / null).
+                    val arg = if (arr.length() > 1) arr.opt(1) else null
+                    dispatchSioEvent(eventName, arg)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse SIO EVENT payload: ${e.message}", e)
+                }
+            }
+            '1' -> {
+                // Socket.IO DISCONNECT — namespace disconnect.
+                Log.i(TAG, "socket.io DISCONNECT received")
+                // Server-initiated disconnect — close the WS + reconnect.
+                try { webSocket?.close(1000, "sio disconnect") } catch (_: Exception) {}
+            }
+            '3' -> {
+                // Socket.IO ACK (43<id>[args]) — unused by Saatiril. Ignore.
+                Log.d(TAG, "socket.io ACK received (ignored)")
+            }
+            '4' -> {
+                // Socket.IO ERROR (44{...})
+                Log.e(TAG, "socket.io ERROR from server: $rest")
+            }
+            else -> {
+                Log.w(TAG, "Unknown SIO packet type '$sioType' — rest: ${rest.take(80)}")
+            }
+        }
+    }
+
+    private fun dispatchSioEvent(name: String, arg: Any?) {
+        try {
+            when (name) {
+                SocketEvents.AUTH_REQUIREMENT -> {
+                    val json = arg as? JSONObject
+                    val passwordRequired = json?.optBoolean("passwordRequired") ?: false
+                    Log.i(TAG, "Auth requirement: passwordRequired=$passwordRequired")
+                    if (passwordRequired) {
+                        connectionState = ConnectionState.AUTHENTICATING
+                        notifyListenersOnUiThread("password_required", null)
+                    } else {
+                        if (connectionState == ConnectionState.AUTH_FAILED ||
+                            connectionState == ConnectionState.AUTHENTICATING
+                        ) {
+                            passwordHash = null
+                            identify()
+                        }
+                    }
+                    notifyListenersOnUiThread("state_changed", connectionState)
+                }
+
+                SocketEvents.AUTH_SUCCESS -> {
+                    val json = arg as? JSONObject
+                    Log.i(TAG, "Auth success: $json")
+                    connectionState = ConnectionState.AUTHENTICATED
+                    notifyListenersOnUiThread("auth_success", json?.toString())
+                    notifyListenersOnUiThread("state_changed", connectionState)
+                    startPingInterval()
+                    flushEventQueue()
+                    requestState()
+                }
+
+                SocketEvents.AUTH_FAILED -> {
+                    val json = arg as? JSONObject
+                    val reason = json?.optString("reason") ?: "unknown"
+                    Log.w(TAG, "Auth failed: $reason")
+                    connectionState = ConnectionState.AUTH_FAILED
+                    notifyListenersOnUiThread("auth_failed", reason)
+                    notifyListenersOnUiThread("state_changed", connectionState)
+                }
+
+                // ── Session password lifecycle ───────────────────────────────
+                SocketEvents.SET_SESSION_PASSWORD -> {
+                    Log.i(TAG, "Session password set by admin")
+                }
+
+                SocketEvents.CLEAR_SESSION_PASSWORD -> {
+                    Log.i(TAG, "Session password cleared by admin")
+                    if (connectionState == ConnectionState.AUTH_FAILED ||
+                        connectionState == ConnectionState.AUTHENTICATING
+                    ) {
+                        passwordHash = null
+                        identify()
+                    }
+                }
+
+                // ── Latency measurement ──────────────────────────────────────
+                SocketEvents.SAATIRIL_PONG -> {
+                    try {
+                        val timestamp = when (arg) {
+                            is Long -> arg
+                            is Int -> arg.toLong()
+                            is Double -> arg.toLong()
+                            is Number -> arg.toLong()
+                            is String -> arg.toLongOrNull() ?: return
+                            else -> return
+                        }
+                        val latency = System.currentTimeMillis() - timestamp
+                        notifyListenersOnUiThread("latency", latency)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error handling saatiril-pong: ${e.message}", e)
+                    }
+                }
+
+                // ── LAN messages (main communication channel) ────────────────
+                SocketEvents.LAN_MESSAGE -> {
+                    val json = arg as? JSONObject
+                    if (json == null) {
+                        Log.w(TAG, "LAN_MESSAGE: arg is null or not JSONObject — arg type: ${arg?.javaClass?.simpleName}")
+                        return
+                    }
+                    handleLanMessage(json)
+                }
+
+                else -> {
+                    Log.d(TAG, "Unhandled SIO event '$name' — arg type: ${arg?.javaClass?.simpleName}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in SIO event handler for '$name': ${e.message}", e)
+        }
+    }
+
+    // ─── LAN Message Handler (UNCHANGED from previous version) ────────────
 
     private fun handleLanMessage(json: JSONObject) {
         val event = json.optString("event")
@@ -595,9 +677,9 @@ class SocketManager {
         }
     }
 
-    // ─── Manual JSON Parsing Helpers ────────────────────────────
+    // ─── Manual JSON Parsing Helpers (UNCHANGED) ──────────────
     // These handle cases where Gson fails (e.g., field name mismatches,
-    // unexpected JSON structure, etc.)
+    // unexpected JSON structure, etc.).
 
     private fun parseStudentFromJson(obj: JSONObject): Student {
         return Student(
@@ -612,7 +694,6 @@ class SocketManager {
     private fun parseProjectFromJson(obj: JSONObject): Project {
         val configObj = obj.optJSONObject("config")
         val config = if (configObj != null) {
-            // Handle nullable fields carefully: optString doesn't accept null fallback
             val frameValue = configObj.optString("frame", "")
             val sessionPasswordValue = configObj.optString("sessionPassword", configObj.optString("session_password", ""))
             ProjectConfig(
@@ -683,6 +764,64 @@ class SocketManager {
         )
     }
 
+    // ─── Send helpers (RAW Engine.IO + Socket.IO framing) ──────
+
+    /**
+     * Send a raw Engine.IO packet string (e.g. "40" for socket.io CONNECT,
+     * "3" for PONG, "2" for PING). Returns false if the WebSocket isn't open.
+     */
+    private fun sendRaw(msg: String): Boolean {
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "sendRaw('$msg'): no WebSocket")
+            return false
+        }
+        return try {
+            ws.send(msg)
+        } catch (e: Exception) {
+            Log.e(TAG, "sendRaw('$msg') error: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Send a socket.io EVENT: `42` + JSON-encoded `[name, data]`.
+     * Mirrors McHtml.kt's `sendRaw('42' + JSON.stringify([name, data]))`.
+     *
+     * `data` may be any of: a JSONObject, JSONArray, primitive (Int/Long/Double/
+     * Boolean/String), or a Gson-serializable data class. The result is the
+     * full wire string `42["name",<data>]` ready to be sent as one WS frame.
+     */
+    private fun sendEvent(name: String, data: Any?) {
+        val arr = JSONArray()
+        arr.put(name)
+        if (data != null) {
+            val dataObj = when (data) {
+                is JSONObject -> data
+                is JSONArray -> data
+                is Int, is Long, is Double, is Boolean, is String -> data
+                else -> {
+                    // Serialize via Gson, then re-parse so org.json can wrap it.
+                    val jsonStr = gson.toJson(data)
+                    try {
+                        when {
+                            jsonStr.trimStart().startsWith("{") -> JSONObject(jsonStr)
+                            jsonStr.trimStart().startsWith("[") -> JSONArray(jsonStr)
+                            else -> jsonStr
+                        }
+                    } catch (_: Exception) {
+                        jsonStr
+                    }
+                }
+            }
+            arr.put(dataObj)
+        }
+        val framed = "42" + arr.toString()
+        if (!sendRaw(framed)) {
+            Log.w(TAG, "sendEvent('$name'): WebSocket not open — packet dropped")
+        }
+    }
+
     // ─── Outgoing Events ────────────────────────────────────────
 
     private fun identify() {
@@ -692,8 +831,7 @@ class SocketManager {
                 channel = myChannel,
                 sessionPasswordHash = passwordHash
             )
-            val json = gson.toJson(payload)
-            socket?.emit(SocketEvents.IDENTIFY, JSONObject(json))
+            sendEvent(SocketEvents.IDENTIFY, payload)
             Log.i(TAG, "Identifying as $myRole channel $myChannel, hasPassword=${passwordHash != null}")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending identify: ${e.message}", e)
@@ -723,7 +861,7 @@ class SocketManager {
     }
 
     fun sendStudentDone(studentId: String) {
-        Log.i(TAG, "sendStudentDone: studentId=$studentId, ch=$myChannel, connected=${socket?.connected()}, authenticated=${isAuthenticated()}")
+        Log.i(TAG, "sendStudentDone: studentId=$studentId, ch=$myChannel, connected=$connected, authenticated=${isAuthenticated()}")
         emitLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(
             studentId = studentId,
             channel = myChannel
@@ -738,7 +876,7 @@ class SocketManager {
             version = version,
             filename = filename
         )
-        Log.i(TAG, "sendPhotosSaved: student=${student.nama} (id=${student.id}), photos=${photos.size}, ch=$myChannel, ver=$version, filename=$filename, connected=${socket?.connected()}, authenticated=${isAuthenticated()}")
+        Log.i(TAG, "sendPhotosSaved: student=${student.nama} (id=${student.id}), photos=${photos.size}, ch=$myChannel, ver=$version, filename=$filename, connected=$connected, authenticated=${isAuthenticated()}")
         emitLanMessage(SocketEvents.PHOTOS_SAVED, data)
     }
 
@@ -809,8 +947,9 @@ class SocketManager {
                 })
             }
 
-            if (socket?.connected() == true && isAuthenticated()) {
-                socket?.emit(SocketEvents.LAN_MESSAGE, payload)
+            if (isConnected() && isAuthenticated()) {
+                // Wire: 42["lan-message",{"event":"EVENT","data":{...}}]
+                sendEvent(SocketEvents.LAN_MESSAGE, payload)
                 Log.d(TAG, "Emitted LAN message: $event")
             } else if (event in CRITICAL_EVENTS) {
                 synchronized(eventQueueLock) {
@@ -853,7 +992,7 @@ class SocketManager {
                         JSONObject(dataJsonStr)
                     })
                 }
-                socket?.emit(SocketEvents.LAN_MESSAGE, payload)
+                sendEvent(SocketEvents.LAN_MESSAGE, payload)
                 Log.i(TAG, "Flushed queued event: ${item.event} (attempt ${item.retries})")
             } catch (e: Exception) {
                 Log.e(TAG, "Error flushing queued event ${item.event}: ${e.message}", e)
@@ -862,15 +1001,20 @@ class SocketManager {
     }
 
     // ─── Ping / Latency ────────────────────────────────────────
+    // App-level heartbeat: emits `saatiril-ping` socket.io event every 5s.
+    // The server echoes back as `saatiril-pong` (same timestamp) and the
+    // client measures round-trip latency. This ALSO keeps the server's
+    // `lastSeen` fresh (which prevents the 90s session-timeout reap), so no
+    // additional Engine.IO PING timer is needed.
 
     private fun startPingInterval() {
         stopPingInterval()
-        pingIntervalJob = java.util.Timer("SaatirilPing", true).apply {
+        pingTimer = java.util.Timer("SaatirilPing", true).apply {
             scheduleAtFixedRate(object : java.util.TimerTask() {
                 override fun run() {
                     try {
-                        if (socket?.connected() == true) {
-                            socket?.emit(SocketEvents.SAATIRIL_PING, System.currentTimeMillis())
+                        if (connected) {
+                            sendEvent(SocketEvents.SAATIRIL_PING, System.currentTimeMillis())
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error sending ping: ${e.message}", e)
@@ -881,8 +1025,8 @@ class SocketManager {
     }
 
     private fun stopPingInterval() {
-        pingIntervalJob?.cancel()
-        pingIntervalJob = null
+        pingTimer?.cancel()
+        pingTimer = null
     }
 
     // ─── Event System ──────────────────────────────────────────
@@ -939,5 +1083,41 @@ class SocketManager {
             Log.e(TAG, "Raw data type: ${data?.javaClass?.simpleName}, data preview: ${data?.toString()?.take(200)}")
             null
         }
+    }
+
+    // ─── URL helper ────────────────────────────────────────────
+
+    /**
+     * Build a `ws://host:port/?EIO=3&transport=websocket` URL from the user
+     * input (which may be `http://`, `https://`, `ws://`, `wss://`, or bare
+     * `host:port`). Any path / query on the input is stripped — the server's
+     * WS endpoint is at the root path.
+     */
+    private fun buildWsUrl(serverUrl: String): String? {
+        var url = serverUrl.trim()
+        if (url.isEmpty()) return null
+        when {
+            url.startsWith("https://", ignoreCase = true) -> url = "wss://" + url.substring(8)
+            url.startsWith("http://", ignoreCase = true)  -> url = "ws://" + url.substring(7)
+            url.startsWith("wss://", ignoreCase = true)  -> { /* keep */ }
+            url.startsWith("ws://", ignoreCase = true)   -> { /* keep */ }
+            else                                          -> url = "ws://$url"
+        }
+        val schemeEnd = url.indexOf("://")
+        if (schemeEnd < 0) return null
+        val afterScheme = schemeEnd + 3
+        if (afterScheme >= url.length) return null
+        // Strip path and query — keep only scheme://host[:port]
+        val pathStart = url.indexOf('/', afterScheme)
+        val qStart    = url.indexOf('?', afterScheme)
+        val cut = when {
+            pathStart < 0 && qStart < 0 -> url.length
+            pathStart < 0               -> qStart
+            qStart < 0                  -> pathStart
+            else                        -> minOf(pathStart, qStart)
+        }
+        val hostPort = url.substring(0, cut)
+        if (hostPort.length <= afterScheme) return null
+        return "$hostPort/?EIO=3&transport=websocket"
     }
 }
