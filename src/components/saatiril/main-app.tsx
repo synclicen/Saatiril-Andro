@@ -874,45 +874,58 @@ export function MainApp() {
                 Panel without stale data. Camera stays ready (acceptable for takeover). */}
             <div className={activeView === 'live' ? 'h-full' : 'hidden'}>
               {dualSplitView ? (
-                /* ═══ DUAL mode (dual photo wisuda / dual photoshoot) ═══
-                   Jalur 1 + Jalur 2 side by side, 50/50. Each side = one channel:
-                   MC panel (compact, top ~32%) + Operator camera (bottom ~68%).
-                   The 2 OperatorPanels auto-select DIFFERENT cameras (per-channel
-                   auto-distribution from commit 3bafe52) + each McPanel handles
-                   its own channel's call/done flow. The admin monitors both
-                   cameras + both MC queues in one screen. */
-                <div className="h-full grid grid-cols-2 gap-1">
+                /* ═══ DUAL 50/50 (user-selected via 'Jalur 1 dan 2') ═══
+                   2 RESIZABLE columns: Jalur 1 (left) | Jalur 2 (right), with
+                   a vertical drag handle between them (default 50/50).
+                   Each column = a NESTED resizable vertical split: MC (top) +
+                   Operator (bottom), with a horizontal drag handle between
+                   them. Both panels fill their allocated height (h-full
+                   min-h-0 overflow-hidden) so the WHOLE layout fits in 1 full
+                   screen — NO page scroll. Internal lists (MC queue) scroll
+                   internally only, as expected. The 2 OperatorPanels
+                   auto-select DIFFERENT cameras (per-channel auto-distribution
+                   from commit 3bafe52). */
+                <ResizablePanelGroup direction="horizontal" className="h-full">
                   {/* ── Jalur 1 (channel 1) ── */}
-                  <div className="flex flex-col h-full min-w-0 gap-1">
-                    <div
-                      className="shrink-0 min-h-0 overflow-hidden border-b"
-                      style={{ height: '32%', backgroundColor: THEME.panel, borderColor: THEME.border }}
-                    >
-                      <McPanel compact channel={1} />
-                    </div>
-                    <div className="flex-1 min-h-0 relative">
-                      <OperatorPanel
-                        channel={1}
-                        cameraActive={activeView === 'live'}
-                      />
-                    </div>
-                  </div>
+                  <ResizablePanel defaultSize={50} minSize={25} maxSize={75}>
+                    <ResizablePanelGroup direction="vertical" className="h-full">
+                      <ResizablePanel defaultSize={35} minSize={20} maxSize={70}>
+                        <div className="h-full min-h-0 overflow-hidden" style={{ backgroundColor: THEME.panel }}>
+                          <McPanel compact channel={1} />
+                        </div>
+                      </ResizablePanel>
+                      <ResizableHandle className="h-1.5 hover:h-2 transition-all duration-150" style={{ backgroundColor: THEME.border }} />
+                      <ResizablePanel defaultSize={65} minSize={30}>
+                        <div className="h-full min-h-0 relative">
+                          <OperatorPanel
+                            channel={1}
+                            cameraActive={activeView === 'live'}
+                          />
+                        </div>
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
+                  </ResizablePanel>
+                  <ResizableHandle withHandle className="w-1.5 hover:w-2 transition-all duration-150" style={{ backgroundColor: THEME.border }} />
                   {/* ── Jalur 2 (channel 2) ── */}
-                  <div className="flex flex-col h-full min-w-0 gap-1">
-                    <div
-                      className="shrink-0 min-h-0 overflow-hidden border-b"
-                      style={{ height: '32%', backgroundColor: THEME.panel, borderColor: THEME.border }}
-                    >
-                      <McPanel compact channel={2} />
-                    </div>
-                    <div className="flex-1 min-h-0 relative">
-                      <OperatorPanel
-                        channel={2}
-                        cameraActive={activeView === 'live'}
-                      />
-                    </div>
-                  </div>
-                </div>
+                  <ResizablePanel defaultSize={50} minSize={25} maxSize={75}>
+                    <ResizablePanelGroup direction="vertical" className="h-full">
+                      <ResizablePanel defaultSize={35} minSize={20} maxSize={70}>
+                        <div className="h-full min-h-0 overflow-hidden" style={{ backgroundColor: THEME.panel }}>
+                          <McPanel compact channel={2} />
+                        </div>
+                      </ResizablePanel>
+                      <ResizableHandle className="h-1.5 hover:h-2 transition-all duration-150" style={{ backgroundColor: THEME.border }} />
+                      <ResizablePanel defaultSize={65} minSize={30}>
+                        <div className="h-full min-h-0 relative">
+                          <OperatorPanel
+                            channel={2}
+                            cameraActive={activeView === 'live'}
+                          />
+                        </div>
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
+                  </ResizablePanel>
+                </ResizablePanelGroup>
               ) : (
               <ResizablePanelGroup direction="horizontal" className="h-full">
                 {/* MC Sidebar (left, resizable) */}
