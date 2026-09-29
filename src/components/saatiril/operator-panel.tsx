@@ -56,6 +56,7 @@ import {
   mergeCaptureVersions,
   isPhotoshootMode,
   isDualPhotoshootMode,
+  channelCount,
 } from '@/store/use-saatiril-store'
 import { emitLocal, onLocal, offLocal } from '@/lib/socket'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -234,9 +235,21 @@ export interface OperatorPanelProps {
    * Socket listeners + state (mcCallBuffer etc.) stay active regardless.
    */
   cameraActive?: boolean
+  /**
+   * Per-instance channel override. In dual-photo / dual-photoshoot mode, the
+   * admin's live view renders 2 OperatorPanels side by side (50/50): the
+   * left one with channel={1} (Jalur 1, camera 1) + the right one with
+   * channel={2} (Jalur 2, camera 2). This overrides the store's myChannel
+   * for ALL this instance's logic — channelStudents, opCurrentTarget,
+   * handleMcCall (accepts only its channel's MC_CALL), camera
+   * selectedDeviceId (auto-distributed per-channel), finalizeCapture emits
+   * (STUDENT_DONE + PHOTOS_SAVED carry this channel). When omitted, the
+   * store's myChannel is used (single-channel / default behaviour).
+   */
+  channel?: number
 }
 
-export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, cameraActive = true }: OperatorPanelProps) {
+export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, cameraActive = true, channel }: OperatorPanelProps) {
   const isMobile = useIsMobile()
   const { toast } = useToast()
 
@@ -252,7 +265,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // before the project loaded → stream obtained but unattached → video element
   // rendered later but the useEffect didn't re-run → stream stayed unattached).
   const hasProject = !!currentProject
-  const myChannel = useSaatirilStore((s) => s.myChannel)
+  const storeChannel = useSaatirilStore((s) => s.myChannel)
+  // Per-instance channel override (see OperatorPanelProps.channel). When
+  // provided, this instance uses the override for ALL its logic. When
+  // omitted, fall back to the store's myChannel (single-channel default).
+  const myChannel = channel ?? storeChannel
+  const setMyChannel = useSaatirilStore((s) => s.setMyChannel)
   const opCurrentTarget = useSaatirilStore((s) => s.opCurrentTarget)
   const opCapturedPhotos = useSaatirilStore((s) => s.opCapturedPhotos)
   const setOpCurrentTarget = useSaatirilStore((s) => s.setOpCurrentTarget)
@@ -2117,7 +2135,27 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             {remainingCount}
           </span>
         </div>
-        <span className="text-[9px] shrink-0" style={{ color: THEME.muted }}>Ch.{myChannel}</span>
+        {!channel && channelCount(mode) > 1 ? (
+          /* ── Jalur dropdown (single-panel layout, dual mode) ──
+             When this OperatorPanel is rendered ONCE (no `channel` prop) but
+             the project is dual mode, let the user pick which Jalur to view.
+             Calls setMyChannel. In the admin's dual 50/50 layout, each
+             OperatorPanel has channel={1}/{2} fixed → this branch is skipped
+             (the fixed label below shows instead). */
+          <select
+            value={storeChannel}
+            onChange={(e) => setMyChannel(Number(e.target.value))}
+            className="text-[9px] shrink-0 cursor-pointer rounded-md px-1 py-0.5"
+            style={{ backgroundColor: `${THEME.border}33`, color: THEME.gold, border: `1px solid ${THEME.border}` }}
+            title="Pilih Jalur (channel)"
+          >
+            {Array.from({ length: channelCount(mode) }, (_, i) => i + 1).map((ch) => (
+              <option key={ch} value={ch}>Jalur {ch}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-[9px] shrink-0" style={{ color: THEME.muted }}>Ch.{myChannel}</span>
+        )}
       </div>
 
       <ScrollArea className="flex-1 min-h-0">

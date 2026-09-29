@@ -853,6 +853,47 @@ export function MainApp() {
                 Now the admin can take over (ambil alih) instantly from the MC/Operator
                 Panel without stale data. Camera stays ready (acceptable for takeover). */}
             <div className={activeView === 'live' ? 'h-full' : 'hidden'}>
+              {isDualModeVal ? (
+                /* ═══ DUAL mode (dual photo wisuda / dual photoshoot) ═══
+                   Jalur 1 + Jalur 2 side by side, 50/50. Each side = one channel:
+                   MC panel (compact, top ~32%) + Operator camera (bottom ~68%).
+                   The 2 OperatorPanels auto-select DIFFERENT cameras (per-channel
+                   auto-distribution from commit 3bafe52) + each McPanel handles
+                   its own channel's call/done flow. The admin monitors both
+                   cameras + both MC queues in one screen. */
+                <div className="h-full grid grid-cols-2 gap-1">
+                  {/* ── Jalur 1 (channel 1) ── */}
+                  <div className="flex flex-col h-full min-w-0 gap-1">
+                    <div
+                      className="shrink-0 min-h-0 overflow-hidden border-b"
+                      style={{ height: '32%', backgroundColor: THEME.panel, borderColor: THEME.border }}
+                    >
+                      <McPanel compact channel={1} />
+                    </div>
+                    <div className="flex-1 min-h-0 relative">
+                      <OperatorPanel
+                        channel={1}
+                        cameraActive={activeView === 'live'}
+                      />
+                    </div>
+                  </div>
+                  {/* ── Jalur 2 (channel 2) ── */}
+                  <div className="flex flex-col h-full min-w-0 gap-1">
+                    <div
+                      className="shrink-0 min-h-0 overflow-hidden border-b"
+                      style={{ height: '32%', backgroundColor: THEME.panel, borderColor: THEME.border }}
+                    >
+                      <McPanel compact channel={2} />
+                    </div>
+                    <div className="flex-1 min-h-0 relative">
+                      <OperatorPanel
+                        channel={2}
+                        cameraActive={activeView === 'live'}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <ResizablePanelGroup direction="horizontal" className="h-full">
                 {/* MC Sidebar (left, resizable) */}
                 {mcSidebarOpen && (
@@ -922,6 +963,7 @@ export function MainApp() {
                   </div>
                 </ResizablePanel>
               </ResizablePanelGroup>
+              )}
             </div>
 
             {/* ── ADMIN VIEW: Full-screen admin dashboard ────────────────────────

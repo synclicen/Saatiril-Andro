@@ -72,11 +72,22 @@ interface OpProgressData {
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
-export function McPanel({ compact = false }: { compact?: boolean }) {
+export function McPanel({ compact = false, channel }: { compact?: boolean; channel?: number }) {
   const isMobile = useIsMobile()
 
   const currentProject = useSaatirilStore((s) => s.currentProject)
-  const myChannel = useSaatirilStore((s) => s.myChannel)
+  // ── Per-instance channel override ──────────────────────────────────────
+  // When `channel` is passed (e.g. dual-photo mode renders 2 McPanels side
+  // by side — channel 1 left, channel 2 right), this instance uses that
+  // channel for ALL its logic (channelStudents, currentlyActive,
+  // handleCallNow, handleStudentDone, etc.) instead of the store's
+  // myChannel. This lets 2 instances coexist in one screen, each handling
+  // its own channel. myChannelRef tracks the override so socket listeners
+  // filter by the right channel. The store's myChannel is still used when
+  // no override is given (single-channel / default behaviour).
+  const storeChannel = useSaatirilStore((s) => s.myChannel)
+  const myChannel = channel ?? storeChannel
+  const setMyChannel = useSaatirilStore((s) => s.setMyChannel)
   const updateStudentStatus = useSaatirilStore((s) => s.updateStudentStatus)
   const updateCurrentProject = useSaatirilStore((s) => s.updateCurrentProject)
   const saveProjectsToStorageNow = useSaatirilStore((s) => s.saveProjectsToStorageNow)
@@ -786,9 +797,38 @@ export function McPanel({ compact = false }: { compact?: boolean }) {
           })}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`hidden sm:inline ${condensed ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
-            {photoshoot ? (dualPhotoshoot ? '2 Kamera' : 'Photoshoot') : `Channel ${myChannel}`}
-          </span>
+          {photoshoot ? (
+            <span className={`hidden sm:inline ${condensed ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
+              {dualPhotoshoot ? '2 Kamera' : 'Photoshoot'}
+            </span>
+          ) : !channel && channelCount(mode) > 1 ? (
+            /* ── Jalur dropdown (single-panel layout, dual wisuda mode) ──
+               When this McPanel is rendered ONCE (no `channel` prop override)
+               but the project is dual-wisuda (2 channels), let the user pick
+               which Jalur to view via this dropdown. Calls setMyChannel on the
+               store so the whole panel switches channel. In the admin's dual
+               50/50 layout, each McPanel has channel={1}/{2} fixed → this
+               branch is skipped (the fixed label below shows instead). */
+            <select
+              value={storeChannel}
+              onChange={(e) => setMyChannel(Number(e.target.value))}
+              className={`cursor-pointer rounded-md ${condensed ? 'text-[9px] px-1 py-0.5' : 'text-xs px-2 py-1'}`}
+              style={{
+                backgroundColor: `${THEME.border}33`,
+                color: THEME.gold,
+                border: `1px solid ${THEME.border}`,
+              }}
+              title="Pilih Jalur (channel)"
+            >
+              {Array.from({ length: channelCount(mode) }, (_, i) => i + 1).map((ch) => (
+                <option key={ch} value={ch}>Jalur {ch}</option>
+              ))}
+            </select>
+          ) : (
+            <span className={`hidden sm:inline ${condensed ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
+              {channel ? `Jalur ${channel}` : `Channel ${myChannel}`}
+            </span>
+          )}
           <NetworkQualityBadge />
           {typeof window !== 'undefined' && (window as any).saatirilAPI?.backToLogin && (
             <button
