@@ -489,13 +489,53 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         }))
       setVideoDevices(videoInputs)
       if (videoInputs.length > 0 && !selectedDeviceRef.current) {
-        setSelectedDeviceId(videoInputs[0].deviceId)
-        selectedDeviceRef.current = videoInputs[0].deviceId
+        // ── Per-channel camera selection ──────────────────────────────────
+        // Dual photo mode: 2 cameras on the admin laptop (via USB capture
+        // cards / HDMI capture). Each Operator App (channel 1 + channel 2)
+        // must use a DIFFERENT camera, or the second one gets
+        // NotReadableError (camera already held by the first).
+        // Strategy:
+        //   1. Read the per-channel stored choice (persists across relaunch).
+        //   2. Validate it still exists in the enumerated device list (USB
+        //      deviceIds can change across replugs).
+        //   3. If no valid stored choice, AUTO-DISTRIBUTE by channel index:
+        //      channel N → camera index (N-1). So channel 1 → camera 0,
+        //      channel 2 → camera 1, etc. Fall back to camera 0 if the index
+        //      is out of range. This means the 2 Operator Apps grab DIFFERENT
+        //      cameras on first launch — no conflict, no manual setup.
+        const STORAGE_KEY = `saatiril_op_camera_ch_${myChannel}`
+        let chosenDeviceId = ''
+        try {
+          chosenDeviceId = localStorage.getItem(STORAGE_KEY) || ''
+        } catch { /* localStorage may be unavailable */ }
+        const storedStillExists = chosenDeviceId
+          ? videoInputs.some((d) => d.deviceId === chosenDeviceId)
+          : false
+        if (!storedStillExists) {
+          const idx = Math.max(0, (myChannel - 1))
+          chosenDeviceId = videoInputs[idx]?.deviceId ?? videoInputs[0].deviceId
+        }
+        setSelectedDeviceId(chosenDeviceId)
+        selectedDeviceRef.current = chosenDeviceId
       }
     } catch (err) {
       console.error('[SAATIRIL OP] Failed to enumerate devices:', err)
     }
-  }, [])
+  }, [myChannel])
+
+  // ── Persist the selected camera per-channel ──────────────────────────────
+  // When the user picks a different camera via the dropdown (or when the
+  // auto-distribution above sets one), persist it to localStorage under a
+  // per-channel key. So channel 1's choice + channel 2's choice are stored
+  // independently, and both stick across relaunches. On the next launch,
+  // enumerateVideoDevices reads this back so the 2 Operator Apps keep their
+  // distinct cameras without re-auto-distributing.
+  useEffect(() => {
+    if (!selectedDeviceId || !myChannel) return
+    try {
+      localStorage.setItem(`saatiril_op_camera_ch_${myChannel}`, selectedDeviceId)
+    } catch { /* localStorage may be unavailable */ }
+  }, [selectedDeviceId, myChannel])
 
   // ── Camera: start stream ─────────────────────────────────────────────────
   const startCamera = useCallback(
