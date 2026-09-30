@@ -500,10 +500,28 @@ private fun MCRemoteConnectedScreen(
             val done = queueData.optInt("done", 0)
             val active = queueData.optInt("active", 0)
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Menunggu: ${pending}", style = TextStyle(color = MUTED, fontSize = 11.sp))
-                Text("Selesai: ${done}", style = TextStyle(color = GREEN, fontSize = 11.sp))
-                Text("Total: ${total}", style = TextStyle(color = MUTED, fontSize = 11.sp))
+            // 4 stat pills (matches the Electron mc-panel.tsx stat pills):
+            // ANTREAN / PROSES / SELESAI / TOTAL — each color-coded.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val pills = listOf(
+                    Triple("ANTREAN", pending, MUTED),
+                    Triple("PROSES", active, GOLD),
+                    Triple("SELESAI", done, GREEN),
+                    Triple("TOTAL", total, GOLD)
+                )
+                pills.forEach { (label, count, color) ->
+                    Card(
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(4.dp)),
+                        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.15f)),
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.3f))
+                    ) {
+                        Column(Modifier.padding(vertical = 2.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("$count", style = TextStyle(color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                            Text(label, style = TextStyle(color = color.copy(alpha = 0.7f), fontSize = 7.sp, fontWeight = FontWeight.Bold))
+                        }
+                    }
+                }
             }
 
             // Queue list
@@ -553,17 +571,23 @@ private fun MCRemoteConnectedScreen(
                         ) {
                             Text("${i + 1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 10.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
                             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(dotColor))
-                            Text(
-                                name.ifBlank { nim },
-                                style = TextStyle(
-                                    color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal
-                                ),
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            // Name + NIM (matches the Electron mc-panel — shows
+                            // BOTH name + NIM, with NIM as monospace secondary text).
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    name.ifBlank { nim },
+                                    style = TextStyle(
+                                        color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (nim.isNotBlank() && name.isNotBlank()) {
+                                    Text(nim, style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
+                                }
+                            }
                             if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))
                             else if (isFirstPending) Text("▶", style = TextStyle(color = GOLD, fontSize = 8.sp))
                             if (isDone) Text("✓", style = TextStyle(color = GREEN, fontSize = 9.sp))
