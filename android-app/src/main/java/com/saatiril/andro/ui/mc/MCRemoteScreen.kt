@@ -408,33 +408,50 @@ private fun MCRemoteConnectedScreen(
             border = androidx.compose.foundation.BorderStroke(domBorderWidth, domBorderColor)
         ) {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                // Phase label
-                val phaseText = when (statusPhase) {
-                    BLEProtocol.Phase.STANDBY -> "Menunggu"
-                    BLEProtocol.Phase.READY -> "◆ Sedang Dipanggil"
-                    BLEProtocol.Phase.CAPTURING -> "📸 Sedang Foto"
-                    BLEProtocol.Phase.SENDING -> "💾 Menyimpan"
-                    BLEProtocol.Phase.DONE -> "✓ Selesai"
-                    else -> "Standby"
+                // Name with ◆/▶ prefix (matches McScreen WiFi/LAN layout —
+                // no separate phase text line, the prefix IS the indicator).
+                val namePrefix = when {
+                    statusPhase == "standby" && studentName.isNotBlank() -> "▶ "  // next to call
+                    statusPhase != "standby" -> "◆ "  // being photographed
+                    else -> ""
                 }
-                Text(phaseText, style = TextStyle(color = phaseColor, fontSize = 12.sp, fontWeight = FontWeight.Bold))
-
-                Spacer(Modifier.height(8.dp))
+                val nameColor = if (statusPhase != "standby") GOLD else Color.White
 
                 if (studentName.isNotBlank()) {
                     Text(
-                        studentName,
+                        "$namePrefix$studentName",
                         style = TextStyle(
-                            color = if (statusPhase == "standby") Color.White else GOLD,
-                            fontSize = 22.sp,
+                            color = nameColor,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Black,
-                            lineHeight = 24.sp
+                            lineHeight = 18.sp
                         ),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (studentNim.isNotBlank()) {
-                        Text(studentNim, style = TextStyle(color = MUTED, fontSize = 12.sp, fontFamily = FontFamily.Monospace))
+                    // NIM + phase badge row (matches McScreen — NIM + status
+                    // badge in a compact row below the name).
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+                    ) {
+                        if (studentNim.isNotBlank()) {
+                            Text(studentNim, style = TextStyle(color = MUTED, fontSize = 9.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
+                        }
+                        Card(colors = CardDefaults.cardColors(containerColor = GOLD), shape = RoundedCornerShape(3.dp)) {
+                            Text(
+                                when (statusPhase) {
+                                    BLEProtocol.Phase.READY -> "Dipanggil"
+                                    BLEProtocol.Phase.CAPTURING -> "Foto"
+                                    BLEProtocol.Phase.SENDING -> "Simpan"
+                                    BLEProtocol.Phase.DONE -> "Selesai"
+                                    else -> "Menunggu"
+                                },
+                                Modifier.padding(horizontal = 4.dp, vertical = 0.dp),
+                                style = TextStyle(color = BG, fontWeight = FontWeight.Bold, fontSize = 8.sp)
+                            )
+                        }
                     }
                 } else {
                     Text("Tidak ada mahasiswa", style = TextStyle(color = MUTED, fontSize = 16.sp))
