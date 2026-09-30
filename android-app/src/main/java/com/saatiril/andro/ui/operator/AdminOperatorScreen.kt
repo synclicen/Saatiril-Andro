@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.draw.scale
 import androidx.core.content.ContextCompat
 import com.saatiril.andro.camera.CameraCapture
 import com.saatiril.andro.data.AdminViewModel
@@ -123,6 +124,12 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
 
     // ── Shutter modes (manual / timer-3 / timer-5 / timer-10 / hand) ──
     var shutterMode by remember { mutableStateOf("manual") }
+    // ── Camera mirror (flip horizontal) ──
+    // Toggles Modifier.scale(scaleX = -1f) on the camera preview (AndroidView)
+    // so the live preview is mirrored. Does NOT affect the captured photo
+    // (CameraX ImageCapture captures the raw sensor frame, not the TextureView
+    // display) — photos are saved correctly oriented.
+    var mirror by remember { mutableStateOf(false) }
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
@@ -424,7 +431,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             ) {
                 AndroidView(
                     factory = { textureView },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize().then(if (mirror) Modifier.scale(scaleX = -1f) else Modifier)
                 )
 
                 // Gridline overlay (inside ratio box so it matches the preview)
@@ -784,6 +791,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         Text(label, modifier = Modifier.padding(vertical = 4.dp, horizontal = 2.dp).fillMaxWidth(),
                             style = TextStyle(color = if (shutterMode == mode) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center))
                     }
+                }
+            }
+            // Row 1.5: Mirror toggle (flip horizontal preview — does NOT affect
+            // the captured photo, only the live preview).
+            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable { mirror = !mirror }
+                .border(1.dp, if (mirror) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                colors = CardDefaults.cardColors(containerColor = if (mirror) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("⇄", style = TextStyle(color = if (mirror) GOLD else MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    Text("Mirror", style = TextStyle(color = if (mirror) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                    if (mirror) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
                 }
             }
             // Row 2: Shutter button + Queue toggle + Settings toggle
