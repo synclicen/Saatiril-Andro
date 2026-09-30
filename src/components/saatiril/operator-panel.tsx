@@ -39,6 +39,7 @@ import {
   Zap,
   Timer,
   Hand,
+  FlipHorizontal2,
   Grid3x3,
   Maximize,
   Minimize,
@@ -338,6 +339,13 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
   // ── Shutter mode state ───────────────────────────────────────────────────
   const [shutterMode, setShutterMode] = useState<ShutterMode>('manual')
+  // ── Camera mirror (flip horizontal) ──
+  // Toggles transform: scaleX(-1) on the <video> element so the live preview
+  // is mirrored (useful for front-facing cameras OR when the operator prefers
+  // a mirrored view). Does NOT affect the captured photo — the canvas draw
+  // in handleCapture uses the un-mirrored video frame (so photos are saved
+  // correctly oriented).
+  const [mirror, setMirror] = useState(false)
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
@@ -1602,6 +1610,33 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             )}
           </button>
         )}
+        {/* Row 3: Camera mirror toggle (flip horizontal) — mirrors the live
+            preview via transform: scaleX(-1). Does NOT affect the captured
+            photo (the canvas draw uses the un-mirrored frame). */}
+        <button
+          onClick={() => setMirror((v) => !v)}
+          className={`flex items-center gap-1 rounded-md font-semibold transition-all duration-200 cursor-pointer w-full min-w-0 ${
+            compact ? 'px-1 py-0.5 text-[8px]' : 'px-2 py-1.5 text-[10px]'
+          } ${mirror ? 'scale-[1.02]' : 'hover:bg-white/5'}`}
+          style={{
+            backgroundColor: mirror ? `${THEME.gold}22` : THEME.panel,
+            color: mirror ? THEME.gold : THEME.muted,
+            border: `1px solid ${mirror ? THEME.gold : THEME.border}`,
+            boxShadow: mirror ? `0 0 8px ${THEME.gold}22` : 'none',
+          }}
+          title="Mirror Kamera — balik preview secara horizontal (tidak pengaruhi foto yang disimpan)"
+        >
+          <FlipHorizontal2 className="size-3" />
+          <span className="font-bold">Mirror</span>
+          {mirror && (
+            <>
+              <span style={{ color: THEME.muted }}>•</span>
+              <span className={`text-[8px] ${compact ? '' : 'text-[9px]'}`} style={{ color: THEME.gold }}>
+                Aktif ✓
+              </span>
+            </>
+          )}
+        </button>
       </div>
     )
   }
@@ -1899,6 +1934,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         className="absolute inset-0 w-full h-full object-cover"
         style={{
           filter: cssFilter !== 'none' ? cssFilter : undefined,
+          transform: mirror ? 'scaleX(-1)' : undefined,
         }}
       />
 
