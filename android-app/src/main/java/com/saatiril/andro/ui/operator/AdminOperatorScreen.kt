@@ -431,7 +431,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             ) {
                 AndroidView(
                     factory = { textureView },
-                    modifier = Modifier.fillMaxSize().then(if (mirror) Modifier.scale(scaleX = -1f) else Modifier)
+                    modifier = Modifier.fillMaxSize().then(if (mirror) Modifier.scale(scaleX = -1f, scaleY = 1f) else Modifier)
                 )
 
                 // Gridline overlay (inside ratio box so it matches the preview)
