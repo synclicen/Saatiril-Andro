@@ -370,6 +370,14 @@ private fun MCRemoteConnectedScreen(
     onTrigger: (String) -> Unit
 ) {
     val scrollState = androidx.compose.foundation.rememberScrollState()
+    // Channel selector (matches McScreen WiFi/LAN — Jalur 1/2 for dual mode).
+    var selectedChannel by remember { mutableStateOf(1) }
+    // Auto-scroll to top when queue data changes (so the MC always sees
+    // the top of the queue — the active/next student — not a stale scroll
+    // position from before the update).
+    LaunchedEffect(queueData) {
+        scrollState.animateScrollTo(0)
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)
@@ -509,15 +517,15 @@ private fun MCRemoteConnectedScreen(
             }
         }
 
-        // ── Queue Stats ──
+        // ── Queue Stats + Channel Selector + Queue List ──
         Spacer(Modifier.height(8.dp))
         if (queueData != null) {
-            val total = queueData.optInt("total", 0)
-            val pending = queueData.optInt("pending", 0)
-            val done = queueData.optInt("done", 0)
-            val active = queueData.optInt("active", 0)
+            val total = queueData.optInt("t", 0)
+            val pending = queueData.optInt("p", 0)
+            val done = queueData.optInt("d", 0)
+            val active = queueData.optInt("a", 0)
 
-            // 4 stat pills (matches the Electron mc-panel.tsx stat pills):
+            // 4 stat pills (matches the Electron mc-panel + saatiril-mc.apk):
             // ANTREAN / PROSES / SELESAI / TOTAL — each color-coded.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 val pills = listOf(
@@ -543,19 +551,44 @@ private fun MCRemoteConnectedScreen(
 
             // Queue list
             Spacer(Modifier.height(8.dp))
-            val students = queueData.optJSONArray("students")
-            if (students != null && students.length() > 0) {
+            val studentsArr = queueData.optJSONArray("s")
+            if (studentsArr != null && studentsArr.length() > 0) {
+                // Parse the compact array format: [id, nim, nama(20), status, channel]
+                data class QueueStudent(val id: String, val nim: String, val nama: String, val status: String, val channel: Int)
+                val allStudents = (0 until studentsArr.length()).map { idx ->
+                    val arr = studentsArr.optJSONArray(idx)
+                    QueueStudent(
+                        id = arr?.optString(0) ?: "",
+                        nim = arr?.optString(1) ?: "",
+                        nama = arr?.optString(2) ?: "",
+                        status = arr?.optString(3) ?: "pending",
+                        channel = arr?.optInt(4) ?: 1
+                    )
+                }
+                // Channel selector (matches McScreen WiFi/LAN — Jalur 1/2 pills).
+                // Filter students by the selected channel.
+                val channels = allStudents.map { it.channel }.distinct().sorted()
+                if (channels.size > 1) {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Jalur:", style = TextStyle(color = MUTED, fontSize = 9.sp))
+                        channels.forEach { ch ->
+                            val isSel = selectedChannel == ch
+                            Card(modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { selectedChannel = ch },
+                                colors = CardDefaults.cardColors(containerColor = if (isSel) GOLD.copy(alpha = 0.2f) else PANEL),
+                                shape = RoundedCornerShape(4.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) GOLD else BORDER)) {
+                                Text("$ch", Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = TextStyle(color = if (isSel) GOLD else MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                            }
+                        }
+                    }
+                }
+                val displayStudents = allStudents.filter { it.channel == selectedChannel }
                 Text("Antrean Berikutnya:", style = TextStyle(color = MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
                 Spacer(Modifier.height(4.dp))
-                for (i in 0 until students.length()) {
-                    val s = students.optJSONObject(i)
-                    val name = s?.optString("nama") ?: ""
-                    val nim = s?.optString("nim") ?: ""
-                    val status = s?.optString("status") ?: "pending"
-                    val isActive = status.startsWith("active")
-                    val isDone = status == "done"
-                    // HIGHLIGHT: first pending row (next to call) → button-like gold.
-                    val isFirstPending = i == 0 && status == "pending"
+                displayStudents.forEachIndexed { i, s ->
+                    val isActive = s.status.startsWith("active")
+                    val isDone = s.status == "done"
+                    val isFirstPending = i == 0 && s.status == "pending"
 
                     val rowBg = when {
                         isActive -> GOLD.copy(alpha = 0.18f)
@@ -588,11 +621,9 @@ private fun MCRemoteConnectedScreen(
                         ) {
                             Text("${i + 1}", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 10.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(14.dp))
                             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(dotColor))
-                            // Name + NIM (matches the Electron mc-panel — shows
-                            // BOTH name + NIM, with NIM as monospace secondary text).
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    name.ifBlank { nim },
+                                    s.nama.ifBlank { s.nim },
                                     style = TextStyle(
                                         color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White,
                                         fontSize = 11.sp,
@@ -601,8 +632,8 @@ private fun MCRemoteConnectedScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (nim.isNotBlank() && name.isNotBlank()) {
-                                    Text(nim, style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
+                                if (s.nim.isNotBlank() && s.nama.isNotBlank()) {
+                                    Text(s.nim, style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
                                 }
                             }
                             if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 8.sp))

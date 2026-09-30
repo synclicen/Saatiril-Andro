@@ -799,38 +799,31 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val active = db.filter { isActiveStatus(it.status) }
             val done = db.filter { it.status == "done" }
 
-            // Build JSON: summary + next 10 students
+            // Build COMPACT JSON (array format per student — saves ~30 bytes per
+            // student vs object keys, fitting ~5 students within BLE MTU 514B).
+            // Summary uses short keys: t=total, p=pending, d=done, a=active.
+            // Each student is an array: [id, nim, nama(20), status, channel].
             val json = org.json.JSONObject().apply {
-                put("total", db.size)
-                put("pending", pending.size)
-                put("done", done.size)
-                put("active", active.size)
+                put("t", db.size)
+                put("p", pending.size)
+                put("d", done.size)
+                put("a", active.size)
 
                 val studentsArray = org.json.JSONArray()
-                // Active student first (if any) — truncate nama to 20 chars to
-                // keep the BLE JSON under 514 bytes (MTU 517 - 3 header). The
-                // UUID id (36 chars) + full nim make each entry ~120 bytes.
+                // Active student first (if any) — include assignedChannel.
                 active.forEach { s ->
-                    studentsArray.put(org.json.JSONObject().apply {
-                        put("id", s.id)
-                        put("nim", s.nim)
-                        put("nama", s.nama.take(20))
-                        put("status", s.status)
+                    studentsArray.put(org.json.JSONArray().apply {
+                        put(s.id); put(s.nim); put(s.nama.take(20)); put(s.status); put(s.assignedChannel)
                     })
                 }
-                // Next 2 pending (reduced from 10 → 5 → 2 to fit within BLE MTU
-                // 517 payload of 514 bytes with UUID-length ids). 1 active + 2
-                // pending = 3 students × ~120B + ~50B summary = ~410B < 514B.
-                // The MC sees the current + next 2 students — enough to call.
-                pending.take(2).forEach { s ->
-                    studentsArray.put(org.json.JSONObject().apply {
-                        put("id", s.id)
-                        put("nim", s.nim)
-                        put("nama", s.nama.take(20))
-                        put("status", s.status)
+                // Next 4 pending (compact format fits 1 active + 4 pending = 5
+                // students × ~90B + ~30B summary = ~480B < 514B MTU payload).
+                pending.take(4).forEach { s ->
+                    studentsArray.put(org.json.JSONArray().apply {
+                        put(s.id); put(s.nim); put(s.nama.take(20)); put(s.status); put(s.assignedChannel)
                     })
                 }
-                put("students", studentsArray)
+                put("s", studentsArray)
             }
 
             bleServerManager.updateQueueData(json.toString())
