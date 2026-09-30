@@ -246,11 +246,15 @@ class SocketManager {
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             Log.e(TAG, "WebSocket failure: ${t.message}", t)
-            handleSocketClosed("onFailure")
+            // Surface the ACTUAL error to the user (not a generic message) so
+            // they can diagnose: e.g. 'Connection refused', 'timeout',
+            // 'Cleartext HTTP traffic not permitted', 'Unable to resolve host'.
+            val specificError = t.message ?: t.javaClass.simpleName
+            handleSocketClosed("onFailure", specificError)
         }
     }
 
-    private fun handleSocketClosed(source: String) {
+    private fun handleSocketClosed(source: String, specificError: String? = null) {
         // Null out the dead WS so reconnectRunnable (which gates on
         // `webSocket == null`) will fire + doConnect() can build a fresh one.
         webSocket = null
@@ -268,15 +272,17 @@ class SocketManager {
                 Log.w(TAG, "Connection failed $connectErrorCount times — showing DISCONNECTED state")
                 notifyListenersOnUiThread(
                     "connection_error",
+                    (if (specificError != null) "Error: $specificError\n" else "") +
                     "Tidak dapat terhubung ke server. Pastikan:\n" +
-                    "1. IP & Port benar\n" +
+                    "1. IP & Port benar (default 3003)\n" +
                     "2. Server berjalan di jaringan yang sama\n" +
                     "3. Tidak ada firewall yang memblokir"
                 )
             } else {
                 notifyListenersOnUiThread(
                     "connection_error",
-                    "Koneksi terputus. Mencoba menyambung ulang otomatis... (percobaan $connectErrorCount)"
+                    (if (specificError != null) "Error: $specificError — " else "") +
+                    "Mencoba menyambung ulang otomatis... (percobaan $connectErrorCount)"
                 )
             }
             scheduleReconnect()

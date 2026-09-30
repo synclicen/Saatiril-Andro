@@ -816,8 +816,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         put("status", s.status)
                     })
                 }
-                // Next 10 pending
-                pending.take(10).forEach { s ->
+                // Next 5 pending (reduced from 10 to fit within BLE MTU 517
+                // payload of 514 bytes — 10 students × ~70B = ~750B > 514 →
+                // truncated → JSON parse fails → list empty. 5 students =
+                // ~400B < 514 → fits in a single read).
+                pending.take(5).forEach { s ->
                     studentsArray.put(org.json.JSONObject().apply {
                         put("id", s.id)
                         put("nim", s.nim)
