@@ -242,11 +242,26 @@ fun MCPanelScreen(
                 }
             }
 
-            // Stats
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Menunggu: ${pending.size}", style = TextStyle(color = MUTED, fontSize = 10.sp))
-                Text("Selesai: ${done.size}", style = TextStyle(color = GREEN, fontSize = 10.sp))
-                Text("Total: ${channelStudents.size}", style = TextStyle(color = MUTED, fontSize = 10.sp))
+            // 4 stat pills (matches the Electron mc-panel + saatiril-mc.apk BLE
+            // remote): ANTREAN / PROSES / SELESAI / TOTAL — each color-coded.
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val pills = listOf(
+                    Triple("ANTREAN", pending.size, MUTED),
+                    Triple("PROSES", active.size, GOLD),
+                    Triple("SELESAI", done.size, GREEN),
+                    Triple("TOTAL", channelStudents.size, GOLD)
+                )
+                pills.forEach { (label, count, color) ->
+                    Card(modifier = Modifier.weight(1f).clip(RoundedCornerShape(4.dp)),
+                        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.15f)),
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.3f))) {
+                        Column(Modifier.padding(vertical = 2.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("$count", style = TextStyle(color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+                            Text(label, style = TextStyle(color = color.copy(alpha = 0.7f), fontSize = 7.sp, fontWeight = FontWeight.Bold))
+                        }
+                    }
+                }
             }
         } else {
             // Photoshoot mode — MC just sees stats (no PANGGIL)
@@ -307,7 +322,14 @@ private fun MCQueueRow(number: Int, student: Student, channel: Int) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("$number", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 11.sp, fontFamily = FontFamily.Monospace), modifier = Modifier.width(16.dp))
             Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(statusColor))
-            Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Name + NIM (matches the Electron mc-panel + saatiril-mc.apk — shows
+            // BOTH name + NIM, with NIM as monospace secondary text).
+            Column(Modifier.weight(1f)) {
+                Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isActive || isFirstPending) GOLD else if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 12.sp, fontWeight = if (isActive) FontWeight.Bold else if (isFirstPending) FontWeight.SemiBold else FontWeight.Normal), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (student.nim.isNotBlank() && student.nama.isNotBlank()) {
+                    Text(student.nim, style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 8.sp, fontFamily = FontFamily.Monospace), maxLines = 1)
+                }
+            }
             if (isActive) Text("◆", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
             else if (isFirstPending) Text("▶", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
             if (isDone) Text("✓", style = TextStyle(color = GREEN, fontSize = 10.sp))
