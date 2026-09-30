@@ -807,24 +807,26 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 put("active", active.size)
 
                 val studentsArray = org.json.JSONArray()
-                // Active student first (if any)
+                // Active student first (if any) — truncate nama to 20 chars to
+                // keep the BLE JSON under 514 bytes (MTU 517 - 3 header). The
+                // UUID id (36 chars) + full nim make each entry ~120 bytes.
                 active.forEach { s ->
                     studentsArray.put(org.json.JSONObject().apply {
                         put("id", s.id)
                         put("nim", s.nim)
-                        put("nama", s.nama)
+                        put("nama", s.nama.take(20))
                         put("status", s.status)
                     })
                 }
-                // Next 5 pending (reduced from 10 to fit within BLE MTU 517
-                // payload of 514 bytes — 10 students × ~70B = ~750B > 514 →
-                // truncated → JSON parse fails → list empty. 5 students =
-                // ~400B < 514 → fits in a single read).
-                pending.take(5).forEach { s ->
+                // Next 2 pending (reduced from 10 → 5 → 2 to fit within BLE MTU
+                // 517 payload of 514 bytes with UUID-length ids). 1 active + 2
+                // pending = 3 students × ~120B + ~50B summary = ~410B < 514B.
+                // The MC sees the current + next 2 students — enough to call.
+                pending.take(2).forEach { s ->
                     studentsArray.put(org.json.JSONObject().apply {
                         put("id", s.id)
                         put("nim", s.nim)
-                        put("nama", s.nama)
+                        put("nama", s.nama.take(20))
                         put("status", s.status)
                     })
                 }
