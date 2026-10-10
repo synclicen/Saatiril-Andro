@@ -38,6 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.NetworkInterface
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * ═════════════════════════════════════════════════════════════════════════
@@ -93,13 +94,19 @@ object SaatirilServer {
 
     // ─── Internal session store ─────────────────────────────────
     private val sessions = ConcurrentHashMap<String, ClientSession>()
-    @Volatile private var totalConnections: Long = 0
-    @Volatile private var totalMessagesRelayed: Long = 0
+    // #12: atomic counters — increments previously raced across handler threads
+    private val totalConnections = AtomicLong(0)
+    private val totalMessagesRelayed = AtomicLong(0)
     @Volatile private var sessionPasswordHash: String? = null
 
     /** App-level callback for lan-message events (set by AdminViewModel). */
     @Volatile
     var onLanMessage: ((event: String, data: JsonElement?, senderSid: String?) -> Unit)? = null
+
+    /** App-level callback for BLE trigger requests POSTed to /api/ble-trigger
+     *  (set by AdminViewModel — wired to the same handler as native BLE triggers). */
+    @Volatile
+    var onBleTrigger: ((action: String, studentId: String?) -> Unit)? = null
 
     // ═══════════════════════════════════════════════════════════════
     //  Lifecycle
@@ -147,10 +154,15 @@ object SaatirilServer {
                         get("/") { handlePollingGet(call) }
                         post("/") { handlePollingPost(call) }
                         webSocket("/") { handleWebSocket(this) }
+                        // #5: BLE trigger bridge — the Electron admin's embedded
+                        // /admin-ble page (AdminBleHtml.kt) forwards MC
+                        // PANGGIL/NEXT/RESET triggers here via fetch(). Routed to
+                        // the same AdminViewModel handler as native BLE triggers.
+                        post("/api/ble-trigger") { handleBleTrigger(call) }
                         // #29: /health endpoint for monitoring (matches Electron index.ts:46-62)
                         get("/health") {
                             call.respondText(
-                                """{"status":"ok","uptime":${System.currentTimeMillis() - startedAt},"connectedClients":${sessions.count { it.value.authenticated }},"totalConnections":$totalConnections,"totalMessagesRelayed":$totalMessagesRelayed,"maxConnections":$MAX_CONNECTIONS,"sessionPasswordActive":${sessionPasswordHash != null}}""",
+                                """{"status":"ok","uptime":${System.currentTimeMillis() - startedAt},"connectedClients":${sessions.count { it.value.authenticated }},"totalConnections":${totalConnections.get()},"totalMessagesRelayed":${totalMessagesRelayed.get()},"maxConnections":$MAX_CONNECTIONS,"sessionPasswordActive":${sessionPasswordHash != null}}""",
                                 ContentType.Application.Json
                             )
                         }
@@ -312,7 +324,7 @@ object SaatirilServer {
             val newSid = EngineIO.newSid()
             val session = ClientSession(newSid).apply { this.transport = "polling" }
             sessions[newSid] = session
-            totalConnections++
+            totalConnections.incrementAndGet()
             Log.i(TAG, "New polling session: $newSid (total=${sessions.size}/$MAX_CONNECTIONS)")
             val openPacket = EngineIO.encodeEioPacket(EngineIO.TYPE_OPEN,
                 """{"sid":"$newSid","upgrades":["websocket"],"pingInterval":$PING_INTERVAL_MS,"pingTimeout":$PING_TIMEOUT_MS,"maxPayload":$MAX_PAYLOAD}""")
@@ -383,6 +395,34 @@ object SaatirilServer {
         call.respondText("ok", ContentType.Text.Plain)
     }
 
+    /**
+     * #5: POST /api/ble-trigger — body `{"action":"PANGGIL"|"NEXT"|"RESET",
+     * "studentId":"..."?}`. Forwards to [onBleTrigger] (AdminViewModel wires
+     * it to the same handler used by native BLE triggers). 200 {"ok":true}
+     * on success, 400 on parse errors.
+     */
+    private suspend fun handleBleTrigger(call: ApplicationCall) {
+        setCorsHeaders(call)
+        try {
+            val obj = JsonParser.parseString(call.receiveText()).asJsonObject
+            val action = obj.get("action")?.takeIf { !it.isJsonNull }?.asString
+            if (action.isNullOrBlank()) {
+                call.respondText("""{"error":"missing action"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return
+            }
+            val studentId = obj.get("studentId")?.takeIf { !it.isJsonNull && it.asString.isNotBlank() }?.asString
+            try {
+                onBleTrigger?.invoke(action, studentId)
+            } catch (e: Exception) {
+                Log.e(TAG, "onBleTrigger handler error for $action: ${e.message}", e)
+            }
+            call.respondText("""{"ok":true}""", ContentType.Application.Json)
+        } catch (e: Exception) {
+            Log.w(TAG, "/api/ble-trigger bad request: ${e.message}")
+            call.respondText("""{"error":"bad request"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        }
+    }
+
     private fun setCorsHeaders(call: ApplicationCall) {
         call.response.headers.append("Access-Control-Allow-Origin", "*")
         call.response.headers.append("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -409,10 +449,11 @@ object SaatirilServer {
             val newSid = EngineIO.newSid()
             val s = ClientSession(newSid).apply { this.transport = "websocket" }
             sessions[newSid] = s
-            totalConnections++
+            totalConnections.incrementAndGet()
             s.wsSession = ws
             s.upgraded = true  // WS is the active transport immediately
-            // send open packet
+            startWsWriter(s, ws)
+            // send open packet (first frame on this WS — nothing queued yet)
             val openPacket = EngineIO.encodeEioPacket(EngineIO.TYPE_OPEN,
                 """{"sid":"$newSid","upgrades":[],"pingInterval":$PING_INTERVAL_MS,"pingTimeout":$PING_TIMEOUT_MS,"maxPayload":$MAX_PAYLOAD}""")
             ws.send(Frame.Text(openPacket))
@@ -429,6 +470,7 @@ object SaatirilServer {
             existing.wsSession = ws
             existing.transport = "websocket"
             // Note: upgraded stays false until we receive the `5` upgrade packet.
+            startWsWriter(existing, ws)
             Log.i(TAG, "WS upgrade for session: $sid")
             existing
         }
@@ -443,10 +485,61 @@ object SaatirilServer {
         } catch (e: Exception) {
             Log.w(TAG, "WS session ${session.sid} ended: ${e.message}")
         } finally {
-            sessions.remove(session.sid)
-            Log.i(TAG, "Session ${session.sid} removed (total=${sessions.size})")
+            // #2: only tear the session down if this WS was (or became) the
+            // ACTIVE transport (`upgraded` is true for WS-only sessions and
+            // after a completed polling→WS upgrade). If this was a FAILED
+            // upgrade attempt (client attached the WS but never completed the
+            // probe/upgrade — `upgraded` still false), the polling session is
+            // still live: just detach this WS so sends fall back to the poll
+            // queue and keep the session registered.
+            val wasActiveTransport = session.upgraded
+            stopWsWriter(session)
+            session.wsSession = null
+            if (wasActiveTransport) {
+                session.close()
+                sessions.remove(session.sid)
+                Log.i(TAG, "Session ${session.sid} removed (total=${sessions.size})")
+            } else {
+                session.transport = "polling"
+                Log.i(TAG, "WS for session ${session.sid} closed before upgrade — polling transport kept alive")
+            }
             updateClients(); updateStats()
         }
+    }
+
+    // ── Per-session serialized WS writer (#11) ─────────────────────────
+    // sendToSession used to launch one coroutine per packet on Dispatchers.IO,
+    // so two ordered packets (e.g. the "40" CONNECT ack followed by an event)
+    // could race and arrive swapped. Each WS now gets ONE writer coroutine
+    // draining a dedicated channel — strict FIFO per session, mirroring the
+    // outgoingQueue pattern used for polling.
+
+    private fun startWsWriter(session: ClientSession, ws: io.ktor.websocket.WebSocketSession) {
+        // Fresh channel per WS connection (a previous failed upgrade attempt
+        // leaves a closed channel behind — channels cannot be reopened).
+        session.wsWriterJob?.cancel()
+        val oldChannel = session.wsSendChannel
+        val channel = Channel<String>(Channel.UNLIMITED)
+        session.wsSendChannel = channel
+        oldChannel.close()
+        session.wsWriterJob = scope.launch {
+            for (packet in channel) {
+                try {
+                    ws.send(Frame.Text(packet))
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "WS send failed for ${session.sid}: ${e.message}")
+                    break
+                }
+            }
+        }
+    }
+
+    private fun stopWsWriter(session: ClientSession) {
+        session.wsWriterJob?.cancel()
+        session.wsWriterJob = null
+        session.wsSendChannel.close()
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -459,8 +552,17 @@ object SaatirilServer {
             EngineIO.TYPE_PING -> {
                 // Heartbeat: client pings, server responds pong.
                 if (eioData == "probe") {
-                    // Polling→WS upgrade probe: respond with `3probe`
-                    sendToSession(session, EngineIO.encodeEioPacket(EngineIO.TYPE_PONG, "probe"))
+                    // #1 (CRITICAL): polling→WS upgrade probe — the `3probe` reply
+                    // MUST travel on the WebSocket being probed. sendToSession()
+                    // would divert it to the polling queue because `upgraded` is
+                    // still false at probe time, so the client would never see the
+                    // pong and would abort the upgrade. Route it through the WS
+                    // writer channel directly.
+                    if (session.wsSession != null) {
+                        session.wsSendChannel.trySend(EngineIO.encodeEioPacket(EngineIO.TYPE_PONG, "probe"))
+                    } else {
+                        sendToSession(session, EngineIO.encodeEioPacket(EngineIO.TYPE_PONG, "probe"))
+                    }
                 } else {
                     sendToSession(session, EngineIO.encodeEioPacket(EngineIO.TYPE_PONG))
                 }
@@ -566,10 +668,17 @@ object SaatirilServer {
     }
 
     private fun handleLanMessage(session: ClientSession, args: JsonElement?) {
+        // #3: only authenticated (identified) clients may inject lan-messages —
+        // otherwise any un-identified LAN device could emit PHOTOS_SAVED /
+        // MC_CALL / STUDENT_DONE into the relay.
+        if (!session.authenticated) {
+            Log.w(TAG, "Dropping lan-message from unauthenticated session ${session.sid}")
+            return
+        }
         val obj = args as? JsonObject
         val event = obj?.get("event")?.asString ?: return
         val data = obj.get("data")
-        totalMessagesRelayed++
+        totalMessagesRelayed.incrementAndGet()
 
         // 1) Relay to all OTHER authenticated clients (dumb relay, matches Node server)
         val relayPacket = EngineIO.encodeSioEvent("lan-message", obj)
@@ -595,10 +704,10 @@ object SaatirilServer {
     private fun sendToSession(session: ClientSession, eioPacket: String) {
         val ws = session.wsSession
         if (ws != null && session.upgraded) {
-            // Send via websocket (must be on the WS session's coroutine context)
-            scope.launch {
-                try { ws.send(Frame.Text(eioPacket)) } catch (e: Exception) { Log.w(TAG, "WS send failed: ${e.message}") }
-            }
+            // #11: route through the per-session writer channel so frames are
+            // written in order (a fresh coroutine per packet on Dispatchers.IO
+            // gave no ordering guarantee).
+            session.wsSendChannel.trySend(eioPacket)
         } else {
             // Enqueue for polling
             session.outgoingQueue.trySend(eioPacket)
@@ -651,8 +760,8 @@ object SaatirilServer {
         _stats.value = ServerStats(
             uptimeMs = if (_running.value) System.currentTimeMillis() - startedAt else 0,
             connectedClients = sessions.count { it.value.authenticated },
-            totalConnections = totalConnections,
-            totalMessagesRelayed = totalMessagesRelayed,
+            totalConnections = totalConnections.get(),
+            totalMessagesRelayed = totalMessagesRelayed.get(),
             maxConnections = 10,
             sessionPasswordActive = sessionPasswordHash != null
         )
@@ -664,16 +773,23 @@ object SaatirilServer {
     private fun detectLanIp(): String? {
         return try {
             val interfaces = NetworkInterface.getNetworkInterfaces().toList()
+            var fallback: String? = null
             for (intf in interfaces) {
                 if (!intf.isUp || intf.isLoopback) continue
-                val addrs = intf.inetAddresses.toList()
-                for (a in addrs) {
+                // #6: prefer WiFi / hotspot interfaces (wlan*/ap*/swlan*) — the
+                // first non-loopback address may be cellular (rmnet*) or a VPN
+                // (tun*), which LAN clients cannot reach.
+                val name = intf.name?.lowercase() ?: ""
+                val isLan = name.contains("wlan") || name.contains("ap")
+                for (a in intf.inetAddresses.toList()) {
                     if (!a.isLoopbackAddress && a.hostAddress?.contains(':') == false) {
-                        return a.hostAddress
+                        if (isLan) return a.hostAddress
+                        if (fallback == null) fallback = a.hostAddress
                     }
                 }
             }
-            null
+            // No wlan/ap interface found — fall back to any non-loopback IPv4.
+            fallback
         } catch (e: Exception) { null }
     }
 }
@@ -694,9 +810,17 @@ internal class ClientSession(val sid: String) {
     @Volatile var upgraded: Boolean = false
     @Volatile var activePoll: Boolean = false
     val outgoingQueue = Channel<String>(Channel.UNLIMITED)
+    // #11: dedicated serialized send path for the websocket transport — one
+    // writer coroutine per session drains this channel (see startWsWriter).
+    @Volatile var wsSendChannel: Channel<String> = Channel(Channel.UNLIMITED)
+    @Volatile var wsWriterJob: Job? = null
 
     fun close() {
         try { outgoingQueue.close() } catch (_: Exception) {}
+        // #11: also stop the WS writer so no frame is sent after close().
+        wsWriterJob?.cancel()
+        wsWriterJob = null
+        try { wsSendChannel.close() } catch (_: Exception) {}
         // Note: the WebSocketSession is closed by the handleWebSocket() finally block
         // when the channel completes; we just null the reference here.
         wsSession = null

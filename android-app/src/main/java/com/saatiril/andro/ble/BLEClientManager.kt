@@ -42,6 +42,16 @@ class BLEClientManager(private val context: Context) {
     private var bluetoothGatt: BluetoothGatt? = null
     private var isScanning = false
     private var isConnected = false
+    private var isConnecting = false
+
+    // Serialized GATT setup operations. Android's BLE stack allows only ONE
+    // in-flight GATT operation — issuing writeDescriptor/readCharacteristic
+    // calls back-to-back makes many stacks (notably pre-Android-13) silently
+    // drop all but the first, so notifications/initial data never arrived.
+    // Each queued op runs only after the previous one's callback fires.
+    // (All access happens on the GATT callback binder thread.)
+    private val pendingGattOps = ArrayDeque<(BluetoothGatt) -> Boolean>()
+    private var gattOpInFlight = false
 
     // Characteristics (for reading/writing after discovery)
     private var nextStudentChar: BluetoothGattCharacteristic? = null
@@ -134,9 +144,28 @@ class BLEClientManager(private val context: Context) {
     fun connect(device: BluetoothDevice): Boolean {
         if (!isBluetoothAvailable()) return false
 
+        // Guard double-connect: if we're already connected (or mid-connect) to
+        // this same device, don't stack a second GATT client on top of it.
+        if ((isConnected || isConnecting) && bluetoothGatt?.device?.address == device.address) {
+            Log.i(TAG, "Already connected/connecting to ${device.address} — ignoring duplicate connect")
+            return true
+        }
+
         stopScan()
 
-        bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        // Close any previous GATT client before opening a new one — a fresh
+        // connectGatt() without closing the old instance leaks it and slowly
+        // exhausts Android's limited BLE connection slots.
+        try { bluetoothGatt?.close() } catch (_: Exception) {}
+        bluetoothGatt = null
+
+        val gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        if (gatt == null) {
+            Log.e(TAG, "connectGatt returned null for ${device.address}")
+            return false
+        }
+        bluetoothGatt = gatt
+        isConnecting = true
         Log.i(TAG, "Connecting to ${device.address}...")
         return true
     }
@@ -154,6 +183,9 @@ class BLEClientManager(private val context: Context) {
         try { bluetoothGatt?.close() } catch (_: Exception) {}
         bluetoothGatt = null
         isConnected = false
+        isConnecting = false
+        pendingGattOps.clear()
+        gattOpInFlight = false
     }
 
     // ── GATT Callback ──
@@ -164,6 +196,7 @@ class BLEClientManager(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     isConnected = true
+                    isConnecting = false
                     Log.i(TAG, "Connected to Admin — requesting larger MTU...")
                     // Request a larger MTU (517) BEFORE service discovery + reads.
                     // The queue data JSON (~650-850B for 10 students) exceeds the
@@ -179,6 +212,11 @@ class BLEClientManager(private val context: Context) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     isConnected = false
+                    isConnecting = false
+                    // Drop any queued GATT setup ops — they belong to the dead
+                    // connection and would stall/fail on a fresh one.
+                    pendingGattOps.clear()
+                    gattOpInFlight = false
                     connectedDevicesClear()
                     Log.i(TAG, "Disconnected from Admin")
                     onConnectionStateChanged?.invoke(false)
@@ -210,18 +248,32 @@ class BLEClientManager(private val context: Context) {
             queueDataChar = service.getCharacteristic(java.util.UUID.fromString(BLEProtocol.CHAR_QUEUE_DATA))
             projectInfoChar = service.getCharacteristic(java.util.UUID.fromString(BLEProtocol.CHAR_PROJECT_INFO))
 
-            // Subscribe to notifications
-            subscribeToCharacteristic(gatt, nextStudentChar)
-            subscribeToCharacteristic(gatt, statusChar)
-            subscribeToCharacteristic(gatt, queueDataChar)
+            // Queue ALL setup operations and run them STRICTLY one at a time:
+            // 3 CCCD subscribes, then the initial reads. Firing them back-to-
+            // back makes many Android stacks (notably pre-Android-13) drop all
+            // but the first operation silently. Each op runs only after the
+            // previous one's onDescriptorWrite / onCharacteristicRead callback
+            // fires — see [runNextGattOp] / [onGattOpFinished].
+            pendingGattOps.clear()
+            gattOpInFlight = false
+            enqueueSubscribeOp(nextStudentChar)
+            enqueueSubscribeOp(statusChar)
+            enqueueSubscribeOp(queueDataChar)
+            enqueueReadOp(projectInfoChar)
+            enqueueReadOp(queueDataChar)
+            enqueueReadOp(nextStudentChar)
+            runNextGattOp(gatt)
 
-            // Read initial values
-            projectInfoChar?.let { gatt.readCharacteristic(it) }
-            queueDataChar?.let { gatt.readCharacteristic(it) }
-            nextStudentChar?.let { gatt.readCharacteristic(it) }
-
-            Log.i(TAG, "Services discovered — subscribed to notifications")
+            Log.i(TAG, "Services discovered — queued notification subscribes + initial reads")
             onConnectionStateChanged?.invoke(true)
+        }
+
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.w(TAG, "Descriptor write failed for ${descriptor.uuid}: status=$status")
+            }
+            // Advance the serialized setup queue (a failed write must not stall it).
+            onGattOpFinished(gatt)
         }
 
         override fun onCharacteristicRead(
@@ -229,13 +281,25 @@ class BLEClientManager(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
+            // Advance the serialized setup queue FIRST — a failed/null read
+            // must not stall the remaining queued operations.
+            onGattOpFinished(gatt)
+
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.w(TAG, "Read failed for ${characteristic.uuid}: status=$status")
                 return
             }
 
+            // characteristic.value is platform-typed (ByteArray!) and CAN be
+            // null — guard before String(...) or this throws an NPE.
+            val bytes = characteristic.value
+            if (bytes == null) {
+                Log.w(TAG, "Read returned null value for ${characteristic.uuid}")
+                return
+            }
+            val value = String(bytes, StandardCharsets.UTF_8)
+
             val uuid = characteristic.uuid.toString()
-            val value = String(characteristic.value, StandardCharsets.UTF_8)
 
             when (uuid) {
                 BLEProtocol.CHAR_NEXT_STUDENT -> onNextStudentReceived?.invoke(value)
@@ -249,8 +313,10 @@ class BLEClientManager(private val context: Context) {
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
+            // characteristic.value can be null — guard against NPE.
+            val bytes = characteristic.value ?: return
             val uuid = characteristic.uuid.toString()
-            val value = String(characteristic.value, StandardCharsets.UTF_8)
+            val value = String(bytes, StandardCharsets.UTF_8)
 
             when (uuid) {
                 BLEProtocol.CHAR_NEXT_STUDENT -> {
@@ -310,15 +376,50 @@ class BLEClientManager(private val context: Context) {
 
     // ── Helpers ──
 
-    private fun subscribeToCharacteristic(gatt: BluetoothGatt, char: BluetoothGattCharacteristic?) {
+    /** Enqueue a CCCD-notification subscribe for [char] (no-op if missing). */
+    private fun enqueueSubscribeOp(char: BluetoothGattCharacteristic?) {
         if (char == null) return
+        pendingGattOps.addLast { gatt -> subscribeToCharacteristic(gatt, char) }
+    }
+
+    /** Enqueue an initial read of [char] (no-op if missing). */
+    private fun enqueueReadOp(char: BluetoothGattCharacteristic?) {
+        if (char == null) return
+        pendingGattOps.addLast { gatt -> gatt.readCharacteristic(char) }
+    }
+
+    /** Run the next queued GATT operation (if none is in flight). */
+    private fun runNextGattOp(gatt: BluetoothGatt) {
+        if (gattOpInFlight) return
+        val op = pendingGattOps.removeFirstOrNull() ?: return
+        gattOpInFlight = op(gatt)
+        if (!gattOpInFlight) {
+            // Operation had nothing in flight (e.g. missing CCCD) — move on
+            // to the next queued operation immediately.
+            runNextGattOp(gatt)
+        }
+    }
+
+    /** Called from onDescriptorWrite / onCharacteristicRead to advance the queue. */
+    private fun onGattOpFinished(gatt: BluetoothGatt) {
+        gattOpInFlight = false
+        runNextGattOp(gatt)
+    }
+
+    /**
+     * Enable local notifications + write the CCCD descriptor.
+     * @return true if the descriptor write was actually initiated.
+     */
+    private fun subscribeToCharacteristic(gatt: BluetoothGatt, char: BluetoothGattCharacteristic?): Boolean {
+        if (char == null) return false
         gatt.setCharacteristicNotification(char, true)
 
         val cccd = char.getDescriptor(java.util.UUID.fromString(BLEProtocol.DESC_CCCD))
         if (cccd != null) {
             cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            gatt.writeDescriptor(cccd)
+            return gatt.writeDescriptor(cccd)
         }
+        return false // no CCCD on this characteristic — nothing was put in flight
     }
 
     private fun connectedDevicesClear() {

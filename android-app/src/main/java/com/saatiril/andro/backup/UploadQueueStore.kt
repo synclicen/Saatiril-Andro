@@ -229,6 +229,27 @@ class UploadQueueStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         Log.i(TAG, "Retried $count failed uploads")
     }
 
+    /**
+     * Recover rows stuck in UPLOADING. If the app dies mid-upload (process
+     * death, OOM kill), those rows are never re-dequeued by the worker (it
+     * only picks status='pending'). Called once at app startup to reset them
+     * to PENDING so they get retried.
+     * @return number of rows recovered
+     */
+    fun recoverStuckUploads(): Int {
+        return try {
+            val values = ContentValues().apply { put(COL_STATUS, STATUS_PENDING) }
+            val count = writableDatabase.update(
+                TABLE, values, "$COL_STATUS = ?", arrayOf(STATUS_UPLOADING)
+            )
+            if (count > 0) Log.i(TAG, "Recovered $count stuck 'uploading' rows → pending")
+            count
+        } catch (e: Exception) {
+            Log.w(TAG, "recoverStuckUploads error: ${e.message}")
+            0
+        }
+    }
+
     /** Clear all items for a specific project. */
     fun clearProject(projectName: String) {
         val count = writableDatabase.delete(TABLE, "$COL_PROJECT_NAME = ?", arrayOf(projectName))

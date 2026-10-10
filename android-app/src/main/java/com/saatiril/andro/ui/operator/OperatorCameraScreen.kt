@@ -2,6 +2,7 @@ package com.saatiril.andro.ui.operator
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -176,6 +177,34 @@ fun OperatorCameraScreen(
             opViewModel.camera2Manager.setProjectAspectRatio(ar)
             opViewModel.camera2Manager.setTextureView(textureView)
             opViewModel.cameraUVCManager.setTextureView(textureView)
+
+            // BUG FIX: TextureView keeps only ONE surfaceTextureListener — the
+            // second setTextureView call above replaced Camera2's, so Camera2
+            // never received surface events (intermittent permanent black
+            // preview). Install ONE shared listener LAST that fans the events
+            // out to BOTH managers.
+            textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                    opViewModel.camera2Manager.onSurfaceTextureAvailable(width, height)
+                    opViewModel.cameraUVCManager.onSurfaceTextureAvailable(surface, width, height)
+                }
+
+                override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                    opViewModel.camera2Manager.onSurfaceTextureSizeChanged(width, height)
+                    opViewModel.cameraUVCManager.onSurfaceTextureSizeChanged(surface, width, height)
+                }
+
+                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                    val c2Handled = opViewModel.camera2Manager.onSurfaceTextureDestroyed()
+                    val uvcHandled = opViewModel.cameraUVCManager.onSurfaceTextureDestroyed()
+                    return c2Handled && uvcHandled
+                }
+
+                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                    // Called on every frame — no-op (both managers no-op here)
+                }
+            }
+
             opViewModel.camera2Manager.enumerateCameras()
             opViewModel.cameraUVCManager.initCamera()
             opViewModel.camera2Manager.openCamera()

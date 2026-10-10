@@ -165,7 +165,17 @@ class CeremonyModeVpnService : VpnService() {
 
         // Skip 192.168.0.0/16 (192.168.x.x):
         builder.addRoute("192.0.0.0", 9)     // 192.0-192.127
-        builder.addRoute("192.128.0.0", 10)  // 192.128-192.191
+        // 192.128-192.191, i.e. 192.128.0.0/10, EXCEPT the LAN 192.168.0.0/16.
+        // A single addRoute("192.128.0.0", 10) is WRONG: it also covers
+        // 192.168.x.x (the LAN) and would route hotspot clients' traffic into
+        // the TUN, breaking the Saatiril server. Decomposition of /10 minus
+        // the /16 hole (verified: covers 192.128-192.167 + 192.169-192.191):
+        builder.addRoute("192.128.0.0", 11)  // 192.128-192.159
+        builder.addRoute("192.160.0.0", 13)  // 192.160-192.167
+        builder.addRoute("192.169.0.0", 16)  // 192.169
+        builder.addRoute("192.170.0.0", 15)  // 192.170-192.171
+        builder.addRoute("192.172.0.0", 14)  // 192.172-192.175
+        builder.addRoute("192.176.0.0", 12)  // 192.176-192.191
         builder.addRoute("192.192.0.0", 11)  // 192.192-192.223
         builder.addRoute("192.224.0.0", 12)  // 192.224-192.239
         builder.addRoute("192.240.0.0", 13)  // 192.240-192.247
@@ -182,8 +192,16 @@ class CeremonyModeVpnService : VpnService() {
 
         // EXCLUDE Saatiril app: its traffic bypasses VPN entirely
         // → Saatiril can access LAN (server on localhost:3003) AND
-        //   internet (Google Drive upload) via the real network interface
-        builder.addDisallowedApplication("com.saatiril.andro")
+        //   internet (Google Drive upload) via the real network interface.
+        // Use packageName (NOT a hard-coded "com.saatiril.andro") so this
+        // works in every flavor (e.g. the .mc flavor is com.saatiril.andro.mc —
+        // the hard-coded string throws NameNotFoundException there and the
+        // VPN never starts). Try/catch kept for safety, same as Drive below.
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to disallow own package ($packageName): ${e.message}", e)
+        }
 
         // EXCLUDE Google Drive app: allows admin to manually upload files
         // via Google Drive app if needed. Wrapped in try-catch because
@@ -209,7 +227,7 @@ class CeremonyModeVpnService : VpnService() {
             return
         }
 
-        Log.i(TAG, "VPN established — blocking all apps except com.saatiril.andro")
+        Log.i(TAG, "VPN established — blocking all apps except $packageName")
         Log.i(TAG, "Saatiril LAN (localhost, 192.168.43.1) + Google Drive: WORKING")
         Log.i(TAG, "Other apps (WhatsApp, Instagram, Play Store): BLOCKED")
 
@@ -255,8 +273,13 @@ class CeremonyModeVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        // System revoked the VPN (user disabled it in settings)
-        Log.i(TAG, "VPN revoked by system")
+        // System revoked the VPN (user disabled it in settings).
+        // Reset the manager state so the UI (Admin Dashboard "Mode Prosesi"
+        // toggle) doesn't keep showing Ceremony Mode as active after the VPN
+        // is gone. stopSelf() → onDestroy() cleans up interface + worker
+        // (same cleanup path as a normal disable).
+        Log.i(TAG, "VPN revoked by system — resetting Ceremony Mode state")
+        CeremonyModeManager.isActive.postValue(false)
         stopSelf()
     }
 

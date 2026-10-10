@@ -76,11 +76,18 @@ fun MCPanelScreen(
         adminViewModel.backToRoleSelect()
     }
 
-    // Auto-disconnect handling
+    // Auto-disconnect handling — give auto-reconnect a grace period (~2s).
+    // The connectionState key does NOT change while SocketManager retries
+    // (it stays DISCONNECTED until the socket.io CONNECT ack arrives), so a
+    // successful sub-2s reconnect must NOT kick the MC back to the connect
+    // screen: after the delay, re-read the CURRENT state from the flow
+    // instead of trusting the stale captured value.
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.DISCONNECTED) {
-            delay(500)
-            adminViewModel.mcDisconnected()
+            delay(2000)
+            if (opViewModel.connectionState.value == ConnectionState.DISCONNECTED) {
+                adminViewModel.mcDisconnected()
+            }
         }
     }
 

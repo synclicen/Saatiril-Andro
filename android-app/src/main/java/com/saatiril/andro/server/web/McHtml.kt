@@ -78,7 +78,10 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 <script>
 (function(){
   var params = new URLSearchParams(window.location.search);
-  var channel = parseInt(params.get('channel') || '1');
+  // Guard against garbage ?channel= values — parseInt('abc') is NaN which would
+  // render "Ch.NaN" and identify with channel NaN. App supports Ch.1–Ch.2.
+  var ch = parseInt(params.get('channel') || '1');
+  var channel = (ch >= 1 && ch <= 2) ? ch : 1;
   var password = params.get('password') || '';
   var socketPort = params.get('socketPort') || '';
   var ws = null;

@@ -70,7 +70,12 @@ class ServerService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 Log.i(TAG, "STOP requested")
-                try { SaatirilServer.stop() } catch (e: Exception) { Log.e(TAG, "stop error: ${e.message}", e) }
+                // #8: SaatirilServer.stop() blocks the calling thread for seconds
+                // (shutdown broadcast flush + engine stop) — run it off the main
+                // thread to avoid ANR while servicing the intent.
+                scope.launch(Dispatchers.IO) {
+                    try { SaatirilServer.stop() } catch (e: Exception) { Log.e(TAG, "stop error: ${e.message}", e) }
+                }
                 statsJob?.cancel()
                 try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
                 stopSelf()
@@ -114,7 +119,9 @@ class ServerService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
         statsJob?.cancel()
-        SaatirilServer.stop()
+        // #8: keep the (blocking) server stop off the main thread — the
+        // service is going away regardless; cleanup runs on a worker thread.
+        Thread { try { SaatirilServer.stop() } catch (_: Exception) {} }.start()
         super.onDestroy()
     }
 

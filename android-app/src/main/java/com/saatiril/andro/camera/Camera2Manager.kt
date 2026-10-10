@@ -113,6 +113,12 @@ class Camera2Manager(private val context: Context) {
     @Volatile
     private var isOpening = false
 
+    /** Set by closeCamera() so a late onOpened() (open still in flight when the
+     *  screen left) closes the camera instead of storing it — fixes the
+     *  open/close race that leaked the camera forever. */
+    @Volatile
+    private var closeRequested = false
+
     /** Preview size that was negotiated for the current camera */
     private var previewWidth = CAPTURE_WIDTH
     private var previewHeight = CAPTURE_HEIGHT
@@ -147,35 +153,56 @@ class Camera2Manager(private val context: Context) {
         textureView = tv
         tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                Log.i(TAG, "SurfaceTexture available: ${width}x${height}")
-                // If camera is already opened but preview wasn't started, start it now
-                if (cameraDevice != null && captureSession == null) {
-                    startPreview()
-                } else if (cameraDevice == null && _isConnected.value) {
-                    // Camera was disconnected, reopen
-                    openCamera(_currentCameraId.value)
-                }
+                this@Camera2Manager.onSurfaceTextureAvailable(width, height)
             }
 
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                // Restart preview with new size if camera is open
-                if (cameraDevice != null) {
-                    startPreview()
-                }
+                this@Camera2Manager.onSurfaceTextureSizeChanged(width, height)
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                Log.i(TAG, "SurfaceTexture destroyed")
-                // Stop preview but don't close the camera device
-                captureSession?.close()
-                captureSession = null
-                return true // Allow the SurfaceTexture to be destroyed
+                return this@Camera2Manager.onSurfaceTextureDestroyed()
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
                 // Called on every frame — no-op
             }
         }
+    }
+
+    // ─── SurfaceTexture event handlers ──────────────────────────
+    // Public so a screen that shares ONE TextureView between the Camera2 and
+    // UVC managers can install a single shared listener and fan the events out
+    // to both (TextureView keeps only ONE surfaceTextureListener — the last
+    // setTextureView call used to silently clobber the other manager's).
+
+    /** SurfaceTexture became available — start preview (or reopen the camera). */
+    fun onSurfaceTextureAvailable(width: Int, height: Int) {
+        Log.i(TAG, "SurfaceTexture available: ${width}x${height}")
+        // If camera is already opened but preview wasn't started, start it now
+        if (cameraDevice != null && captureSession == null) {
+            startPreview()
+        } else if (cameraDevice == null && _isConnected.value) {
+            // Camera was disconnected, reopen
+            openCamera(_currentCameraId.value)
+        }
+    }
+
+    /** SurfaceTexture size changed — restart preview with the new size. */
+    fun onSurfaceTextureSizeChanged(width: Int, height: Int) {
+        // Restart preview with new size if camera is open
+        if (cameraDevice != null) {
+            startPreview()
+        }
+    }
+
+    /** SurfaceTexture destroyed — stop preview but keep the camera device open. */
+    fun onSurfaceTextureDestroyed(): Boolean {
+        Log.i(TAG, "SurfaceTexture destroyed")
+        // Stop preview but don't close the camera device
+        captureSession?.close()
+        captureSession = null
+        return true // Allow the SurfaceTexture to be destroyed
     }
 
     // ─── Background Thread ───────────────────────────────────────
@@ -189,7 +216,8 @@ class Camera2Manager(private val context: Context) {
     private fun stopBackgroundThread() {
         try {
             backgroundThread?.quitSafely()
-            backgroundThread?.join(1000)
+            // Best-effort join only — a long join on the main thread risks ANR.
+            backgroundThread?.join(100)
         } catch (_: InterruptedException) {}
         backgroundThread = null
         backgroundHandler = null
@@ -289,6 +317,8 @@ class Camera2Manager(private val context: Context) {
 
         // Close current camera first
         closeCamera()
+        // We are (re)opening now — clear the close request closeCamera() just set
+        closeRequested = false
 
         // Ensure background thread is running
         startBackgroundThread()
@@ -318,6 +348,14 @@ class Camera2Manager(private val context: Context) {
             cameraManager.openCamera(targetId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     isOpening = false
+                    if (closeRequested) {
+                        // The screen left / closeCamera() ran while this open was
+                        // still in flight — close immediately instead of storing
+                        // the device (which leaked the camera forever).
+                        Log.w(TAG, "onOpened after close was requested — closing camera $targetId")
+                        try { camera.close() } catch (_: Exception) {}
+                        return
+                    }
                     cameraDevice = camera
                     _currentCameraId.value = targetId
                     _isConnected.value = true
@@ -366,8 +404,9 @@ class Camera2Manager(private val context: Context) {
 
                         // If this camera failed, try the next one
                         // (important for USB cameras that might not be ready)
+                        // Don't retry if a close was requested meanwhile.
                         val currentIndex = cameras.indexOfFirst { it.id == targetId }
-                        if (currentIndex >= 0 && currentIndex < cameras.size - 1) {
+                        if (!closeRequested && currentIndex >= 0 && currentIndex < cameras.size - 1) {
                             val nextCamera = cameras[currentIndex + 1]
                             Log.i(TAG, "Trying next camera: ${nextCamera.id}")
                             viewModelScopeOrHandler?.post {
@@ -460,9 +499,17 @@ class Camera2Manager(private val context: Context) {
         imageReader?.close()
         imageReader = null
 
-        // Create ImageReader for photo capture
+        // Create ImageReader for photo capture.
+        // BUG FIX: most HALs only expose LANDSCAPE JPEG output sizes — creating
+        // the reader with portrait dimensions (e.g. 1080x1920) makes
+        // createCaptureSession fail and capturePhoto silently returns null.
+        // The READER is therefore always created landscape; the preview surface
+        // keeps the project ratio, and CameraCapture.processFrame center-crops
+        // the captured JPEG to the project ratio anyway.
+        val readerWidth = maxOf(previewWidth, previewHeight)
+        val readerHeight = minOf(previewWidth, previewHeight)
         try {
-            imageReader = ImageReader.newInstance(previewWidth, previewHeight, ImageFormat.JPEG, 2)
+            imageReader = ImageReader.newInstance(readerWidth, readerHeight, ImageFormat.JPEG, 2)
             imageReader!!.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage()
                 if (image != null && captureCallback != null) {
@@ -595,18 +642,23 @@ class Camera2Manager(private val context: Context) {
             return
         }
 
+        // Single callback slot: fail any still-pending capture first so its
+        // caller isn't leaked waiting forever.
+        captureCallback?.invoke(null)
         captureCallback = callback
+
+        // Also add the preview surface so the preview doesn't freeze during
+        // capture. Closed after the request completes (bug: never closed).
+        val tv = textureView
+        val previewSurface: Surface? =
+            if (tv != null && tv.isAvailable && tv.surfaceTexture != null) {
+                Surface(tv.surfaceTexture)
+            } else null
 
         try {
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             builder.addTarget(reader.surface)
-
-            // Also add the preview surface so the preview doesn't freeze during capture
-            val tv = textureView
-            if (tv != null && tv.isAvailable) {
-                val previewSurface = Surface(tv.surfaceTexture)
-                builder.addTarget(previewSurface)
-            }
+            previewSurface?.let { builder.addTarget(it) }
 
             // Auto-focus
             try {
@@ -635,6 +687,7 @@ class Camera2Manager(private val context: Context) {
                 ) {
                     Log.i(TAG, "Photo capture completed")
                     // Image will be processed in ImageReader.OnImageAvailableListener
+                    try { previewSurface?.release() } catch (_: Exception) {}
                 }
 
                 override fun onCaptureFailed(
@@ -643,13 +696,16 @@ class Camera2Manager(private val context: Context) {
                     failure: android.hardware.camera2.CaptureFailure
                 ) {
                     Log.e(TAG, "Photo capture failed: ${failure.reason}")
-                    captureCallback = null
+                    try { previewSurface?.release() } catch (_: Exception) {}
+                    // Only clear the slot if a newer capture hasn't replaced it
+                    if (captureCallback === callback) captureCallback = null
                     callback(null)
                 }
             }, backgroundHandler)
 
         } catch (e: Exception) {
             Log.e(TAG, "capturePhoto exception: ${e.message}")
+            try { previewSurface?.release() } catch (_: Exception) {}
             captureCallback = null
             callback(null)
         }
@@ -722,6 +778,9 @@ class Camera2Manager(private val context: Context) {
      * Close the current camera session and device.
      */
     fun closeCamera() {
+        // Flag any in-flight openCamera so its onOpened closes the camera
+        // instead of storing it (open/close race leaked the camera forever).
+        closeRequested = true
         try {
             captureSession?.close()
         } catch (_: Exception) {}

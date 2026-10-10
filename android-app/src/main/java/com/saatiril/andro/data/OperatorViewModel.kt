@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * ═════════════════════════════════════════════════════════════════════════
@@ -123,14 +122,8 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
 
     // ─── Hand Trigger (Trigger Tangan) ──────────────────────────
 
-    private val _handTriggerEnabled = MutableStateFlow(false)
-    val handTriggerEnabled: StateFlow<Boolean> = _handTriggerEnabled.asStateFlow()
-
     private val _handState = MutableStateFlow(HandTriggerDetector.HandState.NONE)
     val handState: StateFlow<HandTriggerDetector.HandState> = _handState.asStateFlow()
-
-
-    private var handDetectionJob: Job? = null
 
     // ─── Op Search ──────────────────────────────────────────────
 
@@ -228,8 +221,25 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
     private val _allAvailableCameras = MutableStateFlow<List<Pair<String, String>>>(emptyList())
     val availableCameras: StateFlow<List<Pair<String, String>>> = _allAvailableCameras.asStateFlow()
 
-    val currentCameraId: StateFlow<String>
-        get() = if (_activeCameraEngine.value == "camera2") camera2Manager.currentCameraIdFlow else cameraUVCManager.currentCameraIdFlow
+    // Hoisted to a single stable StateFlow — the old custom getter returned a
+    // different flow instance depending on the active engine, which made
+    // Compose re-subscribe collectAsState on every recomposition.
+    private val _currentCameraId = MutableStateFlow("")
+    val currentCameraId: StateFlow<String> = _currentCameraId.asStateFlow()
+
+    init {
+        // Keep the hoisted flow in sync with whichever engine is active.
+        viewModelScope.launch {
+            cameraUVCManager.currentCameraIdFlow.collect { id ->
+                if (_activeCameraEngine.value != "camera2") _currentCameraId.value = id
+            }
+        }
+        viewModelScope.launch {
+            camera2Manager.currentCameraIdFlow.collect { id ->
+                if (_activeCameraEngine.value == "camera2") _currentCameraId.value = id
+            }
+        }
+    }
 
     // ─── Frame Overlay ──────────────────────────────────────────
 
@@ -430,6 +440,7 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
         if (isCamera2) {
             Log.i(TAG, "switchToCameraById: Switching to Camera2 camera $cameraId")
             _activeCameraEngine.value = "camera2"
+            _currentCameraId.value = cameraId
 
             // Close UVC preview (but don't destroy the monitor)
             try { cameraUVCManager.capturePhoto {} } catch (_: Exception) {}
@@ -440,6 +451,7 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
         } else {
             Log.i(TAG, "switchToCameraById: Switching to UVC camera $cameraId")
             _activeCameraEngine.value = "uvc"
+            _currentCameraId.value = cameraId
 
             // Close Camera2
             try { camera2Manager.closeCamera() } catch (_: Exception) {}
@@ -1149,107 +1161,9 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
         cancelTimer()
     }
 
-    // ─── Hand Trigger (Trigger Tangan) ──────────────────────────
-
-    /**
-     * Toggle hand trigger on/off.
-     * When enabled, detects any hand (open or closed) in the camera preview
-     * and triggers capture automatically. Matches Chrome version behavior.
-     */
-    fun setHandTriggerEnabled(enabled: Boolean) {
-        _handTriggerEnabled.value = enabled
-        if (enabled) {
-            startHandDetection()
-        } else {
-            stopHandDetection()
-        }
-    }
-
-    private fun startHandDetection() {
-        // ── ANR FIX: Initialize MediaPipe on a background thread ──
-        // HandLandmarker.createFromOptions() loads the 7.5MB model from assets
-        // and initializes the TFLite inference engine — this takes 1-5 seconds.
-        // Doing this on the Main thread causes ANR ("app isn't responding").
-        handDetectionJob?.cancel()
-        handDetectionJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            // Heavy model loading — must be on IO thread
-            val success = HandTriggerDetector.initialize(getApplication<Application>())
-            if (!success) {
-                Log.e(TAG, "Failed to initialize hand trigger detector")
-                _handTriggerEnabled.value = false
-                return@launch
-            }
-
-            // Set up callbacks (lightweight — just schedule work)
-            // PHOTOBOOTH TRIGGER: Hand appears → confirmed → hand leaves → timer starts
-            // onHandConfirmed = hand detected long enough (indicator turns green)
-            // onHandLeft = hand left frame → START TIMER (this is the actual trigger!)
-            HandTriggerDetector.onHandConfirmed = {
-                Log.i(TAG, "Hand trigger: hand confirmed ✓ — waiting for hand to leave frame")
-            }
-            HandTriggerDetector.onHandLeft = {
-                Log.i(TAG, "Hand trigger: hand left frame → starting capture/timer")
-                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                    triggerCapture()
-                }
-            }
-            HandTriggerDetector.onHandAppeared = {
-                Log.d(TAG, "Hand trigger: hand appeared")
-            }
-
-            HandTriggerDetector.start()
-            Log.i(TAG, "Photobooth hand trigger detection started")
-
-            // ── Detection loop — ~12fps for responsive hand tracking ──
-            // getPreviewBitmap() calls TextureView.getBitmap() which MUST run
-            // on the Main thread (Android requirement). We switch to Main
-            // briefly to grab the bitmap, then do detection on Default thread.
-            while (isActive) {
-                if (!_handTriggerEnabled.value) break
-
-                // TextureView.getBitmap() must be called from UI thread
-                val bitmap = withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    getPreviewBitmap()
-                }
-
-                if (bitmap != null) {
-                    // Heavy detection runs on Default (CPU) thread
-                    HandTriggerDetector.processFrame(bitmap)
-
-                    _handState.value = HandTriggerDetector.handState
-
-                    if (!bitmap.isRecycled) bitmap.recycle()
-                }
-
-                delay(80) // ~12 fps — fast and responsive
-            }
-        }
-    }
-
-    private fun stopHandDetection() {
-        handDetectionJob?.cancel()
-        handDetectionJob = null
-        HandTriggerDetector.stop()
-        _handState.value = HandTriggerDetector.HandState.NONE
-        Log.i(TAG, "Hand trigger detection stopped")
-    }
-
-    /**
-     * Get a bitmap from the current camera preview.
-     * Uses TextureView.getBitmap() from the active camera manager.
-     */
-    private fun getPreviewBitmap(): Bitmap? {
-        return try {
-            // Try UVC camera first (external capture card)
-            val uvcBitmap = cameraUVCManager.getPreviewBitmap()
-            if (uvcBitmap != null) return uvcBitmap
-
-            // Fallback to Camera2 (built-in camera)
-            camera2Manager.getPreviewBitmap()
-        } catch (e: Exception) {
-            null
-        }
-    }
+    // NOTE: The old setHandTriggerEnabled/startHandDetection/stopHandDetection
+    // dead code was removed — it was never called from anywhere and its
+    // onHandLeft registration would have clobbered the screen's own callback.
 
     fun setOpSearchQuery(query: String) {
         _opSearchQuery.value = query

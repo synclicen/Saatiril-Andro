@@ -3,6 +3,7 @@ package com.saatiril.andro.ui.operator
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.graphics.SurfaceTexture
 import android.util.Base64
 import android.util.Log
 import android.view.TextureView
@@ -142,6 +143,30 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var hotShoeTrigger by remember { mutableStateOf(false) }
     var hotShoePulseCount by remember { mutableStateOf(0) }
 
+    // ── Hot shoe: RECORD_AUDIO runtime permission ──
+    // The manifest declares RECORD_AUDIO but it was never REQUESTED at
+    // runtime, so AudioRecord failed silently and the hot shoe trigger was
+    // dead. Request it when the user toggles hot shoe ON; the pulse monitor
+    // only starts once permission is granted.
+    var hasAudioPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var showAudioPermissionDenied by remember { mutableStateOf(false) }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasAudioPermission = granted
+        if (granted) {
+            // Auto-start the pulse monitor now that permission is granted.
+            hotShoeTrigger = true
+        } else {
+            showAudioPermissionDenied = true
+        }
+    }
+
     // ── Hand trigger (matches Electron palmTriggerEnabled + usePalmDetection) ──
     var handState by remember { mutableStateOf(com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE) }
     var handDetectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -251,15 +276,15 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
                         val base64 = CameraCapture.bitmapToBase64(processed, 95)
                         showFlash = true
-                        kotlinx.coroutines.MainScope().launch { kotlinx.coroutines.delay(200); showFlash = false }
+                        scope.launch { delay(200); showFlash = false }
                         viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
                     } else { captureError = if (bitmap == null) "Preview belum siap." else "Proyek tidak ditemukan." }
                 } catch (e: Exception) { captureError = "Gagal: ${e.message}" } finally { isCapturing = false }
             }
             if (timerDuration > 0) {
                 timerCountdown = timerDuration
-                timerJob = kotlinx.coroutines.MainScope().launch {
-                    for (i in timerDuration downTo 1) { timerCountdown = i; kotlinx.coroutines.delay(1000) }
+                timerJob = scope.launch {
+                    for (i in timerDuration downTo 1) { timerCountdown = i; delay(1000) }
                     timerCountdown = null; timerJob = null; doCapture()
                 }
             } else { doCapture() }
@@ -271,8 +296,10 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // camera's flash/shutter). When detected → increment hotShoePulseCount →
     // the LaunchedEffect below calls triggerCapture(). Uses AUDIO JACK (not
     // Bluetooth) → no conflict with BLE MC remote.
-    DisposableEffect(hotShoeTrigger) {
-        if (!hotShoeTrigger) {
+    DisposableEffect(hotShoeTrigger, hasAudioPermission) {
+        // Only start the monitor thread when the toggle is ON AND the
+        // RECORD_AUDIO permission is actually granted (see launcher above).
+        if (!hotShoeTrigger || !hasAudioPermission) {
             onDispose { }
         } else {
             val sampleRate = 44100
@@ -343,8 +370,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
     }
 
-    // Wire hand trigger callback — when hand leaves frame, trigger capture
-    // (placed here AFTER activeStudent/activeChannel/showFlash are declared)
+    // Wire hand trigger callback — when hand leaves frame, trigger capture.
+    // rememberUpdatedState: the DisposableEffect below only re-runs when
+    // shutterMode changes, so capturing activeStudent etc. directly froze
+    // them at the moment hand mode was entered — after MC called the next
+    // student, photos were attributed to the WRONG student. Reading through
+    // the updated State references always uses the CURRENT values.
+    val currentActiveStudent by rememberUpdatedState(activeStudent)
+    val currentActiveChannel by rememberUpdatedState(activeChannel)
+    val currentProject by rememberUpdatedState(project)
+    val currentFrameBitmap by rememberUpdatedState(frameBitmap)
+
     DisposableEffect(shutterMode) {
         if (shutterMode == "hand") {
             com.saatiril.andro.camera.HandTriggerDetector.onHandLeft = {
@@ -357,19 +393,20 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         }
                         timerCountdown = null
                         timerJob = null
-                        if (activeStudent != null && !isCapturing) {
+                        val student = currentActiveStudent
+                        if (student != null && !isCapturing) {
                             isCapturing = true
                             try {
                                 val bitmap = textureView.bitmap
-                                val proj = project
+                                val proj = currentProject
                                 if (bitmap != null && proj != null) {
                                     val processed = try {
-                                        CameraCapture.processFrame(bitmap, proj.config, frameBitmap)
+                                        CameraCapture.processFrame(bitmap, proj.config, currentFrameBitmap)
                                     } catch (e: Exception) { bitmap }
                                     val base64 = CameraCapture.bitmapToBase64(processed, 95)
                                     showFlash = true
                                     scope.launch { delay(200); showFlash = false }
-                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                                    viewModel.handleLocalCapture(student, base64, currentActiveChannel)
                                 }
                             } catch (e: Exception) {
                                 captureError = "Gagal capture: ${e.message}"
@@ -398,12 +435,43 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             // Bind TextureView to both managers + enumerate + open default (back camera)
             viewModel.camera2Manager.setTextureView(textureView)
             viewModel.cameraUVCManager.setTextureView(textureView)
+
+            // BUG FIX: TextureView keeps only ONE surfaceTextureListener — the
+            // second setTextureView call above replaced Camera2's, so Camera2
+            // never received surface events (intermittent permanent black
+            // preview). Install ONE shared listener LAST that fans the events
+            // out to BOTH managers.
+            textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                    viewModel.camera2Manager.onSurfaceTextureAvailable(width, height)
+                    viewModel.cameraUVCManager.onSurfaceTextureAvailable(surface, width, height)
+                }
+
+                override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                    viewModel.camera2Manager.onSurfaceTextureSizeChanged(width, height)
+                    viewModel.cameraUVCManager.onSurfaceTextureSizeChanged(surface, width, height)
+                }
+
+                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                    val c2Handled = viewModel.camera2Manager.onSurfaceTextureDestroyed()
+                    val uvcHandled = viewModel.cameraUVCManager.onSurfaceTextureDestroyed()
+                    return c2Handled && uvcHandled
+                }
+
+                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                    // Called on every frame — no-op (both managers no-op here)
+                }
+            }
+
             viewModel.camera2Manager.enumerateCameras()
             viewModel.cameraUVCManager.initCamera()
             viewModel.refreshAvailableCameras()
             viewModel.camera2Manager.openCamera()
         }
         onDispose {
+            // Cancel any in-flight countdown timer (was never cancelled on dispose)
+            timerJob?.cancel()
+            timerJob = null
             try { viewModel.camera2Manager.closeCamera() } catch (_: Exception) {}
             try { viewModel.cameraUVCManager.hidePreview() } catch (_: Exception) {}
         }
@@ -917,7 +985,16 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             // Row 1.6: Hot shoe trigger toggle (camera physical shutter → audio
             // pulse → capture). Uses audio jack (NOT Bluetooth) → no conflict
             // with BLE MC remote. Connect hot shoe adapter to 3.5mm audio jack.
-            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable { hotShoeTrigger = !hotShoeTrigger }
+            // Requires the RECORD_AUDIO runtime permission — requested on
+            // first toggle ON (was never requested before → dead trigger).
+            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable {
+                    if (!hotShoeTrigger && !hasAudioPermission) {
+                        showAudioPermissionDenied = false
+                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        hotShoeTrigger = !hotShoeTrigger
+                    }
+                }
                 .border(1.dp, if (hotShoeTrigger) GOLD else BORDER, RoundedCornerShape(4.dp)),
                 colors = CardDefaults.cardColors(containerColor = if (hotShoeTrigger) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -926,6 +1003,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     if (hotShoeTrigger) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
                     else { Spacer(Modifier.weight(1f)); Text("Audio trigger", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 7.sp)) }
                 }
+            }
+            // Hot shoe permission denied hint
+            if (showAudioPermissionDenied) {
+                Text(
+                    "Izin mikrofon (RECORD_AUDIO) ditolak — hot shoe trigger tidak bisa mendeteksi denyut audio.",
+                    style = TextStyle(color = RED, fontSize = 8.sp),
+                    modifier = Modifier.padding(horizontal = 6.dp)
+                )
             }
             // Row 2: Shutter button + Queue toggle + Settings toggle
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -242,7 +242,11 @@ fun MCRemoteScreen(adminViewModel: AdminViewModel) {
                 statusPhase = statusPhase,
                 queueData = queueData,
                 onTrigger = { action ->
-                    val studentId = nextStudent?.optString("id")
+                    // optString("id") returns "" when the student JSON has no
+                    // id — only pass a studentId when a REAL one exists,
+                    // otherwise the admin receives "studentId":"" and targets
+                    // a non-existent student instead of "no specific student".
+                    val studentId = nextStudent?.optString("id")?.takeIf { it.isNotBlank() }
                     bleClient.sendTrigger(action, studentId)
                 }
             )

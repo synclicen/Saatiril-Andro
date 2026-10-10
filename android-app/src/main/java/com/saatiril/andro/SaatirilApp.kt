@@ -52,5 +52,19 @@ class SaatirilApp : Application() {
                 Log.w(TAG, "Background exception swallowed (app kept alive): ${throwable.message}")
             }
         }
+
+        // Recover upload-queue rows stuck in 'uploading' (e.g. the process was
+        // killed mid-upload — the worker only re-dequeues 'pending' rows).
+        // Runs once at startup, off the main thread, and is idempotent.
+        Thread {
+            val store = com.saatiril.andro.backup.UploadQueueStore(this)
+            try {
+                store.recoverStuckUploads()
+            } catch (e: Exception) {
+                Log.w(TAG, "Upload queue recovery failed: ${e.message}")
+            } finally {
+                try { store.close() } catch (_: Exception) {}
+            }
+        }.start()
     }
 }

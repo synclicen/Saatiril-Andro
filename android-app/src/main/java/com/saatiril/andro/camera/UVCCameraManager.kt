@@ -123,6 +123,12 @@ class UVCCameraManager(private val context: Context) {
     // ─── Capture ────────────────────────────────────────────────
     private var captureCallback: ((String?) -> Unit)? = null
 
+    /** Actual negotiated preview size — may differ from PREVIEW_WIDTH/HEIGHT
+     *  when the 640x480 fallback was used. IFrameCallback NV21 frames MUST be
+     *  decoded with these dimensions (using the constants corrupted captures). */
+    private var negotiatedWidth = PREVIEW_WIDTH
+    private var negotiatedHeight = PREVIEW_HEIGHT
+
     // ─── USB Permission ─────────────────────────────────────────
     private var usbPermissionReceiver: BroadcastReceiver? = null
 
@@ -176,7 +182,8 @@ class UVCCameraManager(private val context: Context) {
     private fun stopBackgroundThread() {
         try {
             backgroundThread?.quitSafely()
-            backgroundThread?.join(2000)
+            // Best-effort join only — a long join on the main thread risks ANR.
+            backgroundThread?.join(100)
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping background thread: ${e.message}")
         }
@@ -688,22 +695,30 @@ class UVCCameraManager(private val context: Context) {
                     PREVIEW_MIN_FPS, PREVIEW_MAX_FPS,
                     PREVIEW_FORMAT, BANDWIDTH_FACTOR
                 )
+                negotiatedWidth = PREVIEW_WIDTH
+                negotiatedHeight = PREVIEW_HEIGHT
                 Log.i(TAG, "★ Preview size set: ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT} MJPEG bw=${BANDWIDTH_FACTOR}")
             } catch (e1: Exception) {
                 Log.w(TAG, "1280x720 MJPEG bw=1.0 failed: ${e1.message}, trying without bw param...")
                 try {
                     // Fallback: simpler overload without bandwidth
                     camera.setPreviewSize(PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_FORMAT)
+                    negotiatedWidth = PREVIEW_WIDTH
+                    negotiatedHeight = PREVIEW_HEIGHT
                     Log.i(TAG, "★ Preview size set: ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT} MJPEG (no bw)")
                 } catch (e2: Exception) {
                     Log.w(TAG, "1280x720 MJPEG failed: ${e2.message}, trying 640x480 MJPEG...")
                     try {
                         camera.setPreviewSize(640, 480, PREVIEW_MIN_FPS, PREVIEW_MAX_FPS, UVCCamera.FRAME_FORMAT_MJPEG, BANDWIDTH_FACTOR)
+                        negotiatedWidth = 640
+                        negotiatedHeight = 480
                         Log.i(TAG, "★ Preview size set: 640x480 MJPEG bw=${BANDWIDTH_FACTOR}")
                     } catch (e3: Exception) {
                         Log.w(TAG, "640x480 MJPEG bw failed: ${e3.message}, trying 640x480 simple...")
                         try {
                             camera.setPreviewSize(640, 480, UVCCamera.FRAME_FORMAT_MJPEG)
+                            negotiatedWidth = 640
+                            negotiatedHeight = 480
                             Log.i(TAG, "★ Preview size set: 640x480 MJPEG (no bw)")
                         } catch (e4: Exception) {
                             Log.e(TAG, "ALL preview size attempts failed! ${e4.message}")
@@ -805,6 +820,14 @@ class UVCCameraManager(private val context: Context) {
     }
 
     /**
+     * Called when the TextureView's surface size changes (delegated from a
+     * shared listener when the TextureView is shared with Camera2Manager).
+     */
+    fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+        Log.d(TAG, "TextureView size changed: ${width}x${height}")
+    }
+
+    /**
      * Called when the TextureView's surface is destroyed.
      */
     fun onSurfaceTextureDestroyed(): Boolean {
@@ -832,6 +855,9 @@ class UVCCameraManager(private val context: Context) {
         _isConnected.value = false
         _cameraType.value = "none"
         pendingSurfaceSetup = false
+        // Reset the negotiated size — the next open may negotiate differently
+        negotiatedWidth = PREVIEW_WIDTH
+        negotiatedHeight = PREVIEW_HEIGHT
     }
 
     private fun handleDeviceDisconnect(device: UsbDevice) {
@@ -866,7 +892,7 @@ class UVCCameraManager(private val context: Context) {
             }
 
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                Log.d(TAG, "TextureView size changed: ${width}x${height}")
+                this@UVCCameraManager.onSurfaceTextureSizeChanged(surface, width, height)
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
@@ -993,6 +1019,9 @@ class UVCCameraManager(private val context: Context) {
     }
 
     private fun captureFromFrameCallback(camera: UVCCamera, callback: (String?) -> Unit) {
+        // Single callback slot: fail any still-pending capture first so its
+        // caller isn't leaked waiting forever.
+        captureCallback?.invoke(null)
         captureCallback = callback
 
         try {
@@ -1010,13 +1039,15 @@ class UVCCameraManager(private val context: Context) {
                         val frameBytes = ByteArray(frame.remaining())
                         frame.get(frameBytes)
 
+                        // Use the ACTUAL negotiated size — after the 640x480
+                        // fallback, decoding with 1280x720 corrupts the capture.
                         val yuvImage = android.graphics.YuvImage(
                             frameBytes, ImageFormat.NV21,
-                            PREVIEW_WIDTH, PREVIEW_HEIGHT, null
+                            negotiatedWidth, negotiatedHeight, null
                         )
                         val outputStream = ByteArrayOutputStream()
                         yuvImage.compressToJpeg(
-                            Rect(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT), 95, outputStream
+                            Rect(0, 0, negotiatedWidth, negotiatedHeight), 95, outputStream
                         )
                         val bytes = outputStream.toByteArray()
                         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -1042,9 +1073,11 @@ class UVCCameraManager(private val context: Context) {
                 }
             }, UVCCamera.PIXEL_FORMAT_NV21)
 
-            // Timeout
+            // Timeout — guarded to the specific callback instance this timeout
+            // belongs to, so the timeout of an OLD capture can't kill a NEW
+            // capture's callback (captureCallback may have been replaced).
             backgroundHandler?.postDelayed({
-                if (captureCallback != null) {
+                if (captureCallback === callback) {
                     Log.w(TAG, "IFrameCallback timed out")
                     try { camera.setFrameCallback(null, 0) } catch (_: Exception) {}
 
@@ -1061,17 +1094,15 @@ class UVCCameraManager(private val context: Context) {
                                 outputStream.close()
                                 bitmap.recycle()
 
-                                val cb = captureCallback
                                 captureCallback = null
-                                cb?.invoke(dataUrl)
+                                callback(dataUrl)
                                 return@postDelayed
                             }
                         } catch (_: Exception) {}
                     }
 
-                    val cb = captureCallback
                     captureCallback = null
-                    cb?.invoke(null)
+                    callback(null)
                 }
             }, 3000)
 

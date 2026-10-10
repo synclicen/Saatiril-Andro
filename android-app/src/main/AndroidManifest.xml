@@ -26,8 +26,8 @@
     <!-- Foreground service notification (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Ceremony Mode VPN — blocks internet during ceremony -->
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <!-- Ceremony Mode VPN — blocks internet during ceremony.
+         (BIND_VPN_SERVICE is system-only; an app can never hold it — removed.) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- BLE for MC Remote trigger (no WiFi needed for MC↔Operator) -->
@@ -57,6 +57,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize"

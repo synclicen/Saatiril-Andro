@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -525,7 +527,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     captureVersions = emptyMap()
                 )
 
-                projectStore.save(project)
+                persistProject(project)
                 _project.value = project
                 refreshProjects()
 
@@ -575,7 +577,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e(TAG, "createAndStartProject FAILED", e)
                 _startupError.value = "Gagal memulai server: ${e.message ?: e.javaClass.simpleName}"
                 // Clean up partial state
-                try { SaatirilServer.stop() } catch (_: Exception) {}
+                // #8: SaatirilServer.stop() blocks for seconds — run it off the
+                // main thread (ANR) while the error is surfaced to the user.
+                viewModelScope.launch(Dispatchers.IO) {
+                    try { SaatirilServer.stop() } catch (_: Exception) {}
+                }
                 try { ServerService.stop(app) } catch (_: Exception) {}
                 SaatirilServer.onLanMessage = null
             } finally {
@@ -668,13 +674,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Stop the server and return to the Hub. */
     fun stopServer() {
-        SaatirilServer.stop()
-        ServerService.stop(app)
-        SaatirilServer.onLanMessage = null
-        stopBLEServer()
+        // #8: SaatirilServer.stop() blocks the calling thread for ~4.5s
+        // (broadcast flush + engine stop) — never on the main thread (ANR).
+        // The UI flips immediately; teardown runs on Dispatchers.IO.
         _project.value = null
         _screen.value = Screen.HUB
-        refreshProjects()
+        SaatirilServer.onLanMessage = null
+        SaatirilServer.onBleTrigger = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try { SaatirilServer.stop() } catch (e: Exception) { Log.e(TAG, "stop error: ${e.message}", e) }
+            try { ServerService.stop(app) } catch (_: Exception) {}
+            stopBLEServer()
+            refreshProjects()
+        }
     }
 
     // ─── BLE Server for MC Remote ─────────────────────────────
@@ -701,6 +713,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
             // Set up trigger callback
             bleServerManager.onTriggerReceived = { action, studentId ->
+                handleBLETrigger(action, studentId)
+            }
+            // #5: also accept triggers forwarded over HTTP by the Electron
+            // admin's embedded /admin-ble page (POST /api/ble-trigger on
+            // this server) — same handler as native BLE triggers.
+            SaatirilServer.onBleTrigger = { action, studentId ->
                 handleBLETrigger(action, studentId)
             }
 
@@ -737,6 +755,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         try {
             bleServerManager.stop()
             bleServerManager.onTriggerReceived = null
+            SaatirilServer.onBleTrigger = null
             Log.i(TAG, "BLE Server stopped")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to stop BLE server: ${e.message}")
@@ -800,29 +819,39 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val done = db.filter { it.status == "done" }
 
             // Build COMPACT JSON (array format per student — saves ~30 bytes per
-            // student vs object keys, fitting ~5 students within BLE MTU 514B).
-            // Summary uses short keys: t=total, p=pending, d=done, a=active.
+            // student vs object keys). Summary uses short keys: t=total, p=pending,
+            // d=done, a=active.
             // Each student is an array: [id, nim, nama(20), status, channel].
+            fun compactStudent(s: Student) = org.json.JSONArray().apply {
+                put(s.id); put(s.nim); put(s.nama.take(20)); put(s.status); put(s.assignedChannel)
+            }
+
+            // Build the students list in a Kotlin list first (org.json.JSONArray
+            // on this classpath has no remove()), then convert to JSONArray.
+            val studentList = mutableListOf<org.json.JSONArray>()
+            // Active student(s) first (if any) — include assignedChannel.
+            active.forEach { s -> studentList.add(compactStudent(s)) }
+            // #10: add pending students one at a time while the payload still
+            // fits the BLE characteristic budget (BLEProtocol.MAX_CHAR_SIZE).
+            // The old fixed "next 4" could reach ~540-570B > 512B usable and the
+            // notification never reached the MC remote.
+            for (s in pending) {
+                studentList.add(compactStudent(s))
+                if (queueJsonByteSize(db.size, pending.size, done.size, active.size, studentList) >
+                    com.saatiril.andro.ble.BLEProtocol.MAX_CHAR_SIZE) {
+                    studentList.removeAt(studentList.size - 1)
+                    break
+                }
+            }
+
+            val studentsArray = org.json.JSONArray()
+            studentList.forEach { studentsArray.put(it) }
+
             val json = org.json.JSONObject().apply {
                 put("t", db.size)
                 put("p", pending.size)
                 put("d", done.size)
                 put("a", active.size)
-
-                val studentsArray = org.json.JSONArray()
-                // Active student first (if any) — include assignedChannel.
-                active.forEach { s ->
-                    studentsArray.put(org.json.JSONArray().apply {
-                        put(s.id); put(s.nim); put(s.nama.take(20)); put(s.status); put(s.assignedChannel)
-                    })
-                }
-                // Next 4 pending (compact format fits 1 active + 4 pending = 5
-                // students × ~90B + ~30B summary = ~480B < 514B MTU payload).
-                pending.take(4).forEach { s ->
-                    studentsArray.put(org.json.JSONArray().apply {
-                        put(s.id); put(s.nim); put(s.nama.take(20)); put(s.status); put(s.assignedChannel)
-                    })
-                }
                 put("s", studentsArray)
             }
 
@@ -830,6 +859,15 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             Log.w(TAG, "pushBLEQueueData error: ${e.message}")
         }
+    }
+
+    /** Serialized UTF-8 size (#10) of the queue JSON with the given students list. */
+    private fun queueJsonByteSize(t: Int, p: Int, d: Int, a: Int, students: List<org.json.JSONArray>): Int {
+        val arr = org.json.JSONArray()
+        students.forEach { arr.put(it) }
+        return org.json.JSONObject().apply {
+            put("t", t); put("p", p); put("d", d); put("a", a); put("s", arr)
+        }.toString().toByteArray(Charsets.UTF_8).size
     }
 
     /** Push next/active student to MC via BLE. */
@@ -841,11 +879,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
             val student = active ?: nextPending
             if (student != null) {
-                val json = org.json.JSONObject().apply {
-                    put("id", student.id)
-                    put("nim", student.nim)
-                    put("nama", student.nama)
-                    put("status", student.status)
+                // #10: keep the payload within the BLE characteristic budget —
+                // the name is the only unbounded field, so shrink it until it fits.
+                var nama = student.nama
+                var json = nextStudentJson(student, nama)
+                while (json.toString().toByteArray(Charsets.UTF_8).size >
+                    com.saatiril.andro.ble.BLEProtocol.MAX_CHAR_SIZE && nama.isNotEmpty()) {
+                    nama = nama.dropLast(1)
+                    json = nextStudentJson(student, nama)
                 }
                 bleServerManager.updateNextStudent(json.toString())
             } else {
@@ -855,6 +896,15 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             Log.w(TAG, "pushBLENextStudent error: ${e.message}")
         }
     }
+
+    /** #10: next-student JSON with a (possibly truncated) display name. */
+    private fun nextStudentJson(s: Student, nama: String): org.json.JSONObject =
+        org.json.JSONObject().apply {
+            put("id", s.id)
+            put("nim", s.nim)
+            put("nama", nama)
+            put("status", s.status)
+        }
 
     /**
      * Handle a photo captured locally by the admin's own phone camera (the
@@ -985,7 +1035,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
         val updatedVersions = proj.captureVersions.toMutableMap().apply { put(versionKey, newVersion) }
         _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
-        _project.value?.let { projectStore.save(it) }
+        _project.value?.let { persistProject(it) }
 
         // Broadcast PHOTOS_SAVED (so remote operators/MCs update) + SYNC_DB
         SaatirilServer.broadcastLanMessage(SocketEvents.PHOTOS_SAVED, PhotosSavedData(
@@ -1043,7 +1093,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == student.id) s.copy(status = "active_$channel") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes (same rationale as handleMcCall — a
+            // crash mid-ceremony must not revert the call queue).
+            persistProject(updated)
         }
         SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, channel))
         pushSyncDb()
@@ -1064,7 +1118,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == student.id) s.copy(status = "sent") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes (crash mid-ceremony must not revert).
+            persistProject(updated)
         }
         // Emit MC_CALL to each requested channel
         for (ch in channels) {
@@ -1081,7 +1138,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             // Clear ALL photoHistory entries for this student (matches Electron mc-panel.tsx 423-425)
             val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
             _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
-            _project.value?.let { projectStore.save(it) }
+            _project.value?.let { persistProject(it) }
         }
         SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
         pushSyncDb()
@@ -1098,7 +1155,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == studentId) s.copy(status = "done") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes (same rationale as handleStudentDone).
+            persistProject(updated)
         }
         SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(studentId, channel))
         pushSyncDb()
@@ -1116,7 +1176,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _project.value?.let { proj ->
             val updated = proj.copy(config = proj.config.copy(driveFolder = folderUri))
             _project.value = updated
-            projectStore.save(updated)
+            persistProject(updated)
         }
     }
 
@@ -1208,13 +1268,13 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
         // Determine if the student is "done":
         // - Standard / single-photoshoot: done after this PHOTOS_SAVED.
-        // - Dual-photoshoot: done if EITHER channel 1 OR channel 2 has photographed.
-        //   (matches Electron admin-dashboard.tsx lines 237-248)
+        // - Dual-photoshoot (#9): done only when BOTH channels have photographed —
+        //   this channel just got its photos, so require the OTHER channel's
+        //   photoHistory entry too (the cross-channel check that was previously
+        //   computed but never used — `otherHasPhotos` was dead code).
         val shouldMarkDone = if (isDualPhotoshoot) {
-            // Check if the OTHER channel already has a photoHistory entry
             val otherChannel = if (channel == 1) 2 else 1
-            val otherHasPhotos = proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
-            true  // this channel just got photos → either channel sufficient → done
+            proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
         } else {
             true
         }
@@ -1233,7 +1293,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             photoHistory = updatedHistory,
             captureVersions = updatedVersions
         )
-        _project.value?.let { projectStore.save(it) }
+        _project.value?.let { persistProject(it) }
     }
 
     private fun handleMcCall(data: JsonElement?) {
@@ -1249,7 +1309,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == student.id) s.copy(status = "active_$channel") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes so a crash mid-ceremony doesn't revert
+            // the MC call queue.
+            persistProject(updated)
         }
         // Broadcast updated DB to all clients (including the MC that sent this)
         // so MC web panel sees the status change confirmed
@@ -1263,7 +1327,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             val updatedDb = proj.database.map { s ->
                 if (s.id == studentId) s.copy(status = "done") else s
             }
-            _project.value = proj.copy(database = updatedDb)
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes so a crash mid-ceremony doesn't revert
+            // the student's done state.
+            persistProject(updated)
         }
         // Broadcast updated DB to all clients
         pushSyncDb()
@@ -1280,7 +1348,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             // queue re-shows them (matches Electron mc-panel.tsx lines 423-425).
             val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
             _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
-            _project.value?.let { projectStore.save(it) }
+            _project.value?.let { persistProject(it) }
         }
         // Broadcast updated DB to all clients
         pushSyncDb()
@@ -1305,6 +1373,19 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ─── Helpers ────────────────────────────────────────────────
+
+    // ─── Project persistence (#7) ───────────────────────────────
+    // All projectStore.save() calls go through persistProject(): dispatched to
+    // Dispatchers.IO (never main-thread disk I/O) and serialized behind a mutex
+    // so concurrent lan-message bursts never interleave file writes.
+    private val saveMutex = Mutex()
+
+    private fun persistProject(project: Project) {
+        viewModelScope.launch(Dispatchers.IO) {
+            saveMutex.withLock { projectStore.save(project) }
+        }
+    }
+
     private fun sha256(input: String): String {
         val md = java.security.MessageDigest.getInstance("SHA-256")
         return md.digest(input.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

@@ -154,6 +154,13 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
 
         onDispose {
             bleServer.stop()
+            // Tear down the WiFi fallback socket too — otherwise its reconnect
+            // loop keeps firing forever after leaving this screen. Both
+            // disconnect() and destroy() are idempotent.
+            socketManager.onConnected = null
+            socketManager.onDisconnected = null
+            socketManager.disconnect()
+            socketManager.destroy()
         }
     }
 
@@ -163,6 +170,12 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
             bleSupported = bleServer.isAdvertisingSupported()
             val started = bleServer.start()
             isAdvertising = started
+            if (!started) {
+                // Surface WHY start() failed (e.g. GATT server could not be
+                // opened) — without this the failure was silently ignored.
+                adStatus = bleServer.advertisingStatus
+                adError = bleServer.advertisingError
+            }
         }
     }
 
@@ -312,8 +325,8 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
             }
         }
 
-        // ── Diagnostics card (shown when waiting for connection) ──
-        if (connectedClientCount == 0 && isAdvertising) {
+        // ── Diagnostics card (shown when waiting for connection, or when start failed) ──
+        if (connectedClientCount == 0 && (isAdvertising || adStatus == "failed")) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 colors = CardDefaults.cardColors(containerColor = PANEL.copy(alpha = 0.5f)),
@@ -469,11 +482,15 @@ fun MCRemoteServerScreen(adminViewModel: AdminViewModel) {
 
                 // PANGGIL button
                 val canPanggil = statusPhase == "standby" || statusPhase == "done"
+                // optString("id") returns "" when the student JSON has no id —
+                // only pass a studentId when a REAL one exists, otherwise the
+                // admin targets a non-existent (empty) student.
+                val panggilStudentId = nextStudent?.optString("id")?.takeIf { it.isNotBlank() }
                 Button(
                     onClick = {
                         // Send trigger via BLE (best effort) + WiFi socket.io (guaranteed)
-                        bleServer.sendTrigger(BLEProtocol.Action.PANGGIL, nextStudent?.optString("id"))
-                        sendTriggerViaWifi("PANGGIL", nextStudent?.optString("id"))
+                        bleServer.sendTrigger(BLEProtocol.Action.PANGGIL, panggilStudentId)
+                        sendTriggerViaWifi("PANGGIL", panggilStudentId)
                         statusPhase = BLEProtocol.Phase.READY
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

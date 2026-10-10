@@ -51,8 +51,11 @@ class BLEServerManager(private val context: Context) {
     private var gattServer: BluetoothGattServer? = null
     private var isRunning = false
 
-    // Connected devices (MC clients)
-    private val connectedDevices = mutableSetOf<BluetoothDevice>()
+    // Connected devices (MC clients) — mutated from GATT binder threads,
+    // iterated on the main thread, so it must be a concurrent set (a plain
+    // mutableSetOf here risks ConcurrentModificationException).
+    private val connectedDevices: MutableSet<BluetoothDevice> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     // Current state data (set by AdminViewModel)
     private var nextStudentJson: String = "{}"
@@ -122,7 +125,16 @@ class BLEServerManager(private val context: Context) {
         }
 
         return try {
-            startGattServer()
+            if (!startGattServer()) {
+                // openGattServer() returned null (e.g. Bluetooth just turned
+                // off / too many GATT servers) — advertising a connectable
+                // service would be pointless, so do NOT report running.
+                gattServerStatus = "failed"
+                advertisingStatus = "failed"
+                advertisingError = "GATT server gagal dibuka (openGattServer null) — tidak bisa menerima koneksi BLE"
+                Log.e(TAG, "Failed to start BLE server: GATT server could not be opened")
+                return false
+            }
             gattServerStatus = "running"
             startAdvertising()
             isRunning = true
@@ -241,14 +253,19 @@ class BLEServerManager(private val context: Context) {
 
     // ── GATT Server setup ──
 
-    private fun startGattServer() {
+    /**
+     * Open the GATT server and register the Saatiril service.
+     * @return true if the server was opened successfully, false if
+     *         openGattServer() returned null (GATT server NOT running).
+     */
+    private fun startGattServer(): Boolean {
         val server = bluetoothManager.adapter?.let { adapter ->
             bluetoothManager.openGattServer(context, gattServerCallback)
         }
 
         if (server == null) {
             Log.e(TAG, "Failed to open GATT server")
-            return
+            return false
         }
 
         // Create service
@@ -325,6 +342,7 @@ class BLEServerManager(private val context: Context) {
 
         server.addService(service)
         gattServer = server
+        return true
     }
 
     private fun createCCCD(): BluetoothGattDescriptor {
@@ -339,7 +357,9 @@ class BLEServerManager(private val context: Context) {
 
     // ── Advertising ──
 
-    private var advertiseCallback: AdvertiseCallback? = null
+    // Assigned from the main thread, cleared from the advertising binder
+    // thread (onStartFailure) — volatile for cross-thread visibility.
+    @Volatile private var advertiseCallback: AdvertiseCallback? = null
 
     private fun startAdvertising() {
         val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
@@ -438,6 +458,12 @@ class BLEServerManager(private val context: Context) {
                 Log.e(TAG, "BLE advertising FAILED: $reason")
                 advertisingStatus = "failed"
                 advertisingError = reason
+                // Null the failed callback BEFORE scheduling the retry — it
+                // was just assigned by startAdvertising(), so the retry's
+                // `advertiseCallback == null` condition could never be true
+                // without this (dead retry). A fresh startAdvertising() call
+                // will assign a new callback.
+                advertiseCallback = null
                 // Auto-retry after 2 seconds
                 scope.launch {
                     delay(2000)

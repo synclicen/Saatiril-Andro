@@ -241,7 +241,7 @@ class SocketManager {
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.w(TAG, "WebSocket closed: code=$code reason=$reason")
-            handleSocketClosed("onClosed")
+            handleSocketClosed(webSocket, "onClosed")
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -250,11 +250,20 @@ class SocketManager {
             // they can diagnose: e.g. 'Connection refused', 'timeout',
             // 'Cleartext HTTP traffic not permitted', 'Unable to resolve host'.
             val specificError = t.message ?: t.javaClass.simpleName
-            handleSocketClosed("onFailure", specificError)
+            handleSocketClosed(webSocket, "onFailure", specificError)
         }
     }
 
-    private fun handleSocketClosed(source: String, specificError: String? = null) {
+    private fun handleSocketClosed(closedSocket: WebSocket, source: String, specificError: String? = null) {
+        // Reconnect-race guard: by the time an old socket's onClosed/onFailure
+        // fires, connect()/cleanupSocket() may have already built a NEW socket.
+        // Acting on the stale event would null the fresh socket, corrupt the
+        // state and schedule spurious reconnects — so only handle the close if
+        // this is STILL the current socket.
+        if (webSocket !== closedSocket) {
+            Log.d(TAG, "Ignoring stale '$source' from an already-replaced WebSocket")
+            return
+        }
         // Null out the dead WS so reconnectRunnable (which gates on
         // `webSocket == null`) will fire + doConnect() can build a fresh one.
         webSocket = null
@@ -262,7 +271,9 @@ class SocketManager {
         connectionState = ConnectionState.DISCONNECTED
         stopPingInterval()
         notifyListenersOnUiThread("state_changed", connectionState)
-        onDisconnected?.invoke()
+        // Route through the main-thread handler like every other notification
+        // (this callback runs on an OkHttp thread).
+        mainHandler.post { onDisconnected?.invoke() }
 
         if (!isExplicitlyDisconnected) {
             connectErrorCount++
@@ -360,6 +371,7 @@ class SocketManager {
                 // by the WS frame, not by sid. Just send the Socket.IO CONNECT.
                 Log.i(TAG, "Engine.IO OPEN received — sending socket.io CONNECT (40)")
                 connectErrorCount = 0
+                reconnectAttempts = 0 // reset the backoff so the next failure cycle starts at 500ms again
                 if (hasConnectedOnce) {
                     // This is a reconnect — let listeners know we're back.
                     notifyListenersOnUiThread("reconnected", null)
@@ -799,8 +811,10 @@ class SocketManager {
      * `data` may be any of: a JSONObject, JSONArray, primitive (Int/Long/Double/
      * Boolean/String), or a Gson-serializable data class. The result is the
      * full wire string `42["name",<data>]` ready to be sent as one WS frame.
+     *
+     * @return true if the frame was handed to the WebSocket.
      */
-    private fun sendEvent(name: String, data: Any?) {
+    private fun sendEvent(name: String, data: Any?): Boolean {
         val arr = JSONArray()
         arr.put(name)
         if (data != null) {
@@ -825,9 +839,11 @@ class SocketManager {
             arr.put(dataObj)
         }
         val framed = "42" + arr.toString()
-        if (!sendRaw(framed)) {
+        val sent = sendRaw(framed)
+        if (!sent) {
             Log.w(TAG, "sendEvent('$name'): WebSocket not open — packet dropped")
         }
+        return sent
     }
 
     // ─── Outgoing Events ────────────────────────────────────────
@@ -976,21 +992,24 @@ class SocketManager {
     }
 
     private fun flushEventQueue() {
-        val toSend: List<QueuedEvent>
-        synchronized(eventQueueLock) {
-            if (eventQueue.isEmpty()) return
-            toSend = eventQueue.toList()
-            eventQueue.clear()
-        }
+        // Send ONE queued event at a time and only remove it from the queue
+        // AFTER a successful send — the old implementation drained the whole
+        // queue up front, so a send failure permanently lost the events.
+        while (true) {
+            val item: QueuedEvent
+            synchronized(eventQueueLock) {
+                if (eventQueue.isEmpty()) return
+                item = eventQueue.first()
+            }
 
-        for (item in toSend) {
             if (item.retries >= MAX_RETRIES) {
                 Log.w(TAG, "Dropping event after $MAX_RETRIES retries: ${item.event}")
+                synchronized(eventQueueLock) { eventQueue.removeAt(0) }
                 continue
             }
             item.retries++
 
-            try {
+            val sent = try {
                 val dataJsonStr = gson.toJson(item.data)
                 val payload = JSONObject().apply {
                     put("event", item.event)
@@ -1001,9 +1020,21 @@ class SocketManager {
                     })
                 }
                 sendEvent(SocketEvents.LAN_MESSAGE, payload)
-                Log.i(TAG, "Flushed queued event: ${item.event} (attempt ${item.retries})")
             } catch (e: Exception) {
                 Log.e(TAG, "Error flushing queued event ${item.event}: ${e.message}", e)
+                false
+            }
+
+            if (sent) {
+                // Remove only after success — failed events stay at the head of
+                // the queue and are retried on the next flush (next successful
+                // (re)connect) until MAX_RETRIES is exhausted.
+                synchronized(eventQueueLock) { eventQueue.removeAt(0) }
+                Log.i(TAG, "Flushed queued event: ${item.event} (attempt ${item.retries})")
+            } else {
+                val remaining = synchronized(eventQueueLock) { eventQueue.size }
+                Log.w(TAG, "Flush stalled on '${item.event}' — keeping $remaining events queued for the next reconnect")
+                return
             }
         }
     }

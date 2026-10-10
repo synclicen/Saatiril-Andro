@@ -121,50 +121,100 @@ async function connectBLE() {
 
     device.addEventListener('gattserverdisconnected', onDisconnected);
 
-    server = await device.gatt.connect();
-    var service = await server.getPrimaryService(SERVICE_UUID);
-
-    nextStudentChar = await service.getCharacteristic(CHAR_NEXT_STUDENT);
-    triggerChar = await service.getCharacteristic(CHAR_TRIGGER);
-    statusChar = await service.getCharacteristic(CHAR_STATUS);
-    queueDataChar = await service.getCharacteristic(CHAR_QUEUE_DATA);
-    var projectInfoChar = await service.getCharacteristic(CHAR_PROJECT_INFO);
-
-    // Subscribe to notifications
-    await nextStudentChar.startNotifications();
-    nextStudentChar.addEventListener('characteristicvaluechanged', onNextStudentChanged);
-
-    await statusChar.startNotifications();
-    statusChar.addEventListener('characteristicvaluechanged', onStatusChanged);
-
-    await queueDataChar.startNotifications();
-    queueDataChar.addEventListener('characteristicvaluechanged', onQueueDataChanged);
-
-    // Read initial values
-    var projData = await projectInfoChar.readValue();
-    projectInfo = JSON.parse(new TextDecoder().decode(projData));
-    document.getElementById('project-info').textContent = projectInfo.projectName || '';
-
-    var queueVal = await queueDataChar.readValue();
-    queueData = JSON.parse(new TextDecoder().decode(queueVal));
-
-    var studentVal = await nextStudentChar.readValue();
-    nextStudent = JSON.parse(new TextDecoder().decode(studentVal));
-
-    isConnected = true;
-    setStatus('connected');
-    render();
+    await setupGatt();
   } catch(e) {
     setStatus('');
     showError('Gagal connect: ' + e.message);
   }
 }
 
+// GATT connect + characteristic setup for the CURRENT `device`.
+// Shared by connectBLE() (after requestDevice) and tryReconnectGatt()
+// (reconnection with the retained device — no user gesture needed).
+async function setupGatt() {
+  server = await device.gatt.connect();
+  var service = await server.getPrimaryService(SERVICE_UUID);
+
+  nextStudentChar = await service.getCharacteristic(CHAR_NEXT_STUDENT);
+  triggerChar = await service.getCharacteristic(CHAR_TRIGGER);
+  statusChar = await service.getCharacteristic(CHAR_STATUS);
+  queueDataChar = await service.getCharacteristic(CHAR_QUEUE_DATA);
+  var projectInfoChar = await service.getCharacteristic(CHAR_PROJECT_INFO);
+
+  // Subscribe to notifications
+  await nextStudentChar.startNotifications();
+  nextStudentChar.addEventListener('characteristicvaluechanged', onNextStudentChanged);
+
+  await statusChar.startNotifications();
+  statusChar.addEventListener('characteristicvaluechanged', onStatusChanged);
+
+  await queueDataChar.startNotifications();
+  queueDataChar.addEventListener('characteristicvaluechanged', onQueueDataChanged);
+
+  // Read initial values
+  var projData = await projectInfoChar.readValue();
+  projectInfo = JSON.parse(new TextDecoder().decode(projData));
+  document.getElementById('project-info').textContent = projectInfo.projectName || '';
+
+  var queueVal = await queueDataChar.readValue();
+  queueData = JSON.parse(new TextDecoder().decode(queueVal));
+
+  var studentVal = await nextStudentChar.readValue();
+  nextStudent = JSON.parse(new TextDecoder().decode(studentVal));
+
+  isConnected = true;
+  setStatus('connected');
+  render();
+}
+
+var reconnectAttempts = 0;
+var MAX_RECONNECT = 3;
+var reconnectTimer = null;
+
+// Web Bluetooth: requestDevice() requires a USER GESTURE, so it can NOT be
+// called from a timer. But device.gatt.connect() on the retained device IS
+// allowed without a gesture — retry that a few times, then fall back to a
+// manual "Sambungkan Ulang" button (whose click provides the gesture).
 function onDisconnected() {
   isConnected = false;
   setStatus('');
-  document.getElementById('app').innerHTML = '<div class="error-box">Koneksi Bluetooth terputus. Mencoba reconnect...</div>';
-  setTimeout(connectBLE, 3000);
+  if (device && device.gatt && reconnectAttempts < MAX_RECONNECT) {
+    reconnectAttempts++;
+    document.getElementById('app').innerHTML = '<div class="error-box">Koneksi Bluetooth terputus. Mencoba reconnect (' + reconnectAttempts + '/' + MAX_RECONNECT + ')...</div>';
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(tryReconnectGatt, 3000);
+  } else {
+    showReconnectButton();
+  }
+}
+
+async function tryReconnectGatt() {
+  if (isConnected || !device || !device.gatt) return;
+  try {
+    setStatus('connecting');
+    await setupGatt();
+    reconnectAttempts = 0; // success — reset for future drops
+  } catch(e) {
+    if (reconnectAttempts < MAX_RECONNECT) {
+      reconnectAttempts++;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(tryReconnectGatt, 3000);
+    } else {
+      showReconnectButton();
+    }
+  }
+}
+
+function showReconnectButton() {
+  setStatus('');
+  document.getElementById('app').innerHTML =
+    '<div class="error-box">Koneksi Bluetooth terputus.</div>' +
+    '<button class="connect-btn" onclick="reconnectManual()">SAMBUNGKAN ULANG</button>';
+}
+
+function reconnectManual() {
+  reconnectAttempts = 0;
+  connectBLE(); // called from a click — requestDevice() is allowed
 }
 
 function onNextStudentChanged(event) {

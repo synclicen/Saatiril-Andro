@@ -45,21 +45,32 @@ object HandTriggerDetector {
     // Model file in assets folder
     private const val MODEL_PATH = "hand_landmarker.task"
 
+    // ── Thread safety note ──
+    // These fields are written from the detection (IO) thread inside
+    // processFrame() and read from the main thread (screens / callbacks) —
+    // @Volatile guarantees cross-thread visibility without restructuring.
+    @Volatile
     private var handLandmarker: HandLandmarker? = null
+    @Volatile
     private var isInitialized = false
+    @Volatile
     private var isRunning = false
 
     // ─── State tracking ─────────────────────────────────────────────
     // Timestamp when hand first appeared (0 = not currently visible)
+    @Volatile
     private var handVisibleSince = 0L
 
     // Whether the hand has been confirmed (visible for sustain duration)
+    @Volatile
     private var isConfirmed = false
 
     // Timestamp of last trigger (for cooldown)
+    @Volatile
     private var lastTriggerTime = 0L
 
     // Whether trigger has already fired for this hand appearance
+    @Volatile
     private var triggerFired = false
 
     // Callbacks
@@ -67,7 +78,8 @@ object HandTriggerDetector {
     var onHandLeft: (() -> Unit)? = null         // Hand left frame → START TIMER
     var onHandAppeared: (() -> Unit)? = null     // Hand just appeared
 
-    // UI state
+    // UI state (written from the detection thread, read from the UI thread)
+    @Volatile
     var handState: HandState = HandState.NONE
         private set
 

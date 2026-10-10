@@ -72,7 +72,10 @@ var isConnected = false;
 
 function setStatus(state, text) {
   document.getElementById('status-dot').className = 'dot ' + state;
-  if (text) document.getElementById('status-text').textContent = text;
+  // status-text only exists on the connect screen — null-check it because
+  // the #app content is replaced after connecting.
+  var el = document.getElementById('status-text');
+  if (text && el) el.textContent = text;
 }
 
 async function connectMC() {
@@ -84,28 +87,84 @@ async function connectMC() {
     });
 
     device.addEventListener('gattserverdisconnected', onDisconnected);
-    server = await device.gatt.connect();
-    var service = await server.getPrimaryService(SERVICE_UUID);
 
-    // Get characteristics
-    statusChar = await service.getCharacteristic(CHAR_STATUS);
-    triggerChar = await service.getCharacteristic(CHAR_TRIGGER);
-
-    // Subscribe to status notifications (MC sends PANGGIL/NEXT/RESET via status)
-    await statusChar.startNotifications();
-    statusChar.addEventListener('characteristicvaluechanged', onStatusChanged);
-
-    isConnected = true;
-    setStatus('connected', 'MC terhubung! Menunggu trigger...');
-
-    document.getElementById('app').innerHTML =
-      '<div class="info-box">✅ MC HP terhubung via Bluetooth</div>' +
-      '<div class="info-box">MC akan mengirim PANGGIL/NEXT/RESET via Bluetooth.<br>' +
-      'Admin akan otomatis memanggil mahasiswa saat MC trigger.</div>' +
-      '<div class="info-box" id="trigger-log"><b>Log Trigger:</b><br></div>';
+    await setupGatt();
   } catch(e) {
     setStatus('', 'Gagal: ' + e.message);
   }
+}
+
+// GATT connect + characteristic setup for the CURRENT `device`.
+// Shared by connectMC() (after requestDevice) and tryReconnectGatt()
+// (reconnection with the retained device — no user gesture needed).
+async function setupGatt() {
+  server = await device.gatt.connect();
+  var service = await server.getPrimaryService(SERVICE_UUID);
+
+  // Get characteristics
+  statusChar = await service.getCharacteristic(CHAR_STATUS);
+  triggerChar = await service.getCharacteristic(CHAR_TRIGGER);
+
+  // Subscribe to status notifications (MC sends PANGGIL/NEXT/RESET via status)
+  await statusChar.startNotifications();
+  statusChar.addEventListener('characteristicvaluechanged', onStatusChanged);
+
+  isConnected = true;
+  setStatus('connected', 'MC terhubung! Menunggu trigger...');
+
+  document.getElementById('app').innerHTML =
+    '<div class="info-box">✅ MC HP terhubung via Bluetooth</div>' +
+    '<div class="info-box">MC akan mengirim PANGGIL/NEXT/RESET via Bluetooth.<br>' +
+    'Admin akan otomatis memanggil mahasiswa saat MC trigger.</div>' +
+    '<div class="info-box" id="trigger-log"><b>Log Trigger:</b><br></div>';
+}
+
+var reconnectAttempts = 0;
+var MAX_RECONNECT = 3;
+var reconnectTimer = null;
+
+// Web Bluetooth: requestDevice() requires a USER GESTURE, so it can NOT be
+// called from a timer. But device.gatt.connect() on the retained device IS
+// allowed without a gesture — retry that a few times, then fall back to a
+// manual "Sambungkan Ulang" button (whose click provides the gesture).
+function onDisconnected() {
+  isConnected = false;
+  if (device && device.gatt && reconnectAttempts < MAX_RECONNECT) {
+    reconnectAttempts++;
+    setStatus('connecting', 'MC terputus. Mencoba reconnect (' + reconnectAttempts + '/' + MAX_RECONNECT + ')...');
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(tryReconnectGatt, 3000);
+  } else {
+    showReconnectButton();
+  }
+}
+
+async function tryReconnectGatt() {
+  if (isConnected || !device || !device.gatt) return;
+  try {
+    await setupGatt();
+    reconnectAttempts = 0; // success — reset for future drops
+  } catch(e) {
+    if (reconnectAttempts < MAX_RECONNECT) {
+      reconnectAttempts++;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(tryReconnectGatt, 3000);
+    } else {
+      showReconnectButton();
+    }
+  }
+}
+
+function showReconnectButton() {
+  setStatus('');
+  document.getElementById('app').innerHTML =
+    '<div class="info-box" style="border-color:#ef4444;color:#ef4444;">MC terputus via Bluetooth.</div>' +
+    '<button class="connect-btn" onclick="reconnectManual()">SAMBUNGKAN ULANG</button>';
+}
+
+function reconnectManual() {
+  reconnectAttempts = 0;
+  connectMC(); // called from a click — requestDevice() is allowed
 }
 
 function onStatusChanged(event) {
@@ -132,12 +191,6 @@ function onStatusChanged(event) {
       });
     }
   } catch(e) {}
-}
-
-function onDisconnected() {
-  isConnected = false;
-  setStatus('', 'MC terputus. Mencoba reconnect...');
-  setTimeout(connectMC, 3000);
 }
 
 // Send status update to MC (e.g., "done" after photo)

@@ -3205,14 +3205,24 @@ async function sendPhotos() {
     }
   })
   
+  // PHOTOS_SAVED must match the Electron operator-panel payload (see
+  // operator-panel.tsx / public/operator.html "CRITICAL FIX v23"):
+  //   student: full student OBJECT, photos: array of base64 dataUrl STRINGS,
+  //   version + filename. The Android AdminViewModel.handlePhotosSaved parses
+  //   data.student / data.photos with Gson — sending {filename,data,label}
+  //   objects inside `photos` throws asString and the photos are silently
+  //   DROPPED.
   socket.emit('lan-message', {
     event: 'PHOTOS_SAVED',
     data: {
+      student: Object.assign({}, currentTarget, { status: 'done' }),
       studentId: currentTarget.id,
       nim: nim,
       nama: nama,
       channel: channel,
-      photos: photos,
+      version: 1,
+      filename: photos[0] ? photos[0].filename : '',
+      photos: photos.map(p => p.data),
       timestamp: Date.now()
     }
   })
@@ -3554,6 +3564,10 @@ function stopLatencyPing() {
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
+  // Don't hijack Space/Enter while the user is typing in a field
+  // (NIM search, password input, etc.) — only act on global key presses.
+  const t = e.target
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
   if (e.code === 'Space' || e.code === 'Enter') {
     e.preventDefault()
     handleCaptureClick()
@@ -3669,7 +3683,6 @@ async function checkExistingPermission() {
     setTimeout(() => handleConnect(), 500)
   }
 })()
-</script>})()
 </script>
 
 </body>

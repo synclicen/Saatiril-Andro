@@ -43,7 +43,17 @@ class ProjectStore(private val context: Context) {
             val file = File(dir, "${project.id}.json")
             // Write to a temp file then rename for atomic-ish update.
             val tmp = File(dir, "${project.id}.json.tmp")
-            tmp.writeText(gson.toJson(project), Charsets.UTF_8)
+            // #4: NEVER persist photo base64 payloads — each photoHistory entry
+            // is saved with its photos stripped (student/channel metadata kept).
+            // Full multi-MB base64 strings made project files huge and turned
+            // every capture into an O(n²) disk rewrite. The in-memory project
+            // (gallery, MC per-channel badges) keeps the photos; the photo files
+            // themselves live in the output folder. Mirrors the SYNC_DB
+            // stripping in AdminViewModel.pushSyncDb().
+            val persisted = project.copy(
+                photoHistory = project.photoHistory.map { it.copy(photos = emptyList()) }
+            )
+            tmp.writeText(gson.toJson(persisted), Charsets.UTF_8)
             if (!tmp.renameTo(file)) {
                 // Fallback: copy then delete tmp.
                 tmp.copyTo(file, overwrite = true)
