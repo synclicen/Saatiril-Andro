@@ -148,6 +148,94 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     val scope = rememberCoroutineScope()
     val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+
+    // Initialize + start/stop hand detection based on shutter mode
+    LaunchedEffect(shutterMode) {
+        if (shutterMode == "hand") {
+            // Initialize MediaPipe Hand Landmarker (loads 7.8MB model from assets)
+            val initialized = com.saatiril.andro.camera.HandTriggerDetector.initialize(context)
+            if (initialized) {
+                com.saatiril.andro.camera.HandTriggerDetector.start()
+                Log.i("OperatorScreen", "Hand trigger detection started")
+
+                // Start detection loop — grab preview frame every 200ms
+                handDetectionJob = scope.launch(Dispatchers.IO) {
+                    while (shutterMode == "hand" && com.saatiril.andro.camera.HandTriggerDetector.isDetecting()) {
+                        try {
+                            val bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
+                            if (bitmap != null) {
+                                com.saatiril.andro.camera.HandTriggerDetector.processFrame(bitmap)
+                                handState = com.saatiril.andro.camera.HandTriggerDetector.handState
+                            }
+                        } catch (e: Exception) {
+                            Log.w("OperatorScreen", "Hand detect frame error: ${e.message}")
+                        }
+                        delay(200)
+                    }
+                }
+            } else {
+                Log.e("OperatorScreen", "Failed to initialize HandTriggerDetector")
+                shutterMode = "manual" // fallback
+            }
+        } else {
+            // Stop hand detection when mode changes
+            com.saatiril.andro.camera.HandTriggerDetector.stop()
+            handDetectionJob?.cancel()
+            handDetectionJob = null
+            handState = com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE
+        }
+    }
+
+    // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
+    var gridlineEnabled by remember { mutableStateOf(true) }
+    var gridlineType by remember { mutableStateOf("thirds") }  // thirds | quarters | crosshair | diagonal
+    var gridlineThickness by remember { mutableStateOf(1) }  // 1=thin, 2=medium, 3=thick
+    var gridlineColor by remember { mutableStateOf("white") }  // white | yellow | red | cyan | green
+
+    // ── Flash overlay on capture ──
+    var showFlash by remember { mutableStateOf(false) }
+
+    // ── Capture phase (from ViewModel) ──
+    val capturePhase by viewModel.capturePhase.collectAsState()
+    val opCapturedPhotos by viewModel.opCapturedPhotos.collectAsState()
+
+    // Find the current target student (the one MC called to the stage)
+    val db = project?.database ?: emptyList()
+    val mode = project?.config?.mode ?: CameraModes.SINGLE
+    val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
+    val isDual = CameraModes.isDualMode(mode)
+    val myChannel by viewModel.myChannel.collectAsState()
+
+    // Operator queue: in photoshoot mode, operator can pick from 'sent' students
+    // (matches Electron operator-panel.tsx renderOpSearch + renderQueueList).
+    // In non-photoshoot, the active student is auto-assigned by MC.
+    var opSearchQuery by remember { mutableStateOf("") }
+    var opSelectedStudent by remember { mutableStateOf<Student?>(null) }
+
+    // Photoshoot: list of 'sent' students (operator's queue)
+    val opSentQueue = if (isPhotoshoot) db.filter { it.status == "sent" } else emptyList()
+    val opSearchResults = if (isPhotoshoot && opSearchQuery.trim().isNotEmpty()) {
+        val q = opSearchQuery.trim().lowercase()
+        opSentQueue.filter { it.nama.lowercase().contains(q) || it.nim.lowercase().contains(q) }
+    } else opSentQueue
+
+    // Active target:
+    // - Non-photoshoot: auto from MC_CALL (active_N on our channel)
+    // - Photoshoot: operator-selected, OR first 'sent' student if none selected
+    val activeStudent = if (isPhotoshoot) {
+        opSelectedStudent ?: opSentQueue.firstOrNull()
+    } else {
+        db.firstOrNull { isActiveStatus(it.status) && getActiveChannel(it.status) == myChannel }
+    }
+    val activeChannel = activeStudent?.let {
+        if (isPhotoshoot) it.assignedChannel else (getActiveChannel(it.status) ?: myChannel)
+    } ?: myChannel
+
+    // Reset capture state when the active student changes (new student called)
+    val activeStudentId = activeStudent?.id
+    LaunchedEffect(activeStudentId) {
+        viewModel.resetCaptureState()
+    }
     // ── Hot shoe: extract the capture logic into a reusable lambda ──
     // (used by both the on-screen shutter button + the hot shoe audio detector).
     val triggerCapture: () -> Unit = {
@@ -246,94 +334,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         if (hotShoePulseCount > 0) {
             triggerCapture()
         }
-    }
-
-    // Initialize + start/stop hand detection based on shutter mode
-    LaunchedEffect(shutterMode) {
-        if (shutterMode == "hand") {
-            // Initialize MediaPipe Hand Landmarker (loads 7.8MB model from assets)
-            val initialized = com.saatiril.andro.camera.HandTriggerDetector.initialize(context)
-            if (initialized) {
-                com.saatiril.andro.camera.HandTriggerDetector.start()
-                Log.i("OperatorScreen", "Hand trigger detection started")
-
-                // Start detection loop — grab preview frame every 200ms
-                handDetectionJob = scope.launch(Dispatchers.IO) {
-                    while (shutterMode == "hand" && com.saatiril.andro.camera.HandTriggerDetector.isDetecting()) {
-                        try {
-                            val bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
-                            if (bitmap != null) {
-                                com.saatiril.andro.camera.HandTriggerDetector.processFrame(bitmap)
-                                handState = com.saatiril.andro.camera.HandTriggerDetector.handState
-                            }
-                        } catch (e: Exception) {
-                            Log.w("OperatorScreen", "Hand detect frame error: ${e.message}")
-                        }
-                        delay(200)
-                    }
-                }
-            } else {
-                Log.e("OperatorScreen", "Failed to initialize HandTriggerDetector")
-                shutterMode = "manual" // fallback
-            }
-        } else {
-            // Stop hand detection when mode changes
-            com.saatiril.andro.camera.HandTriggerDetector.stop()
-            handDetectionJob?.cancel()
-            handDetectionJob = null
-            handState = com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE
-        }
-    }
-
-    // ── Gridline overlay (matches Electron operator-panel.tsx:263-266) ──
-    var gridlineEnabled by remember { mutableStateOf(true) }
-    var gridlineType by remember { mutableStateOf("thirds") }  // thirds | quarters | crosshair | diagonal
-    var gridlineThickness by remember { mutableStateOf(1) }  // 1=thin, 2=medium, 3=thick
-    var gridlineColor by remember { mutableStateOf("white") }  // white | yellow | red | cyan | green
-
-    // ── Flash overlay on capture ──
-    var showFlash by remember { mutableStateOf(false) }
-
-    // ── Capture phase (from ViewModel) ──
-    val capturePhase by viewModel.capturePhase.collectAsState()
-    val opCapturedPhotos by viewModel.opCapturedPhotos.collectAsState()
-
-    // Find the current target student (the one MC called to the stage)
-    val db = project?.database ?: emptyList()
-    val mode = project?.config?.mode ?: CameraModes.SINGLE
-    val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
-    val isDual = CameraModes.isDualMode(mode)
-    val myChannel by viewModel.myChannel.collectAsState()
-
-    // Operator queue: in photoshoot mode, operator can pick from 'sent' students
-    // (matches Electron operator-panel.tsx renderOpSearch + renderQueueList).
-    // In non-photoshoot, the active student is auto-assigned by MC.
-    var opSearchQuery by remember { mutableStateOf("") }
-    var opSelectedStudent by remember { mutableStateOf<Student?>(null) }
-
-    // Photoshoot: list of 'sent' students (operator's queue)
-    val opSentQueue = if (isPhotoshoot) db.filter { it.status == "sent" } else emptyList()
-    val opSearchResults = if (isPhotoshoot && opSearchQuery.trim().isNotEmpty()) {
-        val q = opSearchQuery.trim().lowercase()
-        opSentQueue.filter { it.nama.lowercase().contains(q) || it.nim.lowercase().contains(q) }
-    } else opSentQueue
-
-    // Active target:
-    // - Non-photoshoot: auto from MC_CALL (active_N on our channel)
-    // - Photoshoot: operator-selected, OR first 'sent' student if none selected
-    val activeStudent = if (isPhotoshoot) {
-        opSelectedStudent ?: opSentQueue.firstOrNull()
-    } else {
-        db.firstOrNull { isActiveStatus(it.status) && getActiveChannel(it.status) == myChannel }
-    }
-    val activeChannel = activeStudent?.let {
-        if (isPhotoshoot) it.assignedChannel else (getActiveChannel(it.status) ?: myChannel)
-    } ?: myChannel
-
-    // Reset capture state when the active student changes (new student called)
-    val activeStudentId = activeStudent?.id
-    LaunchedEffect(activeStudentId) {
-        viewModel.resetCaptureState()
     }
 
     // Clear operator selection when the selected student becomes 'done'
