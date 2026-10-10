@@ -839,14 +839,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             }
                         } else { doCapture() }
                     },
-                    modifier = Modifier.weight(1f).height(42.dp),
+                    modifier = Modifier.weight(1f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER),
                     shape = RoundedCornerShape(8.dp), enabled = activeStudent != null && !isCapturing && timerCountdown == null,
                     contentPadding = PaddingValues(horizontal = 6.dp)
                 ) {
-                    if (isCapturing) { CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BG, strokeWidth = 2.dp); Spacer(Modifier.width(4.dp)); Text("Simpan", color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                    else if (timerCountdown != null) { Text("$timerCountdown", color = BG, fontSize = 14.sp, fontWeight = FontWeight.Black) }
-                    else { Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp), tint = BG); Spacer(Modifier.width(4.dp)); Text(shutterLabel, color = BG, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    if (isCapturing) { CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BG, strokeWidth = 2.dp); Spacer(Modifier.width(6.dp)); Text("Simpan", color = BG, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                    else if (timerCountdown != null) { Text("$timerCountdown", color = BG, fontSize = 18.sp, fontWeight = FontWeight.Black) }
+                    else { Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(24.dp), tint = BG); Spacer(Modifier.width(6.dp)); Text(shutterLabel, color = BG, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
                 }
                 // Queue toggle — shows/hides inline queue panel BELOW this bar
                 Card(modifier = Modifier.size(42.dp).clip(RoundedCornerShape(8.dp)).clickable { showQueuePanel = !showQueuePanel; showSettingsPanel = false }
