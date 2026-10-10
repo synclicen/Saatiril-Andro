@@ -128,12 +128,32 @@ function parseRatio(ratioStr: string): number {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 // DEFENSIVE: nama/nim can be undefined if a photoHistory entry got corrupted
 // during reset+retake cycles. Never let .trim() crash the whole app.
+// (matches Android FilenameUtils.kt after fix in d07fdeb — sanitize + cap
+//  nama at 40 chars and fall back to studentId → clock-hex when both sanitize
+//  empty so empty Excel rows no longer collide on filenames like "___1_Toga.jpg".)
+const MAX_NAMA_LENGTH = 40
+
 function sanitizeNama(nama: string | undefined | null): string {
-  return (nama ?? '').trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')
+  return (nama ?? '').trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '').slice(0, MAX_NAMA_LENGTH)
 }
 
 function sanitizeNim(nim: string | undefined | null): string {
   return (nim ?? '').toString().trim().replace(/[^a-zA-Z0-9_-]/g, '')
+}
+
+/** Build the "NIM_Nama" identity part of a filename.
+ *  - both present → "NIM_Nama"
+ *  - only one present → that part alone (no dangling "_")
+ *  - both empty → first 8 chars of studentId, else a clock-derived hex.
+ */
+function buildIdentityPart(nim: string | undefined, nama: string | undefined, studentId?: string): string {
+  const nimPart = sanitizeNim(nim)
+  const namaPart = sanitizeNama(nama)
+  if (nimPart && namaPart) return `${nimPart}_${namaPart}`
+  if (nimPart) return nimPart
+  if (namaPart) return namaPart
+  const idPart = sanitizeNim(studentId).slice(0, 8)
+  return idPart || Date.now().toString(16).slice(-8)
 }
 
 /**
@@ -142,8 +162,8 @@ function sanitizeNim(nim: string | undefined | null): string {
  * v1 → `NIM_Nama_1_Toga.jpg` (no version suffix for backwards compat)
  * v2 → `NIM_Nama_1_Toga_v2.jpg`, v3 → `..._v3.jpg`, …
  */
-function buildFilename(nim: string | undefined, nama: string | undefined, suffix: number, type: string, version: number = 1): string {
-  const base = `${sanitizeNim(nim)}_${sanitizeNama(nama)}_${suffix}_${type}`
+function buildFilename(nim: string | undefined, nama: string | undefined, suffix: number, type: string, version: number = 1, studentId?: string): string {
+  const base = `${buildIdentityPart(nim, nama, studentId)}_${suffix}_${type}`
   return version > 1 ? `${base}_v${version}.jpg` : `${base}.jpg`
 }
 
@@ -153,8 +173,8 @@ function buildFilename(nim: string | undefined, nama: string | undefined, suffix
  * v1 → `NIM_Nama.jpg` or `NIM_Nama_Ch2.jpg` (no version suffix)
  * v2 → `NIM_Nama_v2.jpg` or `NIM_Nama_Ch2_v2.jpg`, …
  */
-function buildPhotoshootFilename(nim: string | undefined, nama: string | undefined, channel: number, version: number = 1): string {
-  const base = `${sanitizeNim(nim)}_${sanitizeNama(nama)}`
+function buildPhotoshootFilename(nim: string | undefined, nama: string | undefined, channel: number, version: number = 1, studentId?: string): string {
+  const base = buildIdentityPart(nim, nama, studentId)
   const withCh = channel > 1 ? `${base}_Ch${channel}` : base
   return version > 1 ? `${withCh}_v${version}.jpg` : `${withCh}.jpg`
 }
@@ -960,8 +980,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         const version = prevVersion + 1
         const newVersions = { ...currentVersions, [versionKey]: version }
         const filename = isPhotoshootModeFlag
-          ? buildPhotoshootFilename(student.nim, student.nama, myChannel, version)
-          : buildFilename(student.nim, student.nama, 1, 'Toga', version) // placeholder; standard mode overrides below
+          ? buildPhotoshootFilename(student.nim, student.nama, myChannel, version, student.id)
+          : buildFilename(student.nim, student.nama, 1, 'Toga', version, student.id) // placeholder; standard mode overrides below
         return { version, newVersions, filename }
       }
 
@@ -1098,8 +1118,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         // v1 → `NIM_Nama_1_Toga.jpg` + `NIM_Nama_2_Ijazah.jpg`
         // v2 → `NIM_Nama_1_Toga_v2.jpg` + `NIM_Nama_2_Ijazah_v2.jpg`
         const { version, newVersions } = computeVersionedFilename(student, false)
-        const togaFilename = buildFilename(student.nim, student.nama, 1, 'Toga', version)
-        const ijazahFilename = buildFilename(student.nim, student.nama, 2, 'Ijazah', version)
+        const togaFilename = buildFilename(student.nim, student.nama, 1, 'Toga', version, student.id)
+        const ijazahFilename = buildFilename(student.nim, student.nama, 2, 'Ijazah', version, student.id)
         console.log(`[SAATIRIL OP] Standard capture v${version} for ${student.nama}: ${togaFilename}, ${ijazahFilename}`)
 
         console.log('[SAATIRIL OP] Emitting STUDENT_DONE + PHOTOS_SAVED for student:', student.nama, 'channel:', myChannel, 'version:', version)

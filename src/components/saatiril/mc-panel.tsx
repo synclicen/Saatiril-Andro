@@ -312,14 +312,18 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
         newHistory = [...curProj.photoHistory, historyItem]
       }
 
-      // Check completion: in dual-photoshoot mode, EITHER camera is sufficient
-      // (the participant is considered done after 1 of the 2 cameras takes a photo).
-      // In single-photoshoot mode, the single channel is sufficient.
+      // Check completion: in dual-photoshoot mode, BOTH cameras must photograph
+      // (the participant is done only after channel 1 AND channel 2 each have
+      // a photoHistory entry with photos). In single-photoshoot mode, the
+      // single channel is sufficient.
+      // (matches Android AdminViewModel.handlePhotosSaved after fix in d07fdeb —
+      // the old `||` marked done after either channel, causing the second
+      // channel operator to skip the student and miss the second photo.)
       let allChannelsDone = true
       if (isDualPhotoshootMode(curProj.config.mode)) {
-        const ch1Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 1)
-        const ch2Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 2)
-        allChannelsDone = ch1Done || ch2Done
+        const ch1Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 1 && h.photos.length > 0)
+        const ch2Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 2 && h.photos.length > 0)
+        allChannelsDone = ch1Done && ch2Done
       } else {
         // Single-photoshoot: one channel is enough
         allChannelsDone = true

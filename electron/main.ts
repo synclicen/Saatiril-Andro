@@ -301,6 +301,43 @@ function handleGenerateLicenseApi(
   })
 }
 
+/**
+ * Handle /api/ble-trigger requests — HTTP fallback for admin-ble.html.
+ * POST { action: 'PANGGIL'|'NEXT'|'RESET', studentId?: string } → emits a
+ * lan-message { event: 'BLE_TRIGGER', data: { action, studentId } } that the
+ * admin dashboard handles by looking up the next student and emitting a
+ * proper MC_CALL with { student, channel }. Mirrors Android SaatirilServer
+ * POST /api/ble-trigger after the fix in d07fdeb.
+ */
+function handleBleTriggerApi(
+  req: import('http').IncomingMessage,
+  res: import('http').ServerResponse,
+) {
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'text/plain' })
+    res.end('Method Not Allowed')
+    return
+  }
+  let body = ''
+  req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+  req.on('end', () => {
+    try {
+      const { action, studentId } = JSON.parse(body || '{}')
+      // Re-emit as lan-message → admin dashboard's BLE_TRIGGER handler
+      // converts to a proper MC_CALL with { student, channel }.
+      socketServer?.emit('lan-message', {
+        event: 'BLE_TRIGGER',
+        data: { action, studentId },
+      })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: true, action, studentId }))
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: false, error: 'Invalid JSON body' }))
+    }
+  })
+}
+
 // ─── Resource path resolution ──────────────────────────────────────────────
 // With asar:true, files are inside resources/app.asar
 //   __dirname → /path/to/resources/app.asar/electron
@@ -413,6 +450,17 @@ function startStaticServer(outDir: string): Promise<void> {
 
       if (urlPath === '/api/generate-license') {
         handleGenerateLicenseApi(req, res)
+        return
+      }
+
+      // ── POST /api/ble-trigger — admin-ble.html HTTP fallback for
+      //    PANGGIL/NEXT/RESET actions. The page also emits via socket.io
+      //    (primary path); this HTTP route is the redundant backup.
+      //    We re-emit as a lan-message so the admin dashboard's existing
+      //    BLE_TRIGGER handler converts it into a proper MC_CALL with
+      //    { student, channel }.
+      if (urlPath === '/api/ble-trigger') {
+        handleBleTriggerApi(req, res)
         return
       }
 

@@ -61,23 +61,44 @@ const CYAN = '#06b6d4'
 // ── Helper: sanitize nama for filenames ──────────────────────────
 // DEFENSIVE: nama/nim can be undefined if a photoHistory entry got corrupted
 // during reset+retake cycles. Never let .trim() crash the whole app.
+// (matches Android FilenameUtils.kt after fix in d07fdeb — sanitize + cap
+//  nama at 40 chars and fall back to studentId → clock-hex when both sanitize
+//  empty so empty Excel rows no longer collide on filenames like "___1_Toga.jpg".)
+const MAX_NAMA_LENGTH = 40
+
 function sanitizeNama(nama: string | undefined | null): string {
   return (nama ?? '')
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^a-zA-Z0-9_]/g, '')
+    .slice(0, MAX_NAMA_LENGTH)
 }
 
 function sanitizeNim(nim: string | undefined | null): string {
   return (nim ?? '').toString().trim().replace(/[^a-zA-Z0-9_-]/g, '')
 }
 
+/** Build the "NIM_Nama" identity part of a filename.
+ *  - both present → "NIM_Nama"
+ *  - only one present → that part alone (no dangling "_")
+ *  - both empty → first 8 chars of studentId, else a clock-derived hex.
+ */
+function buildIdentityPart(nim: string | undefined, nama: string | undefined, studentId?: string): string {
+  const nimPart = sanitizeNim(nim)
+  const namaPart = sanitizeNama(nama)
+  if (nimPart && namaPart) return `${nimPart}_${namaPart}`
+  if (nimPart) return nimPart
+  if (namaPart) return namaPart
+  const idPart = sanitizeNim(studentId).slice(0, 8)
+  return idPart || Date.now().toString(16).slice(-8)
+}
+
 /**
  * Build a versioned filename for standard mode (Toga + Ijazah).
  * version: 1 = first capture, 2+ = retake after MC reset.
  */
-function buildFilename(nim: string | undefined, nama: string | undefined, suffix: number, type: string, version: number = 1): string {
-  const base = `${sanitizeNim(nim)}_${sanitizeNama(nama)}_${suffix}_${type}`
+function buildFilename(nim: string | undefined, nama: string | undefined, suffix: number, type: string, version: number = 1, studentId?: string): string {
+  const base = `${buildIdentityPart(nim, nama, studentId)}_${suffix}_${type}`
   return version > 1 ? `${base}_v${version}.jpg` : `${base}.jpg`
 }
 
@@ -85,8 +106,8 @@ function buildFilename(nim: string | undefined, nama: string | undefined, suffix
  * Build a versioned filename for photoshoot mode.
  * version: 1 = first capture, 2+ = retake after MC reset.
  */
-function buildPhotoshootFilename(nim: string | undefined, nama: string | undefined, channel: number, version: number = 1): string {
-  const base = `${sanitizeNim(nim)}_${sanitizeNama(nama)}`
+function buildPhotoshootFilename(nim: string | undefined, nama: string | undefined, channel: number, version: number = 1, studentId?: string): string {
+  const base = buildIdentityPart(nim, nama, studentId)
   const withCh = channel > 1 ? `${base}_Ch${channel}` : base
   return version > 1 ? `${withCh}_v${version}.jpg` : `${withCh}.jpg`
 }
@@ -249,11 +270,11 @@ export default function AdminDashboard() {
         // Wisuda mode (single/dual) → 2 photos (buildFilename Toga + Ijazah).
         const items: { base64Data: string; filename: string }[] = []
         if (photoshootMode) {
-          const filename = data.filename ?? buildPhotoshootFilename(data.student.nim, data.student.nama, data.channel, version)
+          const filename = data.filename ?? buildPhotoshootFilename(data.student.nim, data.student.nama, data.channel, version, data.student.id)
           items.push({ base64Data: data.photos[0], filename })
         } else {
-          const togaFilename = buildFilename(data.student.nim, data.student.nama, 1, 'Toga', version)
-          const ijazahFilename = buildFilename(data.student.nim, data.student.nama, 2, 'Ijazah', version)
+          const togaFilename = buildFilename(data.student.nim, data.student.nama, 1, 'Toga', version, data.student.id)
+          const ijazahFilename = buildFilename(data.student.nim, data.student.nama, 2, 'Ijazah', version, data.student.id)
           items.push({ base64Data: data.photos[0], filename: togaFilename })
           items.push({ base64Data: data.photos[1], filename: ijazahFilename })
         }
@@ -408,15 +429,19 @@ export default function AdminDashboard() {
         newHistory = [...proj.photoHistory, historyItem]
       }
 
-      // Check completion: in dual-photoshoot mode, EITHER camera is sufficient
-      // (the participant is considered done after 1 of the 2 cameras takes a photo).
-      // In single-photoshoot mode, the single channel is sufficient.
-      // In non-photoshoot modes, mark done immediately.
+      // Check completion: in dual-photoshoot mode, BOTH cameras must photograph
+      // (the participant is done only after channel 1 AND channel 2 each have
+      // a photoHistory entry with photos). In single-photoshoot mode, the
+      // single channel is sufficient. In non-photoshoot modes, mark done
+      // immediately.
+      // (matches Android AdminViewModel.handlePhotosSaved after fix in d07fdeb —
+      // the old `||` marked done after either channel, causing the second
+      // channel operator to skip the student and miss the second photo.)
       let allChannelsDone = true
       if (isDualPhotoshootMode(proj.config.mode)) {
-        const ch1Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 1)
-        const ch2Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 2)
-        allChannelsDone = ch1Done || ch2Done
+        const ch1Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 1 && h.photos.length > 0)
+        const ch2Done = newHistory.some((h) => h.student.id === data.student.id && h.channel === 2 && h.photos.length > 0)
+        allChannelsDone = ch1Done && ch2Done
       } else if (photoshootMode) {
         // Single photoshoot: one channel is enough
         allChannelsDone = true
@@ -2343,7 +2368,7 @@ export default function AdminDashboard() {
 
     // Photoshoot: 1 photo with data-based name
     if (photoshoot) {
-      const filename = buildPhotoshootFilename(student.nim, student.nama, channel, version)
+      const filename = buildPhotoshootFilename(student.nim, student.nama, channel, version, student.id)
       return (
         <div
           key={`${student.id}-${channel}-${index}`}
@@ -2391,8 +2416,8 @@ export default function AdminDashboard() {
     }
 
     // Standard mode: 2 photos (Toga + Ijazah)
-    const togaFilename = buildFilename(student.nim, student.nama, 1, 'Toga', version)
-    const ijazahFilename = buildFilename(student.nim, student.nama, 2, 'Ijazah', version)
+    const togaFilename = buildFilename(student.nim, student.nama, 1, 'Toga', version, student.id)
+    const ijazahFilename = buildFilename(student.nim, student.nama, 2, 'Ijazah', version, student.id)
 
     return (
       <div
