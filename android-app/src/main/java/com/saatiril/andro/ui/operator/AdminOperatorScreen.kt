@@ -133,10 +133,120 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
+    // ── Hot shoe trigger (camera physical shutter → audio pulse → capture) ──
+    // When ON, the AudioRecord monitors the mic input for sharp amplitude spikes
+    // (hot shoe pulse from the camera's flash/shutter). When detected → trigger
+    // capture (same as tapping the on-screen shutter). Uses AUDIO JACK (not
+    // Bluetooth) → no conflict with BLE MC remote. Simultaneous with USB video
+    // capture (different input paths).
+    var hotShoeTrigger by remember { mutableStateOf(false) }
+    var hotShoePulseCount by remember { mutableStateOf(0) }
+
     // ── Hand trigger (matches Electron palmTriggerEnabled + usePalmDetection) ──
     var handState by remember { mutableStateOf(com.saatiril.andro.camera.HandTriggerDetector.HandState.NONE) }
     var handDetectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
+    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // ── Hot shoe: extract the capture logic into a reusable lambda ──
+    // (used by both the on-screen shutter button + the hot shoe audio detector).
+    val triggerCapture: () -> Unit = {
+        if (!isCapturing && activeStudent != null && timerCountdown == null) {
+            captureError = null
+            val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
+            val doCapture: () -> Unit = {
+                isCapturing = true
+                try {
+                    val bitmap = textureView.bitmap
+                    val proj = project
+                    if (bitmap != null && proj != null) {
+                        val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
+                        val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                        showFlash = true
+                        kotlinx.coroutines.MainScope().launch { kotlinx.coroutines.delay(200); showFlash = false }
+                        viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                    } else { captureError = if (bitmap == null) "Preview belum siap." else "Proyek tidak ditemukan." }
+                } catch (e: Exception) { captureError = "Gagal: ${e.message}" } finally { isCapturing = false }
+            }
+            if (timerDuration > 0) {
+                timerCountdown = timerDuration
+                timerJob = kotlinx.coroutines.MainScope().launch {
+                    for (i in timerDuration downTo 1) { timerCountdown = i; kotlinx.coroutines.delay(1000) }
+                    timerCountdown = null; timerJob = null; doCapture()
+                }
+            } else { doCapture() }
+        }
+    }
+
+    // ── Hot shoe: AudioRecord pulse detector ──
+    // Monitors the mic input for sharp amplitude spikes (hot shoe pulse from
+    // camera's flash/shutter). When detected → increment hotShoePulseCount →
+    // the LaunchedEffect below calls triggerCapture(). Uses AUDIO JACK (not
+    // Bluetooth) → no conflict with BLE MC remote.
+    DisposableEffect(hotShoeTrigger) {
+        if (!hotShoeTrigger) {
+            onDispose { }
+        } else {
+            val sampleRate = 44100
+            val minBuf = android.media.AudioRecord.getMinBufferSize(
+                sampleRate,
+                android.media.AudioFormat.CHANNEL_IN_MONO,
+                android.media.AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufferSize = maxOf(minBuf, 1024)
+            val audioRecord = try {
+                android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+            } catch (e: Exception) {
+                Log.e("HotShoe", "AudioRecord init failed: ${e.message}")
+                null
+            }
+            if (audioRecord != null && audioRecord.state == android.media.AudioRecord.STATE_INITIALIZED) {
+                audioRecord.startRecording()
+                val buffer = ShortArray(1024)
+                var lastTriggerTime = 0L
+                val threshold = 25000  // High — only sharp hot shoe pulses (scale 0-32767)
+                val debounceMs = 2000L  // 2 seconds between triggers (anti double + anti noise)
+                val monitorThread = Thread {
+                    while (hotShoeTrigger && audioRecord.recordingState == android.media.AudioRecord.RECORDSTATE_RECORDING) {
+                        val read = audioRecord.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            var sum = 0L
+                            for (i in 0 until read) { sum += buffer[i].toLong() * buffer[i].toLong() }
+                            val rms = Math.sqrt(sum.toDouble() / read).toInt()
+                            if (rms > threshold) {
+                                val now = System.currentTimeMillis()
+                                if (now - lastTriggerTime > debounceMs) {
+                                    lastTriggerTime = now
+                                    Log.i("HotShoe", "Pulse detected (RMS=$rms) — triggering capture")
+                                    mainHandler.post { hotShoePulseCount++ }
+                                }
+                            }
+                        }
+                    }
+                }
+                monitorThread.start()
+                Log.i("HotShoe", "Audio pulse detector started (threshold=$threshold, debounce=${debounceMs}ms)")
+            }
+            onDispose {
+                try { audioRecord?.stop() } catch (_: Exception) {}
+                try { audioRecord?.release() } catch (_: Exception) {}
+                Log.i("HotShoe", "Audio pulse detector stopped")
+            }
+        }
+    }
+
+    // ── Hot shoe: when a pulse is detected → trigger capture ──
+    LaunchedEffect(hotShoePulseCount) {
+        if (hotShoePulseCount > 0) {
+            triggerCapture()
+        }
+    }
 
     // Initialize + start/stop hand detection based on shutter mode
     LaunchedEffect(shutterMode) {
@@ -804,6 +914,19 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     if (mirror) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
                 }
             }
+            // Row 1.6: Hot shoe trigger toggle (camera physical shutter → audio
+            // pulse → capture). Uses audio jack (NOT Bluetooth) → no conflict
+            // with BLE MC remote. Connect hot shoe adapter to 3.5mm audio jack.
+            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable { hotShoeTrigger = !hotShoeTrigger }
+                .border(1.dp, if (hotShoeTrigger) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                colors = CardDefaults.cardColors(containerColor = if (hotShoeTrigger) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("📸", style = TextStyle(color = if (hotShoeTrigger) GOLD else MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    Text("Hot Shoe", style = TextStyle(color = if (hotShoeTrigger) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                    if (hotShoeTrigger) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
+                    else { Spacer(Modifier.weight(1f)); Text("Audio trigger", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 7.sp)) }
+                }
+            }
             // Row 2: Shutter button + Queue toggle + Settings toggle
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 val shutterLabel = when {
@@ -813,32 +936,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     else -> if (CameraModes.isPhotoshootMode(project?.config?.mode ?: CameraModes.SINGLE)) "Foto" else "Toga"
                 }
                 Button(
-                    onClick = {
-                        if (isCapturing || activeStudent == null || timerCountdown != null) return@Button
-                        captureError = null
-                        val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
-                        val doCapture: () -> Unit = {
-                            isCapturing = true
-                            try {
-                                val bitmap = textureView.bitmap
-                                val proj = project
-                                if (bitmap != null && proj != null) {
-                                    val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
-                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                                    showFlash = true
-                                    kotlinx.coroutines.MainScope().launch { kotlinx.coroutines.delay(200); showFlash = false }
-                                    viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
-                                } else { captureError = if (bitmap == null) "Preview belum siap." else "Proyek tidak ditemukan." }
-                            } catch (e: Exception) { captureError = "Gagal: ${e.message}" } finally { isCapturing = false }
-                        }
-                        if (timerDuration > 0) {
-                            timerCountdown = timerDuration
-                            timerJob = kotlinx.coroutines.MainScope().launch {
-                                for (i in timerDuration downTo 1) { timerCountdown = i; kotlinx.coroutines.delay(1000) }
-                                timerCountdown = null; timerJob = null; doCapture()
-                            }
-                        } else { doCapture() }
-                    },
+                    onClick = { triggerCapture() },
                     modifier = Modifier.weight(1f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER),
                     shape = RoundedCornerShape(8.dp), enabled = activeStudent != null && !isCapturing && timerCountdown == null,
