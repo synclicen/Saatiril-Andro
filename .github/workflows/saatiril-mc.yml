@@ -50,7 +50,7 @@ jobs:
       - name: Decode keystore
         if: env.KEYSTORE_BASE64 != ''
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.SAATIRIL_KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > saatiril-release.keystore
           echo "KEYSTORE_FILE=saatiril-release.keystore" >> $GITHUB_ENV
@@ -60,9 +60,9 @@ jobs:
         run: |
           cat > keystore.properties << EOF
           storeFile=saatiril-release.keystore
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
+          storePassword=${{ secrets.SAATIRIL_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.SAATIRIL_KEY_ALIAS }}
+          keyPassword=${{ secrets.SAATIRIL_KEY_PASSWORD }}
           EOF
 
       - name: Grant execute permission for gradlew
