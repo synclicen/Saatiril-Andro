@@ -1130,6 +1130,48 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         pushSyncDb()
     }
 
+    /**
+     * Batch variant of [sendToOperator] — sends ALL selected pending students
+     * to operator(s) in one pass. Mirrors the Electron handleSendBatchToOperator:
+     * marks every selected student as 'sent' in a single DB pass, then emits
+     * one MC_CALL per (student × channel), then emits SYNC_DB once at the end
+     * (lightweight — photos stripped, see [pushSyncDb]).
+     *
+     * Used by the MC panel multi-select toolbar. Caller is responsible for
+     * filtering out non-pending students (matches Electron's selectedStudents
+     * memo which keeps only `s.status === 'pending'`).
+     *
+     * @param students the selected pending students to send.
+     * @param channels [1] for single-photoshoot, [1, 2] for dual-photoshoot.
+     */
+    fun sendBatchToOperator(students: List<Student>, channels: List<Int>) {
+        if (students.isEmpty()) return
+        _project.value?.let { proj ->
+            val selectedIds = students.map { it.id }.toSet()
+            val updatedDb = proj.database.map { s ->
+                if (selectedIds.contains(s.id)) s.copy(status = "sent") else s
+            }
+            val updated = proj.copy(database = updatedDb)
+            _project.value = updated
+            // #7: persist status changes (crash mid-ceremony must not revert the
+            // batch send).
+            persistProject(updated)
+        }
+        // Emit MC_CALL for each (student × channel). Order matters in dual mode
+        // (both channels must see the same student before the next).
+        for (student in students) {
+            val sentStudent = student.copy(status = "sent")
+            for (ch in channels) {
+                SaatirilServer.broadcastLanMessage(
+                    SocketEvents.MC_CALL,
+                    McCallData(sentStudent, ch)
+                )
+            }
+        }
+        // Lightweight SYNC_DB once at the end (photos stripped).
+        pushSyncDb()
+    }
+
     fun resetStudent(studentId: String, channel: Int) {
         _project.value?.let { proj ->
             val updatedDb = proj.database.map { s ->
@@ -1302,12 +1344,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val student = parseStudent(studentObj)
         val channel = obj.get("channel")?.takeIf { !it.isJsonNull }?.asInt ?: 1
         _project.value?.let { proj ->
-            // Simple map — only set the called student to active_N. No stale-reset
-            // scan (matches the Electron handleCallNow fix ce50e92: in normal flow
-            // STUDENT_DONE marks the previous student 'done' before the MC calls
-            // the next, so no stale active_N to reset).
+            // Mode-aware status: photoshoot → "sent" (queued for operator to
+            // pick from list), non-photoshoot → "active_$channel" (one student
+            // on stage at a time). This is critical for the MC remote's
+            // multi-select batch-send flow: the MC emits MC_CALL with the
+            // student carrying status="sent", and we must NOT revert it back to
+            // "active_$channel" on the server side — otherwise the SYNC_DB we
+            // broadcast would overwrite the MC's local "sent" status, breaking
+            // the operator queue (operators show 'sent'/'active_N' students as
+            // photographable, but "active_N" semantically means "currently on
+            // stage", which is wrong for the photoshoot queue).
+            val mode = proj.config.mode
+            val newStatus = if (CameraModes.isPhotoshootMode(mode)) "sent" else "active_$channel"
             val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "active_$channel") else s
+                if (s.id == student.id) s.copy(status = newStatus) else s
             }
             val updated = proj.copy(database = updatedDb)
             _project.value = updated

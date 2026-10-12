@@ -681,6 +681,77 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * MC sends a student to operator(s) — photoshoot modes only.
+     * Mirrors AdminViewModel.sendToOperator but emits over the socket to the
+     * remote admin/server (which then updates its own DB + broadcasts SYNC_DB).
+     *
+     * - single-photoshoot: channels = [myChannel] → only ch1 sees the student.
+     * - dual-photoshoot: channels = [1, 2] → both channels see the student
+     *   simultaneously (cooperative mode — either operator can photograph).
+     *
+     * Sets the student's status to "sent" locally (instant UI feedback) and
+     * emits one MC_CALL per requested channel. The server's handleMcCall is
+     * mode-aware (photoshoot → "sent") so the SYNC_DB that bounces back keeps
+     * the "sent" status (it does NOT get reverted to "active_$channel").
+     */
+    fun sendToOperator(student: Student, channels: List<Int>) {
+        // Update local project DB so MC sees status change instantly
+        _project.value?.let { proj ->
+            val updatedDb = proj.database.map { s ->
+                if (s.id == student.id) s.copy(status = "sent") else s
+            }
+            _project.value = proj.copy(database = updatedDb)
+        }
+        // Emit MC_CALL to each requested channel (student carries status="sent"
+        // so the operator + server both see the correct state immediately).
+        val sentStudent = student.copy(status = "sent")
+        for (ch in channels) {
+            socketManager.sendMcCall(sentStudent, ch)
+        }
+        Log.i(TAG, "MC_CALL sent (photoshoot): ${student.nama} channels=$channels")
+    }
+
+    /**
+     * MC sends ALL selected students to operator(s) in one batch — photoshoot
+     * modes only. Mirrors the Electron handleSendBatchToOperator: marks every
+     * selected student as "sent" in a single DB pass, then emits one MC_CALL
+     * per (student × channel). The server's handleMcCall + the single SYNC_DB
+     * broadcast at the end consolidate the wire traffic.
+     *
+     * Order matters in dual mode (both channels must see the same student
+     * before the next), so the per-student loop emits to all channels before
+     * advancing.
+     *
+     * @param students the selected pending students (caller is responsible
+     *   for filtering out non-pending — matches Electron's selectedStudents
+     *   memo which keeps only `s.status === 'pending'`).
+     * @param channels [1] for single-photoshoot, [1, 2] for dual-photoshoot.
+     */
+    fun sendBatchToOperator(students: List<Student>, channels: List<Int>) {
+        if (students.isEmpty()) return
+        // Single pass: mark ALL selected students as 'sent' locally so the MC's
+        // queue reflects the change instantly (operator queue also recomputes
+        // via SYNC_DB bounce-back from the server).
+        _project.value?.let { proj ->
+            val selectedIds = students.map { it.id }.toSet()
+            val updatedDb = proj.database.map { s ->
+                if (selectedIds.contains(s.id)) s.copy(status = "sent") else s
+            }
+            _project.value = proj.copy(database = updatedDb)
+        }
+        // Emit MC_CALL for each (student × channel). The student object
+        // carries status="sent" so the server's handleMcCall (mode-aware) and
+        // operators both see the correct state immediately.
+        for (student in students) {
+            val sentStudent = student.copy(status = "sent")
+            for (ch in channels) {
+                socketManager.sendMcCall(sentStudent, ch)
+            }
+        }
+        Log.i(TAG, "MC_CALL batch sent (photoshoot): ${students.size} students, channels=$channels")
+    }
+
+    /**
      * MC/Admin resets a student back to pending.
      */
     fun resetStudent(studentId: String, channel: Int) {
