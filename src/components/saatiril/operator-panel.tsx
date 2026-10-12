@@ -1097,10 +1097,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       try {
         mirrorCtx.drawImage(video, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
         const frame = mirrorCanvas.toDataURL('image/jpeg', MIRROR_QUALITY)
-        emitLocal('lan-message', {
-          event: 'MIRROR_FRAME',
-          data: { frame, channel: liveMirrorChannelRef.current },
-        })
+        emitLocal('MIRROR_FRAME', { frame, channel: liveMirrorChannelRef.current })
         emittedCount++
         // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
         // the stream is alive + see the wire payload size + socket state.
@@ -1141,10 +1138,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       // Live Mirror: emit MIRROR_CAPTURE so the /mirror page does a white
       // flash overlay (matches the operator's local flash timing).
       if (liveMirrorRef.current) {
-        emitLocal('lan-message', {
-          event: 'MIRROR_CAPTURE',
-          data: { channel: liveMirrorChannelRef.current },
-        })
+        emitLocal('MIRROR_CAPTURE', { channel: liveMirrorChannelRef.current })
       }
 
       const currentPhotos = useSaatirilStore.getState().opCapturedPhotosByChannel[myChannel] ?? []
@@ -1538,10 +1532,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     if (!liveMirror) return
     if (effectiveTimerCountdown === prevMirrorCountdownRef.current) return
     prevMirrorCountdownRef.current = effectiveTimerCountdown
-    emitLocal('lan-message', {
-      event: 'MIRROR_COUNTDOWN',
-      data: { seconds: effectiveTimerCountdown, channel: liveMirrorChannelRef.current },
-    })
+    emitLocal('MIRROR_COUNTDOWN', { seconds: effectiveTimerCountdown, channel: liveMirrorChannelRef.current })
   }, [liveMirror, effectiveTimerCountdown])
 
   const startTimer = useCallback(() => {
