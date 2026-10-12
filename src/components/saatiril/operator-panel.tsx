@@ -62,7 +62,7 @@ import {
   isDualPhotoshootMode,
   channelCount,
 } from '@/store/use-saatiril-store'
-import { emitLocal, onLocal, offLocal } from '@/lib/socket'
+import { emitLocal, onLocal, offLocal, getSocket } from '@/lib/socket'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { useAIDetection, type AIMomentEvent } from '@/hooks/use-ai-detection'
 import { usePalmDetection } from '@/hooks/use-palm-detection'
@@ -1072,9 +1072,24 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     const mirrorCtx = mirrorCanvas.getContext('2d')
     if (!mirrorCtx) return
 
+    let emittedCount = 0
+    let skippedCount = 0
     mirrorIntervalRef.current = setInterval(() => {
       const video = videoRef.current
-      if (!video || video.readyState < 2 || video.videoWidth <= 0) return
+      if (!video || video.readyState < 2 || video.videoWidth <= 0) {
+        skippedCount++
+        // Log every 30 skips so the operator can see WHY frames aren't
+        // emitting (camera not ready, video null, etc.).
+        if (skippedCount === 30) {
+          console.warn('[SAATIRIL OP] mirror: 30 frames skipped (video null/ not ready).', {
+            videoExists: !!video,
+            readyState: video?.readyState,
+            videoWidth: video?.videoWidth,
+          })
+          skippedCount = 0
+        }
+        return
+      }
       // Adapt canvas height to the video aspect ratio (avoid stretching).
       const aspect = video.videoHeight / video.videoWidth
       mirrorCanvas.width = MIRROR_WIDTH
@@ -1086,6 +1101,17 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           event: 'MIRROR_FRAME',
           data: { frame, channel: liveMirrorChannelRef.current },
         })
+        emittedCount++
+        // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
+        // the stream is alive + see the wire payload size + socket state.
+        if (emittedCount === 30) {
+          const sk = getSocket()
+          console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
+            'frame size=', Math.round(frame.length / 1024) + 'KB',
+            'socket.connected=', sk?.connected ?? false,
+            'socket.id=', sk?.id ?? 'null')
+          emittedCount = 0
+        }
       } catch (err) {
         // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
         // stream, but guard anyway so the interval doesn't crash silently).

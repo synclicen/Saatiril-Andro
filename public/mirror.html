@@ -142,15 +142,39 @@
       // Auto-hide the hint after 5s
       setTimeout(function() { hint.classList.add('hidden'); }, 5000);
 
-      // Connect to the Saatiril socket.io server (port 3003, or via Caddy
-      // gateway if loaded through port 81 — matches operator.html pattern).
+      // Connect to the Saatiril socket.io server. Mirrors the operator.html
+      // connection pattern — CRITICAL: the server uses path: '/' (NOT the
+      // socket.io default '/socket.io/'). Without this option, the polling
+      // request 404s and the mirror page shows a permanent black screen.
       var isCaddyGateway = window.location.port === '81';
-      var serverUrl = isCaddyGateway
-        ? window.location.origin
-        : 'http://' + ip + ':' + SOCKET_PORT;
-      var socketOptions = isCaddyGateway
-        ? { query: { XTransformPort: String(SOCKET_PORT) }, transports: ['websocket', 'polling'] }
-        : { transports: ['websocket', 'polling'] };
+      var explicitSocketPort = params.get('socketPort');
+      var serverUrl, socketOptions;
+      var commonOpts = {
+        path: '/',
+        transports: ['websocket', 'polling'],
+        upgrade: true,
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 5000,
+        timeout: 10000,
+      };
+      if (explicitSocketPort) {
+        // Direct to socket.io port (operator's URL includes ?socketPort=N).
+        serverUrl = 'http://' + ip + ':' + explicitSocketPort;
+        socketOptions = Object.assign({}, commonOpts);
+      } else if (isCaddyGateway) {
+        // Via Caddy gateway on port 81 — use XTransformPort query so Caddy
+        // routes the request to the socket.io server port (3003).
+        serverUrl = window.location.origin;
+        socketOptions = Object.assign({}, commonOpts, {
+          query: { XTransformPort: String(SOCKET_PORT) },
+        });
+      } else {
+        // Fallback: direct to default socket.io port.
+        serverUrl = 'http://' + ip + ':' + SOCKET_PORT;
+        socketOptions = Object.assign({}, commonOpts);
+      }
 
       console.log('[MIRROR] connecting to', serverUrl, 'channel=' + channel, 'flip=' + flip);
 
@@ -162,6 +186,7 @@
       }
 
       socket.on('connect', function() {
+        console.log('[MIRROR] socket connected:', socket.id, '→ server:', serverUrl);
         setStatus('● ch' + channel + (flip ? ' · mirror' : ' · no-flip'), 'connected');
         socket.emit('identify', { role: 'mirror', channel: channel });
         // Ask the operator for a current frame so the mirror isn't black until
@@ -170,12 +195,26 @@
       });
 
       socket.on('disconnect', function() {
+        console.log('[MIRROR] socket disconnected');
         setStatus('● Disconnected · reconnecting…', 'disconnected');
       });
 
       socket.on('connect_error', function(err) {
+        console.warn('[MIRROR] connect_error:', err.message || err);
         setStatus('● Conn error: ' + (err.message || 'unknown'), 'disconnected');
       });
+
+      // Frame counter + last-frame timestamp for diagnostics. If no frame
+      // arrives within ~3s, the status flips to "menunggu frame…".
+      var frameCount = 0;
+      var lastFrameAt = 0;
+      var lastFrameCheck = setInterval(function() {
+        if (frameCount > 0 && Date.now() - lastFrameAt > 3000) {
+          // Frames were arriving but stopped — operator likely toggled OFF
+          // or camera went inactive. Show a "no signal" hint.
+          setStatus('● ch' + channel + ' · menunggu frame…', 'disconnected');
+        }
+      }, 1500);
 
       socket.on('lan-message', function(payload) {
         if (!payload || !payload.event) return;
@@ -183,14 +222,23 @@
         // Only handle events for OUR channel (or 'all' — for shared broadcasts).
         if (data.channel && data.channel !== channel && data.channel !== 'all' && data.channel !== 0) return;
 
-        switch (payload.event) {
-          case 'MIRROR_FRAME':
-            if (data.frame) {
-              img.src = data.frame;
-              img.classList.remove('loading');
-            }
-            break;
+        if (payload.event === 'MIRROR_FRAME') {
+          if (data.frame) {
+            img.src = data.frame;
+            img.classList.remove('loading');
+            frameCount++;
+            lastFrameAt = Date.now();
+            // After first frame, hide the status badge entirely (no need to
+            // see "connected" once we're actively rendering).
+            if (frameCount === 1) status.classList.add('hidden');
+          }
+          return;
+        }
 
+        // Log non-frame events for debugging (countdown / capture / clear).
+        console.log('[MIRROR] event:', payload.event, 'data:', data);
+
+        switch (payload.event) {
           case 'MIRROR_COUNTDOWN':
             var secs = data.seconds;
             if (typeof secs !== 'number') break;
