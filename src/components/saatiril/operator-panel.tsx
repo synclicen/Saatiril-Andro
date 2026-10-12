@@ -43,6 +43,7 @@ import {
   Grid3x3,
   Maximize,
   Minimize,
+  Cast,
 } from 'lucide-react'
 import {
   useSaatirilStore,
@@ -366,6 +367,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // in handleCapture uses the un-mirrored video frame (so photos are saved
   // correctly oriented).
   const [mirror, setMirror] = useState(false)
+  // ── Live Mirror (broadcast camera to /mirror display) ──────────────────
+  // When ON, the operator's camera frames are streamed at ~10 FPS to the
+  // /mirror page (opened on a separate device or 2nd monitor) so participants
+  // can see themselves (mirror) + countdown + flash without disturbing the
+  // operator's panel. Emits lan-message events MIRROR_FRAME / MIRROR_COUNTDOWN
+  // / MIRROR_CAPTURE on this channel — the /mirror page filters by channel.
+  const [liveMirror, setLiveMirror] = useState(false)
+  const mirrorIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const liveMirrorChannelRef = useRef(myChannel)
+  useEffect(() => { liveMirrorChannelRef.current = myChannel }, [myChannel])
+  // Ref mirror of liveMirror so finalizeCapture (which has a useCallback with
+  // a fixed deps array) can read the current value without going stale.
+  const liveMirrorRef = useRef(false)
+  useEffect(() => { liveMirrorRef.current = liveMirror }, [liveMirror])
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
@@ -910,6 +925,61 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     return () => { offLocal('SYNC_DB', handleSyncDb) }
   }, [setOpCurrentTarget, resetOpState, updateCurrentProject])
 
+  // ── Live Mirror: stream video frames at ~10 FPS to the /mirror page ────
+  // Captures a JPEG frame from the local <video> element via a small canvas
+  // (640px wide, aspect-correct height) and emits lan-message MIRROR_FRAME
+  // on this channel. The /mirror page (opened on a separate device or 2nd
+  // monitor) renders the frame fullscreen. Stops when the operator disables
+  // the toggle or the camera goes inactive — cleanup runs on unmount too.
+  // MIRROR_COUNTDOWN is emitted from a separate useEffect watching
+  // effectiveTimerCountdown; MIRROR_CAPTURE is emitted in finalizeCapture.
+  useEffect(() => {
+    if (!liveMirror || !cameraAvailable) {
+      if (mirrorIntervalRef.current) {
+        clearInterval(mirrorIntervalRef.current)
+        mirrorIntervalRef.current = null
+      }
+      return
+    }
+
+    const MIRROR_FPS = 10 // 100ms per frame — smooth enough for "mirror" feel, low CPU
+    const MIRROR_WIDTH = 640 // 640x~360 JPEG ~30-50KB → ~300-500KB/s per client
+    const MIRROR_QUALITY = 0.5
+
+    // Reusable canvas (off-screen) — avoids GC churn at 10 FPS.
+    const mirrorCanvas = document.createElement('canvas')
+    const mirrorCtx = mirrorCanvas.getContext('2d')
+    if (!mirrorCtx) return
+
+    mirrorIntervalRef.current = setInterval(() => {
+      const video = videoRef.current
+      if (!video || video.readyState < 2 || video.videoWidth <= 0) return
+      // Adapt canvas height to the video aspect ratio (avoid stretching).
+      const aspect = video.videoHeight / video.videoWidth
+      mirrorCanvas.width = MIRROR_WIDTH
+      mirrorCanvas.height = Math.max(1, Math.round(MIRROR_WIDTH * aspect))
+      try {
+        mirrorCtx.drawImage(video, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
+        const frame = mirrorCanvas.toDataURL('image/jpeg', MIRROR_QUALITY)
+        emitLocal('lan-message', {
+          event: 'MIRROR_FRAME',
+          data: { frame, channel: liveMirrorChannelRef.current },
+        })
+      } catch (err) {
+        // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
+        // stream, but guard anyway so the interval doesn't crash silently).
+        console.warn('[SAATIRIL OP] mirror frame draw failed:', err)
+      }
+    }, 1000 / MIRROR_FPS)
+
+    return () => {
+      if (mirrorIntervalRef.current) {
+        clearInterval(mirrorIntervalRef.current)
+        mirrorIntervalRef.current = null
+      }
+    }
+  }, [liveMirror, cameraAvailable])
+
   // ── Finalize capture ────────────────────────────────────────────────────
   // OPTIMIZED: Removed 400ms of unnecessary delays, added STUDENT_DONE lightweight
   // event for immediate MC unblocking, and SYNC_DB now strips photos (tiny payload).
@@ -920,6 +990,15 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
       addOpCapturedPhoto(dataUrl)
+
+      // Live Mirror: emit MIRROR_CAPTURE so the /mirror page does a white
+      // flash overlay (matches the operator's local flash timing).
+      if (liveMirrorRef.current) {
+        emitLocal('lan-message', {
+          event: 'MIRROR_CAPTURE',
+          data: { channel: liveMirrorChannelRef.current },
+        })
+      }
 
       const currentPhotos = useSaatirilStore.getState().opCapturedPhotosByChannel[myChannel] ?? []
       const currentTarget = useSaatirilStore.getState().opCurrentTargets[myChannel] ?? null
@@ -1302,6 +1381,22 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // Derived: only show countdown when in ready phase
   const effectiveTimerCountdown = (capturePhase === 'ready-1' || capturePhase === 'ready-2') ? timerCountdown : 0
 
+  // ── Live Mirror: emit MIRROR_COUNTDOWN when the timer ticks ────────────
+  // Watches effectiveTimerCountdown (the displayed countdown — only updates
+  // during the 'ready-1' / 'ready-2' phases). Each tick → mirror shows the
+  // number with a pulse animation. When it hits 0, finalizeCapture emits
+  // MIRROR_CAPTURE for the flash.
+  const prevMirrorCountdownRef = useRef(0)
+  useEffect(() => {
+    if (!liveMirror) return
+    if (effectiveTimerCountdown === prevMirrorCountdownRef.current) return
+    prevMirrorCountdownRef.current = effectiveTimerCountdown
+    emitLocal('lan-message', {
+      event: 'MIRROR_COUNTDOWN',
+      data: { seconds: effectiveTimerCountdown, channel: liveMirrorChannelRef.current },
+    })
+  }, [liveMirror, effectiveTimerCountdown])
+
   const startTimer = useCallback(() => {
     if (!isTimerMode(effectiveShutterMode)) return
     if (capturePhase !== 'ready-1' && capturePhase !== 'ready-2') return
@@ -1653,6 +1748,47 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
               <span style={{ color: THEME.muted }}>•</span>
               <span className={`text-[8px] ${compact ? '' : 'text-[9px]'}`} style={{ color: THEME.gold }}>
                 Aktif ✓
+              </span>
+            </>
+          )}
+        </button>
+
+        {/* Row 4: Live Mirror broadcast — streams the camera frames at ~10 FPS
+            to the /mirror page (opened on a separate device or 2nd monitor) so
+            participants can see themselves + the countdown + the photo flash
+            without disturbing the operator's panel. Independent of the local
+            Mirror toggle (Row 3) which only flips the operator's preview. */}
+        <button
+          onClick={() => setLiveMirror((v) => !v)}
+          className={`flex items-center gap-1 rounded-md font-semibold transition-all duration-200 cursor-pointer w-full min-w-0 ${
+            compact ? 'px-1 py-0.5 text-[8px]' : 'px-2 py-1.5 text-[10px]'
+          } ${liveMirror ? 'scale-[1.02]' : 'hover:bg-white/5'}`}
+          style={{
+            backgroundColor: liveMirror ? `${THEME.cyan}22` : THEME.panel,
+            color: liveMirror ? THEME.cyan : THEME.muted,
+            border: `1px solid ${liveMirror ? THEME.cyan : THEME.border}`,
+            boxShadow: liveMirror ? `0 0 8px ${THEME.cyan}22` : 'none',
+          }}
+          title={`Live Mirror — stream kamera ke layar peserta.
+
+Buka di perangkat lain (tablet / HP / laptop 2 / projector):
+  http://<IP-LAPTOP-INI>:81/mirror?channel=${myChannel}
+Atau via Caddy gateway:
+  http://<IP-LAPTOP-INI>/mirror?channel=${myChannel}&XTransformPort=81
+
+  ?channel=${myChannel}  — saluran kamera ini
+  ?flip=0         — nonaktifkan mirror (default: flipped = bercmin)
+  ?ip=...         — override IP socket.io
+
+Klik layar untuk fullscreen. Tombol: F = fullscreen, M = flip mirror.`}
+        >
+          <Cast className="size-3" />
+          <span className="font-bold">Live Mirror</span>
+          {liveMirror && (
+            <>
+              <span style={{ color: THEME.muted }}>•</span>
+              <span className={`text-[8px] ${compact ? '' : 'text-[9px]'}`} style={{ color: THEME.cyan }}>
+                ch{myChannel} ✓
               </span>
             </>
           )}

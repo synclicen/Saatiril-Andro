@@ -504,6 +504,26 @@ function startStaticServer(outDir: string): Promise<void> {
         }
       }
 
+      // ── Live Mirror page — fullscreen camera + countdown for the
+      //    participant display (separate screen / tablet / projector).
+      //    The operator keeps their full Operator panel on the main laptop;
+      //    this page is opened on a SEPARATE device or 2nd monitor so
+      //    participants can see themselves (mirror) + countdown + flash.
+      //    Query params:
+      //      ?channel=N   — filter frames by operator channel (default 1)
+      //      ?flip=0      — disable horizontal mirror (default: flipped)
+      //      ?ip=hostname — override the socket.io server IP (default: this host)
+      //    The page connects via socket.io (role=mirror) and listens for
+      //    MIRROR_FRAME / MIRROR_COUNTDOWN / MIRROR_CAPTURE lan-messages.
+      if (urlPath === '/mirror') {
+        const mirrorHtmlPath = getResourcePath('public/mirror.html')
+        if (fs.existsSync(mirrorHtmlPath)) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+          fs.createReadStream(mirrorHtmlPath).pipe(res)
+          return
+        }
+      }
+
       // ── Admin BLE Client web page — Electron connects to MC-Only APK ──
       // Admin opens this → scans for MC HP (BLE Server) → connects
 
