@@ -127,7 +127,9 @@
       var channel = parseInt(params.get('channel') || '1', 10) || 1;
       var flip = params.get('flip') !== '0'; // default: flipped (mirror)
       var ip = params.get('ip') || window.location.hostname;
-      var SOCKET_PORT = 3003;
+      // socketPort — read from URL (?socketPort=N) for flexibility; default 3003
+      // (matches the Saatiril Electron + Android server default).
+      var SOCKET_PORT = parseInt(params.get('socketPort') || '3003', 10) || 3003;
 
       var img = document.getElementById('mirror-img');
       var countdown = document.getElementById('countdown');

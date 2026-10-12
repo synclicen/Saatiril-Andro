@@ -44,6 +44,8 @@ import {
   Maximize,
   Minimize,
   Cast,
+  Copy,
+  Check,
 } from 'lucide-react'
 import {
   useSaatirilStore,
@@ -381,6 +383,125 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // a fixed deps array) can read the current value without going stale.
   const liveMirrorRef = useRef(false)
   useEffect(() => { liveMirrorRef.current = liveMirror }, [liveMirror])
+
+  // ── LAN info (Electron IPC) + mirror URL state ─────────────────────────
+  // When Live Mirror is ON, we build a copy-paste-ready URL with the laptop's
+  // LAN IP so the operator can hand it to participants without manually
+  // figuring out the IP. Falls back to window.location.hostname in browser
+  // mode (non-Electron).
+  const [lanInfo, setLanInfo] = useState<{ httpPort: number; socketPort: number; ips: { name: string; address: string }[] } | null>(null)
+  const [mirrorUrl, setMirrorUrl] = useState<string>('')
+  const [mirrorCopied, setMirrorCopied] = useState(false)
+
+  useEffect(() => {
+    const api = window.saatirilAPI
+    if (api?.isElectron && api.getLanInfo) {
+      api.getLanInfo().then((info: any) => {
+        setLanInfo(info)
+        console.log('[SAATIRIL OP] LAN info for mirror:', info)
+      }).catch(() => {})
+    }
+  }, [])
+
+  // Build the /mirror URL based on LAN info (or fallback to window.location).
+  // Returns the full URL string including channel + socketPort query params.
+  const buildMirrorUrl = useCallback(async () => {
+    const api = window.saatirilAPI
+    const isElectron = api?.isElectron
+    const path = `/mirror`
+    const channelParam = `channel=${myChannel}`
+
+    if (isElectron) {
+      try {
+        const info = lanInfo || (await api.getLanInfo())
+        const ips = info.ips
+        const lanIP = ips.length > 0 ? ips[0].address : 'localhost'
+        const url = `http://${lanIP}:${info.httpPort}${path}?${channelParam}&socketPort=${info.socketPort}`
+        return url
+      } catch {
+        const hostname = window.location.hostname || 'localhost'
+        const params = new URLSearchParams(window.location.search)
+        const socketPort = params.get('socketPort') || '3003'
+        return `http://${hostname}:81${path}?${channelParam}&socketPort=${socketPort}`
+      }
+    } else {
+      // Browser mode — use window.location.origin (or detect LAN IP via WebRTC
+      // if on localhost, mirrors the admin-dashboard.tsx copyLink pattern).
+      const socketPort = new URLSearchParams(window.location.search).get('socketPort') || '3003'
+      let origin = window.location.origin
+      const hostname = window.location.hostname
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        try {
+          const pc = new RTCPeerConnection({ iceServers: [] })
+          pc.createDataChannel('')
+          const offer = await pc.createOffer()
+          await pc.setLocalDescription(offer)
+          const lanIP = await new Promise<string | null>((resolve) => {
+            const timeout = setTimeout(() => { pc.close(); resolve(null) }, 3000)
+            pc.onicecandidate = (e) => {
+              if (!e.candidate) return
+              const parts = e.candidate.candidate.split(' ')
+              const ip = parts[4]
+              if (ip && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip) && !ip.startsWith('0.') && ip !== '0.0.0.0') {
+                clearTimeout(timeout)
+                pc.close()
+                resolve(ip)
+              }
+            }
+          })
+          if (lanIP) {
+            const port = window.location.port || '81'
+            origin = `http://${lanIP}:${port}`
+          }
+        } catch {
+          // WebRTC not available — keep localhost URL
+        }
+      }
+      return `${origin}${path}?${channelParam}&socketPort=${socketPort}`
+    }
+  }, [lanInfo, myChannel])
+
+  // Rebuild the URL whenever Live Mirror is toggled ON, channel changes, or
+  // LAN info arrives (Electron IPC is async — lanInfo may load after the
+  // initial toggle). Note: we don't clear mirrorUrl when liveMirror goes
+  // false — the JSX condition `liveMirror && mirrorUrl` hides the input.
+  useEffect(() => {
+    if (!liveMirror) return
+    let cancelled = false
+    buildMirrorUrl().then((url) => {
+      if (!cancelled) setMirrorUrl(url)
+    })
+    return () => { cancelled = true }
+  }, [liveMirror, buildMirrorUrl])
+
+  // Copy the mirror URL to clipboard with toast + visual "Copied ✓" feedback.
+  const copyMirrorLink = useCallback(async () => {
+    if (!mirrorUrl) return
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(mirrorUrl)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = mirrorUrl
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setMirrorCopied(true)
+      setTimeout(() => setMirrorCopied(false), 2000)
+      toast({
+        title: 'Link Live Mirror disalin!',
+        description: `Salurkan ke perangkat peserta — ${mirrorUrl}`,
+      })
+    } catch {
+      toast({
+        title: 'Gagal menyalin',
+        description: 'Tidak dapat menyalin link. Salin manual dari kolom URL.',
+        variant: 'destructive',
+      })
+    }
+  }, [mirrorUrl, toast])
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
@@ -1793,6 +1914,57 @@ Klik layar untuk fullscreen. Tombol: F = fullscreen, M = flip mirror.`}
             </>
           )}
         </button>
+
+        {/* Live Mirror URL — copy-paste-ready link with the laptop's LAN IP,
+            shown ONLY when Live Mirror is ON. Click 'Copy' to copy to
+            clipboard; the field is read-only so the operator can also
+            manually select + Ctrl+C if needed. */}
+        {liveMirror && (
+          <div
+            className={`flex items-stretch gap-1 min-w-0 ${compact ? 'mt-1' : 'mt-1.5'}`}
+          >
+            <input
+              type="text"
+              readOnly
+              value={mirrorUrl}
+              placeholder="Memuat URL…"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+              className={`flex-1 min-w-0 px-2 rounded-md font-mono bg-[#1a0b2e] text-white border outline-none cursor-text
+                ${compact ? 'text-[8px] py-0.5' : 'text-[9px] py-1'}
+                ${mirrorCopied ? 'border-[#4ade80]/70' : 'border-[#533485]'}`}
+              style={{
+                boxShadow: mirrorCopied ? '0 0 6px rgba(74, 222, 128, 0.35)' : 'none',
+              }}
+              title="URL Live Mirror — klik untuk select all, lalu Ctrl+C"
+            />
+            <button
+              type="button"
+              onClick={copyMirrorLink}
+              disabled={!mirrorUrl}
+              className={`flex items-center justify-center gap-1 rounded-md font-semibold transition-all duration-200 shrink-0 cursor-pointer
+                ${compact ? 'px-1.5 py-0.5 text-[8px]' : 'px-2 py-1 text-[9px]'}
+                ${mirrorCopied ? 'hover:scale-[1.02]' : 'hover:bg-white/5'}`}
+              style={{
+                backgroundColor: mirrorCopied ? `${THEME.emerald}22` : THEME.panel,
+                color: mirrorCopied ? THEME.emerald : THEME.cyan,
+                border: `1px solid ${mirrorCopied ? THEME.emerald : THEME.cyan + '55'}`,
+              }}
+              title="Salin URL ke clipboard"
+            >
+              {mirrorCopied ? (
+                <>
+                  <Check className={compact ? 'size-2.5' : 'size-3'} />
+                  <span>Disalin</span>
+                </>
+              ) : (
+                <>
+                  <Copy className={compact ? 'size-2.5' : 'size-3'} />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
     )
   }
