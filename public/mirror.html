@@ -34,6 +34,24 @@
     #mirror-img.no-flip { transform: none; }
     #mirror-img.loading { opacity: 0.4; }
 
+    /* Frame overlay — sits ON TOP of the camera img. The frame is the
+       project's design element (text + logo for the final photo). It's
+       NOT flipped (even when the camera is flipped) so the text remains
+       readable. The frame is sent ONCE via MIRROR_CONFIG (not per-frame)
+       → no per-frame CPU cost. Hidden by default until MIRROR_CONFIG
+       arrives with frameData. */
+    #frame-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease-out;
+      z-index: 3;
+    }
+    #frame-overlay.show { opacity: 1; }
+
     /* Big countdown overlay (gold, pulsing) — fades in/out per second. */
     #countdown {
       position: absolute;
@@ -113,6 +131,7 @@
 </head>
 <body>
   <img id="mirror-img" alt="Live Camera Mirror" class="loading" />
+  <img id="frame-overlay" alt="" />
   <div id="countdown"></div>
   <div id="flash"></div>
   <div id="status">Connecting…</div>
@@ -132,6 +151,7 @@
       var SOCKET_PORT = parseInt(params.get('socketPort') || '3003', 10) || 3003;
 
       var img = document.getElementById('mirror-img');
+      var frameOverlay = document.getElementById('frame-overlay');
       var countdown = document.getElementById('countdown');
       var flash = document.getElementById('flash');
       var status = document.getElementById('status');
@@ -274,6 +294,35 @@
                 console.log('[MIRROR] first frame type=' + frameType + ' ctor=' + ctor + ' size=' + sz + 'B');
               }
             }
+          }
+          return;
+        }
+
+        // MIRROR_CONFIG — sent ONCE when the operator's cssFilter or
+        // frameData changes (or in response to our MIRROR_REQUEST on
+        // connect). Applies the project's CSS filter (e.g. grayscale
+        // for B&W) + frame overlay to the mirror view via CSS
+        // (GPU-accelerated, no per-frame CPU cost). The MIRROR_FRAME
+        // wire payload stays minimal — just the raw JPEG.
+        if (payload.event === 'MIRROR_CONFIG') {
+          // Apply the CSS filter (e.g. 'grayscale(1)', 'sepia(0.5)') to
+          // the camera img. The browser's GPU applies it for every
+          // rendered frame at NO CPU cost. 'none' = no filter.
+          if (typeof data.cssFilter === 'string' && data.cssFilter !== 'none') {
+            img.style.filter = data.cssFilter;
+            console.log('[MIRROR] applied cssFilter:', data.cssFilter);
+          } else {
+            img.style.filter = '';
+          }
+          // Apply the frame overlay (base64 data URL of the project's
+          // frame image). Set src + show; or hide if no frame.
+          if (typeof data.frameData === 'string' && data.frameData.length > 0) {
+            frameOverlay.src = data.frameData;
+            frameOverlay.classList.add('show');
+            console.log('[MIRROR] applied frame overlay, size=', Math.round(data.frameData.length / 1024) + 'KB');
+          } else {
+            frameOverlay.classList.remove('show');
+            frameOverlay.removeAttribute('src');
           }
           return;
         }

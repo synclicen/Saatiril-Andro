@@ -571,6 +571,50 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     }
   }, [myChannel, toast])
 
+  // ── Mirror config broadcast (filter + frame overlay) ────────────────────
+  // Sends the project's CSS filter (e.g. grayscale for B&W) + frame overlay
+  // data URL to the /mirror page so it can apply them via CSS (GPU-accelerated,
+  // no per-frame CPU cost). This is the KEY to applying effects WITHOUT
+  // lagging: the filter is applied once on the <img> element via
+  // img.style.filter, then the browser's GPU handles it for every rendered
+  // frame. The MIRROR_FRAME wire payload stays minimal (just the raw JPEG).
+  //
+  // Sent when:
+  // - liveMirror toggles ON (initial config send)
+  // - cssFilter changes (e.g. operator switches project preset)
+  // - frameData changes (e.g. operator loads a different frame)
+  // - myChannel changes (rare, but covers the case)
+  // - mirror client sends MIRROR_REQUEST (on its connect — gets the
+  //   current config immediately)
+  const sendMirrorConfig = useCallback(() => {
+    if (!liveMirrorRef.current) return
+    emitLocal('MIRROR_CONFIG', {
+      cssFilter: cssFilter,
+      frameData: frameData || null,
+      channel: liveMirrorChannelRef.current,
+    })
+  }, [cssFilter, frameData])
+
+  // Watch config changes + emit MIRROR_CONFIG when they change (and
+  // liveMirror is ON).
+  useEffect(() => {
+    if (!liveMirror) return
+    sendMirrorConfig()
+  }, [liveMirror, sendMirrorConfig])
+
+  // Listen for MIRROR_REQUEST from mirror clients (sent on their connect)
+  // → respond with the current MIRROR_CONFIG so they get the filter + frame
+  // immediately, not just on the next config change.
+  useEffect(() => {
+    const handleMirrorRequest = (data: { channel?: number }) => {
+      // Only respond to requests for OUR channel (the operator's channel).
+      if (data.channel && data.channel !== liveMirrorChannelRef.current) return
+      sendMirrorConfig()
+    }
+    onLocal('MIRROR_REQUEST', handleMirrorRequest)
+    return () => { offLocal('MIRROR_REQUEST', handleMirrorRequest) }
+  }, [sendMirrorConfig])
+
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
