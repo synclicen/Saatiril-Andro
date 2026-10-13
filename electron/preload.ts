@@ -33,6 +33,22 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('get-lan-info')
   },
 
+  // ── Live Mirror projector window ──────────────────────────────────────────
+  // Opens a separate BrowserWindow on the external display (HDMI) showing
+  // ONLY the /mirror page. Returns success=false if no external display is
+  // detected (user needs to connect projector + Windows+P → Extend).
+  openMirrorOnProjector: (channel: number): Promise<{
+    success: boolean
+    reason: string
+    displays: number
+  }> => {
+    return ipcRenderer.invoke('open-mirror-on-projector', channel)
+  },
+
+  closeMirrorProjector: (): Promise<{ success: boolean; reason?: string }> => {
+    return ipcRenderer.invoke('close-mirror-projector')
+  },
+
   // ── License API ──────────────────────────────────────────────────────────
   getLicenseStatus: (): Promise<{
     isValid: boolean

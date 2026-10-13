@@ -18,7 +18,7 @@
  * - getMachineId: Get the Machine ID for this computer
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker, screen } from 'electron'
 import * as path from 'path'
 import * as https from 'https'
 import * as fs from 'fs'
@@ -1083,6 +1083,121 @@ function registerIpcHandlers() {
     }
   })
 
+  // ── Live Mirror projector window ──────────────────────────────────────
+  // Opens a SEPARATE BrowserWindow on the external display (HDMI) showing
+  // ONLY the /mirror page (live camera + countdown + flash). The operator's
+  // full Operator panel stays on the main laptop display. Uses localhost
+  // socket.io (no network latency) → smooth, no WiFi streaming jank.
+  //
+  // User setup:
+  //   1. Connect projector via HDMI cable to laptop.
+  //   2. Windows + P → "Extend" (NOT Duplicate — Duplicate would show the
+  //      full Operator panel on the projector, including all UI clutter).
+  //   3. In Operator panel, click "Buka di Projector" button.
+  //
+  // Returns: { success, reason?, displays? } so the React side can show a
+  // helpful toast if no external display is detected.
+  ipcMain.handle('open-mirror-on-projector', async (_event, channel: number) => {
+    try {
+      // Find an external display (one that's NOT the primary).
+      const displays = screen.getAllDisplays()
+      const primaryDisplay = screen.getPrimaryDisplay()
+      const externalDisplay = displays.find((d) => d.id !== primaryDisplay.id)
+
+      if (!externalDisplay) {
+        return {
+          success: false,
+          reason: 'NO_EXTERNAL_DISPLAY',
+          displays: displays.length,
+        }
+      }
+
+      // If the window already exists, just focus it (user clicked the button
+      // twice — don't open a duplicate window).
+      if (mirrorWindow && !mirrorWindow.isDestroyed()) {
+        mirrorWindow.focus()
+        return { success: true, reason: 'ALREADY_OPEN', displays: displays.length }
+      }
+
+      // Build the /mirror URL via localhost (super fast — no network latency).
+      // Same httpPort + socketPort as the main window uses.
+      const mirrorUrl = `http://localhost:${httpPort}/mirror?channel=${channel}&socketPort=${socketPort}`
+
+      // Compute window bounds on the external display. Add a small margin so
+      // the window doesn't bleed onto the primary display edge.
+      const { x, y, width, height } = externalDisplay.bounds
+      const winX = x + 8
+      const winY = y + 8
+      const winW = Math.max(640, width - 16)
+      const winH = Math.max(480, height - 16)
+
+      mirrorWindow = new BrowserWindow({
+        x: winX,
+        y: winY,
+        width: winW,
+        height: winH,
+        fullscreen: true,        // Cover the entire external display.
+        frame: false,           // No title bar — clean projector view.
+        transparent: false,
+        alwaysOnTop: true,      // Stay above other windows on the projector.
+        skipTaskbar: true,      // Don't show in taskbar (it's a display window).
+        backgroundColor: '#000000',
+        title: `SAATIRIL Mirror — Ch.${channel}`,
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+          webSecurity: false,    // Allow camera access on HTTP localhost.
+        },
+      })
+
+      // When the mirror window closes, clear the reference so a new one can
+      // be opened later.
+      mirrorWindow.on('closed', () => {
+        mirrorWindow = null
+      })
+
+      console.log(`[SAATIRIL] Opening Live Mirror on external display (Ch.${channel}): ${mirrorUrl}`)
+      mirrorWindow.loadURL(mirrorUrl)
+
+      // F11-style fullscreen as backup (some Electron versions need both).
+      mirrorWindow.once('ready-to-show', () => {
+        if (mirrorWindow && !mirrorWindow.isDestroyed()) {
+          try {
+            mirrorWindow.setFullScreen(true)
+          } catch (e) {
+            // ignore — fullscreen:true in constructor usually suffices.
+          }
+        }
+      })
+
+      return {
+        success: true,
+        reason: 'OPENED',
+        displays: displays.length,
+      }
+    } catch (err: any) {
+      console.error('[SAATIRIL] open-mirror-on-projector failed:', err)
+      return { success: false, reason: 'ERROR: ' + (err?.message || 'unknown'), displays: 0 }
+    }
+  })
+
+  // Close the Live Mirror projector window (called by the React side when
+  // the user toggles Live Mirror OFF, or when changing channels to re-open
+  // on the new channel).
+  ipcMain.handle('close-mirror-projector', async () => {
+    try {
+      if (mirrorWindow && !mirrorWindow.isDestroyed()) {
+        mirrorWindow.close()
+      }
+      mirrorWindow = null
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, reason: 'ERROR: ' + (err?.message || 'unknown') }
+    }
+  })
+
   // ── License IPC handlers ──────────────────────────────────────────────
 
   // Get current license status
@@ -1231,6 +1346,12 @@ const splashHTML = `
 
 // ─── Create Electron Window ────────────────────────────────────────────────
 let mainWindow: BrowserWindow | null = null
+// Separate BrowserWindow for the Live Mirror projector view. Opened on the
+// external display (HDMI) so participants see ONLY the live camera + countdown
+// — the operator's full Operator panel stays on the main laptop display.
+// Uses localhost socket.io (no network latency) → smooth at 10 FPS, no WiFi
+// streaming jank. Closed automatically when the main window closes.
+let mirrorWindow: BrowserWindow | null = null
 const MAX_LOAD_RETRIES = 5
 const LOAD_RETRY_DELAY = 1500 // ms
 let currentRetryCount = 0
@@ -1376,6 +1497,13 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // Also close the Live Mirror projector window (if open) — it doesn't
+    // make sense to keep the projector view alive without the operator's
+    // main window.
+    if (mirrorWindow && !mirrorWindow.isDestroyed()) {
+      try { mirrorWindow.close() } catch (e) {}
+    }
+    mirrorWindow = null
   })
 }
 

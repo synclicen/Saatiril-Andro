@@ -46,6 +46,7 @@ import {
   Cast,
   Copy,
   Check,
+  Monitor,
 } from 'lucide-react'
 import {
   useSaatirilStore,
@@ -502,6 +503,74 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       })
     }
   }, [mirrorUrl, toast])
+
+  // ── Open Live Mirror on the external display (projector via HDMI) ──────
+  // Calls the Electron IPC handler that creates a separate BrowserWindow on
+  // the external display + loads the /mirror URL via localhost (no network
+  // latency → smooth, no WiFi streaming jank).
+  //
+  // User setup:
+  //   1. Connect projector via HDMI cable to the laptop.
+  //   2. Windows + P → "Extend" (NOT Duplicate — Duplicate shows the full
+  //      Operator panel on the projector).
+  //   3. Click this button → Electron opens the mirror window on the
+  //      projector, fullscreen, frameless.
+  //
+  // In browser mode (non-Electron), the button is hidden — there's no
+  // Electron IPC to open a BrowserWindow. The user would use the URL
+  // input + Copy button + manually open in a browser on the projector
+  // laptop.
+  const isElectronRuntime = typeof window !== 'undefined' && (window as any).saatirilAPI?.isElectron === true
+  const [projectorOpening, setProjectorOpening] = useState(false)
+  const handleOpenOnProjector = useCallback(async () => {
+    const api = (window as any).saatirilAPI
+    if (!api?.isElectron || !api.openMirrorOnProjector) {
+      toast({
+        title: 'Tidak tersedia',
+        description: 'Buka di Projector hanya tersedia di aplikasi Electron (portable.exe). Untuk browser, gunakan tombol Copy + buka URL di browser lain di laptop/projector.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setProjectorOpening(true)
+    try {
+      const result = await api.openMirrorOnProjector(myChannel)
+      if (result.success) {
+        if (result.reason === 'ALREADY_OPEN') {
+          toast({
+            title: 'Mirror sudah terbuka di projector',
+            description: `Ch.${myChannel} — window sudah ada di external display. Difokuskan.`,
+          })
+        } else {
+          toast({
+            title: '✓ Live Mirror dibuka di projector',
+            description: `Ch.${myChannel} — tampilan kamera live + countdown sudah di external display (HDMI). Operator panel tetap di laptop ini.`,
+          })
+        }
+      } else if (result.reason === 'NO_EXTERNAL_DISPLAY') {
+        toast({
+          title: '⚠ Tidak ada layar eksternal',
+          description: 'Hubungkan projector via HDMI + set Windows ke mode Extend (Win+P → Extend), lalu klik tombol ini lagi.',
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: 'Gagal membuka di projector',
+          description: result.reason,
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Error',
+        description: err?.message || 'unknown',
+        variant: 'destructive',
+      })
+    } finally {
+      setProjectorOpening(false)
+    }
+  }, [myChannel, toast])
+
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
@@ -1990,6 +2059,7 @@ Klik layar untuk fullscreen. Tombol: F = fullscreen, M = flip mirror.`}
             clipboard; the field is read-only so the operator can also
             manually select + Ctrl+C if needed. */}
         {liveMirror && (
+          <>
           <div
             className={`flex items-stretch gap-1 min-w-0 ${compact ? 'mt-1' : 'mt-1.5'}`}
           >
@@ -2034,6 +2104,41 @@ Klik layar untuk fullscreen. Tombol: F = fullscreen, M = flip mirror.`}
               )}
             </button>
           </div>
+
+          {/* Buka di Projector button — only in Electron runtime. Opens a
+              separate BrowserWindow on the external display (HDMI) via
+              Electron IPC. Uses localhost socket.io (no network latency). */}
+          {isElectronRuntime && (
+            <button
+              type="button"
+              onClick={handleOpenOnProjector}
+              disabled={projectorOpening}
+              className={`flex items-center justify-center gap-1.5 rounded-md font-bold transition-all duration-200 w-full cursor-pointer
+                ${compact ? 'mt-1 px-2 py-1 text-[9px]' : 'mt-1.5 px-3 py-1.5 text-[11px]'}
+                ${projectorOpening ? 'opacity-60 cursor-wait' : 'hover:scale-[1.01]'}`}
+              style={{
+                backgroundColor: `${THEME.cyan}22`,
+                color: THEME.cyan,
+                border: `1px solid ${THEME.cyan}55`,
+                boxShadow: `0 0 8px ${THEME.cyan}22`,
+              }}
+              title={`Buka window Live Mirror di external display (projector via HDMI).
+
+PRASYARAT:
+1. Hubungkan projector via HDMI ke laptop ini.
+2. Windows + P → pilih "Extend" (BUKAN Duplicate).
+3. Klik tombol ini → Electron otomatis buka window di projector,
+   fullscreen + frameless. Window menampilkan live camera +
+   countdown saja (tidak ada UI Operator).
+
+Kalau tombol tidak aktif atau muncul error "Tidak ada layar
+eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
+            >
+              <Monitor className={compact ? 'size-3' : 'size-4'} />
+              <span>Buka di Projector (HDMI)</span>
+            </button>
+          )}
+          </>
         )}
       </div>
     )
