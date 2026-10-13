@@ -588,6 +588,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   //   current config immediately)
   const sendMirrorConfig = useCallback(() => {
     if (!liveMirrorRef.current) return
+    console.log('[SAATIRIL OP] sending MIRROR_CONFIG: cssFilter=', cssFilter, 'hasFrame=', !!frameData, 'ch=', liveMirrorChannelRef.current)
     emitLocal('MIRROR_CONFIG', {
       cssFilter: cssFilter,
       frameData: frameData || null,
@@ -607,6 +608,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // immediately, not just on the next config change.
   useEffect(() => {
     const handleMirrorRequest = (data: { channel?: number }) => {
+      console.log('[SAATIRIL OP] received MIRROR_REQUEST:', data, 'my channel=', liveMirrorChannelRef.current)
       // Only respond to requests for OUR channel (the operator's channel).
       if (data.channel && data.channel !== liveMirrorChannelRef.current) return
       sendMirrorConfig()
@@ -614,6 +616,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     onLocal('MIRROR_REQUEST', handleMirrorRequest)
     return () => { offLocal('MIRROR_REQUEST', handleMirrorRequest) }
   }, [sendMirrorConfig])
+
+  // Periodic re-emit MIRROR_CONFIG every 10 seconds as a fallback — ensures
+  // mirror clients always get the config within 10s of connecting, even if
+  // they missed the initial MIRROR_REQUEST → MIRROR_CONFIG handshake (e.g.
+  // socket reconnect, component mount timing). The cssFilter + frameData
+  // are small enough (frameData is a base64 string, ~50-200KB) that sending
+  // them every 10s is fine.
+  useEffect(() => {
+    if (!liveMirror) return
+    const interval = setInterval(() => {
+      sendMirrorConfig()
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [liveMirror, sendMirrorConfig])
 
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
