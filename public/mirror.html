@@ -224,13 +224,34 @@
 
         if (payload.event === 'MIRROR_FRAME') {
           if (data.frame) {
-            img.src = data.frame;
-            img.classList.remove('loading');
-            frameCount++;
-            lastFrameAt = Date.now();
-            // After first frame, hide the status badge entirely (no need to
-            // see "connected" once we're actively rendering).
-            if (frameCount === 1) status.classList.add('hidden');
+            // Operator now sends a binary Blob (jpeg-encoded off the main
+            // thread via canvas.toBlob) — no base64, ~33% smaller wire
+            // payload + no base64 decode cost on this side. URL.createObjectURL
+            // is fast (no JPEG decode yet — that happens when the <img>
+            // renders). Revoke the previous blob URL to prevent the GC
+            // pressure of accumulated object URLs at 10 FPS.
+            var newSrc;
+            if (data.frame instanceof Blob) {
+              newSrc = URL.createObjectURL(data.frame);
+            } else if (typeof data.frame === 'string') {
+              // Backward compat: operator sent a data URL string.
+              newSrc = data.frame;
+            }
+            if (newSrc) {
+              // Revoke the previous blob: URL (if any) BEFORE setting the
+              // new src — otherwise we'd leak one object URL per frame.
+              if (img._lastBlobUrl && img._lastBlobUrl.indexOf('blob:') === 0) {
+                try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
+              }
+              img.src = newSrc;
+              img._lastBlobUrl = (newSrc.indexOf('blob:') === 0) ? newSrc : null;
+              img.classList.remove('loading');
+              frameCount++;
+              lastFrameAt = Date.now();
+              // After first frame, hide the status badge entirely (no need to
+              // see "connected" once we're actively rendering).
+              if (frameCount === 1) status.classList.add('hidden');
+            }
           }
           return;
         }
@@ -262,12 +283,26 @@
             break;
 
           case 'MIRROR_CLEAR':
+            // Revoke any pending blob URL before clearing src.
+            if (img._lastBlobUrl) {
+              try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
+              img._lastBlobUrl = null;
+            }
             img.classList.add('loading');
             img.removeAttribute('src');
             countdown.classList.remove('show');
             setTimeout(function() { countdown.textContent = ''; }, 300);
             break;
         }
+      });
+
+      // ── Cleanup blob URL on page unload (prevent memory leak) ─────────────
+      window.addEventListener('beforeunload', function() {
+        if (img._lastBlobUrl) {
+          try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
+          img._lastBlobUrl = null;
+        }
+        if (socket) socket.disconnect();
       });
 
       // ── Fullscreen toggle (click anywhere) ──────────────────────────────────

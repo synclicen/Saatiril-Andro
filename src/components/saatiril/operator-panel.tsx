@@ -1063,9 +1063,14 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       return
     }
 
-    const MIRROR_FPS = 10 // 100ms per frame — smooth enough for "mirror" feel, low CPU
-    const MIRROR_WIDTH = 640 // 640x~360 JPEG ~30-50KB → ~300-500KB/s per client
-    const MIRROR_QUALITY = 0.5
+    // ── Performance tuning ────────────────────────────────────────────────
+    // 10 FPS target, but the `processing` flag below drops frames if the
+    // previous toBlob() is still encoding — prevents pile-up + jank.
+    // Width 480 + quality 0.4 → JPEG ~15-25KB binary blob (no base64 overhead).
+    // At 10 FPS that's ~150-250 KB/s per mirror client (LAN-friendly).
+    const MIRROR_FPS = 10
+    const MIRROR_WIDTH = 480
+    const MIRROR_QUALITY = 0.4
 
     // Reusable canvas (off-screen) — avoids GC churn at 10 FPS.
     const mirrorCanvas = document.createElement('canvas')
@@ -1074,12 +1079,17 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
     let emittedCount = 0
     let skippedCount = 0
+    let processing = false  // true while a toBlob() is encoding — drop new ticks
+    let lastCanvasKey = ''
     mirrorIntervalRef.current = setInterval(() => {
+      // If the previous toBlob() is still in flight, skip this tick — we'd
+      // just queue up another encode + pile memory pressure. The next tick
+      // will pick up a fresh frame.
+      if (processing) return
+
       const video = videoRef.current
       if (!video || video.readyState < 2 || video.videoWidth <= 0) {
         skippedCount++
-        // Log every 30 skips so the operator can see WHY frames aren't
-        // emitting (camera not ready, video null, etc.).
         if (skippedCount === 30) {
           console.warn('[SAATIRIL OP] mirror: 30 frames skipped (video null/ not ready).', {
             videoExists: !!video,
@@ -1091,29 +1101,50 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         return
       }
       // Adapt canvas height to the video aspect ratio (avoid stretching).
+      // Only resize when the aspect actually changes (setCanvas width/height
+      // clears the canvas — cheap but not free).
       const aspect = video.videoHeight / video.videoWidth
-      mirrorCanvas.width = MIRROR_WIDTH
-      mirrorCanvas.height = Math.max(1, Math.round(MIRROR_WIDTH * aspect))
+      const newW = MIRROR_WIDTH
+      const newH = Math.max(1, Math.round(MIRROR_WIDTH * aspect))
+      const newKey = newW + 'x' + newH
+      if (newKey !== lastCanvasKey) {
+        mirrorCanvas.width = newW
+        mirrorCanvas.height = newH
+        lastCanvasKey = newKey
+      }
       try {
         mirrorCtx.drawImage(video, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
-        const frame = mirrorCanvas.toDataURL('image/jpeg', MIRROR_QUALITY)
-        emitLocal('MIRROR_FRAME', { frame, channel: liveMirrorChannelRef.current })
+      } catch (err) {
+        // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
+        // stream, but guard anyway so the interval doesn't crash silently).
+        console.warn('[SAATIRIL OP] mirror frame draw failed:', err)
+        return
+      }
+      // toBlob is ASYNC + non-blocking (unlike toDataURL which is sync).
+      // The JPEG encoder runs off the main thread → no UI jank. We send
+      // the Blob directly through socket.io (binary) — no base64 → 33%
+      // smaller wire payload + no base64 decode cost on the mirror side.
+      processing = true
+      mirrorCanvas.toBlob((blob) => {
+        processing = false
+        // If toggle went OFF mid-encode, or the blob is null (encode failed),
+        // skip emitting — the next interval tick is already cleaned up by
+        // the useEffect's return cleanup.
+        if (!blob) return
+        if (!liveMirrorRef.current) return
+        emitLocal('MIRROR_FRAME', { frame: blob, channel: liveMirrorChannelRef.current })
         emittedCount++
         // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
         // the stream is alive + see the wire payload size + socket state.
         if (emittedCount === 30) {
           const sk = getSocket()
           console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
-            'frame size=', Math.round(frame.length / 1024) + 'KB',
+            'blob size=', Math.round(blob.size / 1024) + 'KB',
             'socket.connected=', sk?.connected ?? false,
             'socket.id=', sk?.id ?? 'null')
           emittedCount = 0
         }
-      } catch (err) {
-        // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
-        // stream, but guard anyway so the interval doesn't crash silently).
-        console.warn('[SAATIRIL OP] mirror frame draw failed:', err)
-      }
+      }, 'image/jpeg', MIRROR_QUALITY)
     }, 1000 / MIRROR_FPS)
 
     return () => {
