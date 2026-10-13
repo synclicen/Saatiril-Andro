@@ -1135,11 +1135,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // ── Performance tuning ────────────────────────────────────────────────
     // 10 FPS target, but the `processing` flag below drops frames if the
     // previous toBlob() is still encoding — prevents pile-up + jank.
-    // Width 480 + quality 0.4 → JPEG ~15-25KB binary blob (no base64 overhead).
-    // At 10 FPS that's ~150-250 KB/s per mirror client (LAN-friendly).
+    // Width 320 + quality 0.3 → JPEG ~5-10KB → ~50-100KB/s per client at
+    // 10 FPS. Very lightweight for smooth localhost streaming to projector.
+    //
+    // IMPORTANT (user request "apa adanya"): mirror view shows ONLY the
+    // raw camera frame — NO cssFilter, NO frame overlay, NO gridlines.
+    // The previous attempt (commit 8896b9d) added filter + frame to match
+    // the operator's view, but the user reported it caused lagging on the
+    // projector. Per-frame filter application + extra drawImage for the
+    // frame overlay added CPU overhead. Reverted to raw camera only.
+    // The aspect ratio CROP is kept (it's just drawImage with computed
+    // sx/sy/sw/sh — no extra cost, but necessary to avoid distortion).
     const MIRROR_FPS = 10
-    const MIRROR_WIDTH = 480
-    const MIRROR_QUALITY = 0.4
+    const MIRROR_WIDTH = 320
+    const MIRROR_QUALITY = 0.3
 
     // Reusable canvas (off-screen) — avoids GC churn at 10 FPS.
     const mirrorCanvas = document.createElement('canvas')
@@ -1169,10 +1178,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         }
         return
       }
-      // Use the SAME aspect ratio as the operator's capture canvas so the
-      // mirror view matches what the operator + final photo will look like.
-      // (Previously used video native aspect — caused visual mismatch when
-      // operator had a portrait 4:3 or 3:4 config but webcam was 16:9.)
+      // Use the configured aspectRatio so the mirror view matches the
+      // operator's capture aspect (no distortion). The canvas dimensions
+      // only update when the aspect changes (avoids clearing every tick).
       const newW = MIRROR_WIDTH
       const newH = Math.max(1, Math.round(MIRROR_WIDTH / aspectRatio))
       const newKey = newW + 'x' + newH
@@ -1182,39 +1190,26 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         lastCanvasKey = newKey
       }
       // Compute crop region from the video to match the configured aspect
-      // ratio (center crop, same logic as handleCapture). Without this the
-      // video would be stretched to fit the canvas — visible distortion.
+      // ratio (center crop, same logic as handleCapture). This is just a
+      // drawImage with computed sx/sy/sw/sh — NO extra CPU cost vs a
+      // non-cropped drawImage. Necessary to avoid stretching/distortion.
       const videoWidth = video.videoWidth
       const videoHeight = video.videoHeight
       const videoRatio = videoWidth / videoHeight
       let sx = 0, sy = 0, sw = videoWidth, sh = videoHeight
       if (videoRatio > aspectRatio) {
-        // Video is wider than target — crop left/right.
         sw = videoHeight * aspectRatio
         sx = (videoWidth - sw) / 2
       } else {
-        // Video is taller than target — crop top/bottom.
         sh = videoWidth / aspectRatio
         sy = (videoHeight - sh) / 2
       }
       try {
-        // Apply the configured CSS filter (from project preset) so the
-        // mirror view matches the operator's preview + captured photo.
-        if (cssFilter !== 'none') mirrorCtx.filter = cssFilter
+        // RAW camera only — no ctx.filter, no frame overlay. This is the
+        // "apa adanya" path: just drawImage the video frame to the canvas.
+        // Filter + frame were removed because they added per-frame CPU
+        // overhead that caused lagging on the projector.
         mirrorCtx.drawImage(video, sx, sy, sw, sh, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
-        mirrorCtx.filter = 'none'
-        // Draw the frame overlay on top (matches what the captured photo
-        // will look like — frame is part of the final photo design, not an
-        // operator-only guide like gridlines). frameImgRef.current is set
-        // by the frameData useEffect when the frame image finishes loading.
-        if (frameImgRef.current) {
-          try {
-            mirrorCtx.drawImage(frameImgRef.current, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
-          } catch (frameErr) {
-            // Frame image may not be fully decoded yet — skip silently,
-            // it'll be drawn on the next tick once loaded.
-          }
-        }
       } catch (err) {
         // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
         // stream, but guard anyway so the interval doesn't crash silently).
@@ -1276,7 +1271,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         mirrorIntervalRef.current = null
       }
     }
-  }, [liveMirror, cameraAvailable, aspectRatio, cssFilter, frameData])
+  }, [liveMirror, cameraAvailable, aspectRatio])
 
   // ── Finalize capture ────────────────────────────────────────────────────
   // OPTIMIZED: Removed 400ms of unnecessary delays, added STUDENT_DONE lightweight
