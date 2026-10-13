@@ -1169,20 +1169,52 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         }
         return
       }
-      // Adapt canvas height to the video aspect ratio (avoid stretching).
-      // Only resize when the aspect actually changes (setCanvas width/height
-      // clears the canvas — cheap but not free).
-      const aspect = video.videoHeight / video.videoWidth
+      // Use the SAME aspect ratio as the operator's capture canvas so the
+      // mirror view matches what the operator + final photo will look like.
+      // (Previously used video native aspect — caused visual mismatch when
+      // operator had a portrait 4:3 or 3:4 config but webcam was 16:9.)
       const newW = MIRROR_WIDTH
-      const newH = Math.max(1, Math.round(MIRROR_WIDTH * aspect))
+      const newH = Math.max(1, Math.round(MIRROR_WIDTH / aspectRatio))
       const newKey = newW + 'x' + newH
       if (newKey !== lastCanvasKey) {
         mirrorCanvas.width = newW
         mirrorCanvas.height = newH
         lastCanvasKey = newKey
       }
+      // Compute crop region from the video to match the configured aspect
+      // ratio (center crop, same logic as handleCapture). Without this the
+      // video would be stretched to fit the canvas — visible distortion.
+      const videoWidth = video.videoWidth
+      const videoHeight = video.videoHeight
+      const videoRatio = videoWidth / videoHeight
+      let sx = 0, sy = 0, sw = videoWidth, sh = videoHeight
+      if (videoRatio > aspectRatio) {
+        // Video is wider than target — crop left/right.
+        sw = videoHeight * aspectRatio
+        sx = (videoWidth - sw) / 2
+      } else {
+        // Video is taller than target — crop top/bottom.
+        sh = videoWidth / aspectRatio
+        sy = (videoHeight - sh) / 2
+      }
       try {
-        mirrorCtx.drawImage(video, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
+        // Apply the configured CSS filter (from project preset) so the
+        // mirror view matches the operator's preview + captured photo.
+        if (cssFilter !== 'none') mirrorCtx.filter = cssFilter
+        mirrorCtx.drawImage(video, sx, sy, sw, sh, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
+        mirrorCtx.filter = 'none'
+        // Draw the frame overlay on top (matches what the captured photo
+        // will look like — frame is part of the final photo design, not an
+        // operator-only guide like gridlines). frameImgRef.current is set
+        // by the frameData useEffect when the frame image finishes loading.
+        if (frameImgRef.current) {
+          try {
+            mirrorCtx.drawImage(frameImgRef.current, 0, 0, mirrorCanvas.width, mirrorCanvas.height)
+          } catch (frameErr) {
+            // Frame image may not be fully decoded yet — skip silently,
+            // it'll be drawn on the next tick once loaded.
+          }
+        }
       } catch (err) {
         // Cross-origin tainted canvas (shouldn't happen with local getUserMedia
         // stream, but guard anyway so the interval doesn't crash silently).
@@ -1244,7 +1276,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         mirrorIntervalRef.current = null
       }
     }
-  }, [liveMirror, cameraAvailable])
+  }, [liveMirror, cameraAvailable, aspectRatio, cssFilter, frameData])
 
   // ── Finalize capture ────────────────────────────────────────────────────
   // OPTIMIZED: Removed 400ms of unnecessary delays, added STUDENT_DONE lightweight
