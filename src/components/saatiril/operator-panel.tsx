@@ -1121,29 +1121,51 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         return
       }
       // toBlob is ASYNC + non-blocking (unlike toDataURL which is sync).
-      // The JPEG encoder runs off the main thread → no UI jank. We send
-      // the Blob directly through socket.io (binary) — no base64 → 33%
-      // smaller wire payload + no base64 decode cost on the mirror side.
+      // The JPEG encoder runs off the main thread → no UI jank. Then we use
+      // FileReader.readAsDataURL to convert the Blob to a base64 string
+      // (also async + off-thread) before sending. The string path is the
+      // SAME wire format that worked at commit 1df4732 — socket.io v4
+      // binary Blob transfer had issues on the mirror side (black screen
+      // regression), so we stick with the proven base64 string approach
+      // but keep the perf wins from async encoding + lower res/quality.
       processing = true
       mirrorCanvas.toBlob((blob) => {
-        processing = false
-        // If toggle went OFF mid-encode, or the blob is null (encode failed),
-        // skip emitting — the next interval tick is already cleaned up by
-        // the useEffect's return cleanup.
-        if (!blob) return
-        if (!liveMirrorRef.current) return
-        emitLocal('MIRROR_FRAME', { frame: blob, channel: liveMirrorChannelRef.current })
-        emittedCount++
-        // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
-        // the stream is alive + see the wire payload size + socket state.
-        if (emittedCount === 30) {
-          const sk = getSocket()
-          console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
-            'blob size=', Math.round(blob.size / 1024) + 'KB',
-            'socket.connected=', sk?.connected ?? false,
-            'socket.id=', sk?.id ?? 'null')
-          emittedCount = 0
+        if (!blob) {
+          processing = false
+          return
         }
+        // If toggle went OFF mid-encode, skip emitting.
+        if (!liveMirrorRef.current) {
+          processing = false
+          return
+        }
+        // Convert blob → data URL string off-thread. This is the base64
+        // encoding step that toDataURL does synchronously — by doing it
+        // via FileReader we keep the main thread responsive.
+        const reader = new FileReader()
+        reader.onload = () => {
+          processing = false
+          const dataUrl = reader.result
+          if (typeof dataUrl !== 'string') return
+          if (!liveMirrorRef.current) return
+          emitLocal('MIRROR_FRAME', { frame: dataUrl, channel: liveMirrorChannelRef.current })
+          emittedCount++
+          // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
+          // the stream is alive + see the wire payload size + socket state.
+          if (emittedCount === 30) {
+            const sk = getSocket()
+            console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
+              'frame size=', Math.round(dataUrl.length / 1024) + 'KB',
+              'socket.connected=', sk?.connected ?? false,
+              'socket.id=', sk?.id ?? 'null')
+            emittedCount = 0
+          }
+        }
+        reader.onerror = () => {
+          processing = false
+          console.warn('[SAATIRIL OP] mirror FileReader failed')
+        }
+        reader.readAsDataURL(blob)
       }, 'image/jpeg', MIRROR_QUALITY)
     }, 1000 / MIRROR_FPS)
 

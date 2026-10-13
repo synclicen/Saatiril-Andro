@@ -224,22 +224,33 @@
 
         if (payload.event === 'MIRROR_FRAME') {
           if (data.frame) {
-            // Operator now sends a binary Blob (jpeg-encoded off the main
-            // thread via canvas.toBlob) — no base64, ~33% smaller wire
-            // payload + no base64 decode cost on this side. URL.createObjectURL
-            // is fast (no JPEG decode yet — that happens when the <img>
-            // renders). Revoke the previous blob URL to prevent the GC
-            // pressure of accumulated object URLs at 10 FPS.
+            // Operator sends a base64 data URL string (toBlob + FileReader
+            // async on operator side — no main-thread block there). We just
+            // set img.src directly — the browser handles the base64 decode
+            // + JPEG decode + render async. Tried sending binary Blob
+            // through socket.io v4 but it caused black-screen regression
+            // on the mirror side (the Blob wasn't reconstructed correctly
+            // in some setups) — reverted to the proven string path that
+            // worked at commit 1df4732.
+            //
+            // If frame is a Blob (somehow), convert to object URL + revoke
+            // the previous one to prevent memory leak. Otherwise treat as
+            // string (data URL).
             var newSrc;
-            if (data.frame instanceof Blob) {
-              newSrc = URL.createObjectURL(data.frame);
-            } else if (typeof data.frame === 'string') {
-              // Backward compat: operator sent a data URL string.
+            if (typeof data.frame === 'string') {
               newSrc = data.frame;
+            } else if (data.frame instanceof Blob) {
+              newSrc = URL.createObjectURL(data.frame);
+            } else if (data.frame && typeof data.frame.size === 'number' && data.frame.size > 0) {
+              // Buffer-like / unknown binary — try wrapping in a Blob.
+              try {
+                newSrc = URL.createObjectURL(new Blob([data.frame], { type: 'image/jpeg' }));
+              } catch (e) {
+                newSrc = null;
+              }
             }
             if (newSrc) {
-              // Revoke the previous blob: URL (if any) BEFORE setting the
-              // new src — otherwise we'd leak one object URL per frame.
+              // Revoke any previous blob: URL to prevent memory leak.
               if (img._lastBlobUrl && img._lastBlobUrl.indexOf('blob:') === 0) {
                 try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
               }
@@ -250,7 +261,18 @@
               lastFrameAt = Date.now();
               // After first frame, hide the status badge entirely (no need to
               // see "connected" once we're actively rendering).
-              if (frameCount === 1) status.classList.add('hidden');
+              if (frameCount === 1) {
+                status.classList.add('hidden');
+                // Diagnostic: log the type of the first frame so we can
+                // verify what's actually arriving. Helps debug future
+                // black-screen regressions.
+                var frameType = typeof data.frame;
+                var ctor = data.frame && data.frame.constructor ? data.frame.constructor.name : 'n/a';
+                var sz = (typeof data.frame === 'string')
+                  ? data.frame.length
+                  : (data.frame.size || data.frame.byteLength || 0);
+                console.log('[MIRROR] first frame type=' + frameType + ' ctor=' + ctor + ' size=' + sz + 'B');
+              }
             }
           }
           return;
