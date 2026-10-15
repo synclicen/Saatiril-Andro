@@ -571,6 +571,51 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     }
   }, [myChannel, toast])
 
+  // Palm trigger: when ON, showing an open palm to the camera triggers the
+  // selected shutter mode (manual → instant photo, timer → starts countdown).
+  // This is a hands-free trigger, NOT a shutter mode itself.
+  const [palmTriggerEnabled, setPalmTriggerEnabled] = useState(false)
+  const [timerCountdown, setTimerCountdown] = useState<number>(0)
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timerActiveRef = useRef(false)
+
+  // ── AI auto-capture ──────────────────────────────────────────────────────
+  const ai = useAIDetection()
+
+  // ── Palm detection (selfie-style shutter) ────────────────────────────────
+  const palm = usePalmDetection()
+
+  // ── Refs ─────────────────────────────────────────────────────────────────
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const flashRef = useRef<HTMLDivElement>(null)
+  const activeRowRef = useRef<HTMLDivElement>(null)
+  const nextRowRef = useRef<HTMLDivElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const selectedDeviceRef = useRef<string>('')
+  const frameImgRef = useRef<HTMLImageElement | null>(null)
+  const cameraZoneRef = useRef<HTMLDivElement>(null)
+
+  // ── Derived config ───────────────────────────────────────────────────────
+  const config = currentProject?.config
+  const aspectRatio = config?.ratio ? parseRatio(config.ratio) : 4 / 3
+  const cssFilter = config?.preset ? PRESET_FILTERS[config.preset] ?? 'none' : 'none'
+  const frameData = useMemo(() => {
+    if (!config?.frame) return null
+    if (config.frame !== '__FRAME_SAVED__') return config.frame
+    // Frame was stripped for sync — try to restore from separate localStorage key.
+    // This is a safety net: updateCurrentProject should have already restored it,
+    // but in case of a race condition or localStorage timing issue, we try here too.
+    try {
+      const projectId = currentProject?.id
+      if (projectId) {
+        const saved = localStorage.getItem(`saatiril_frame_${projectId}`)
+        if (saved) return saved
+      }
+    } catch {}
+    return null
+  }, [config?.frame, currentProject?.id])
+
   // ── Mirror config broadcast (filter + frame overlay) ────────────────────
   // Sends the project's CSS filter (e.g. grayscale for B&W) + frame overlay
   // data URL to the /mirror page so it can apply them via CSS (GPU-accelerated,
@@ -578,6 +623,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // lagging: the filter is applied once on the <img> element via
   // img.style.filter, then the browser's GPU handles it for every rendered
   // frame. The MIRROR_FRAME wire payload stays minimal (just the raw JPEG).
+  //
+  // IMPORTANT: This block MUST be after the `cssFilter` + `frameData`
+  // declarations above (lines 662-677). Otherwise the deps array
+  // `[cssFilter, frameData]` throws a TDZ error: "Cannot access 'e2' before
+  // initialization" (e2 = minified cssFilter/frameData variable name).
   //
   // Sent when:
   // - liveMirror toggles ON (initial config send)
@@ -630,51 +680,6 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     }, 10000)
     return () => clearInterval(interval)
   }, [liveMirror, sendMirrorConfig])
-
-  // Palm trigger: when ON, showing an open palm to the camera triggers the
-  // selected shutter mode (manual → instant photo, timer → starts countdown).
-  // This is a hands-free trigger, NOT a shutter mode itself.
-  const [palmTriggerEnabled, setPalmTriggerEnabled] = useState(false)
-  const [timerCountdown, setTimerCountdown] = useState<number>(0)
-  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const timerActiveRef = useRef(false)
-
-  // ── AI auto-capture ──────────────────────────────────────────────────────
-  const ai = useAIDetection()
-
-  // ── Palm detection (selfie-style shutter) ────────────────────────────────
-  const palm = usePalmDetection()
-
-  // ── Refs ─────────────────────────────────────────────────────────────────
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const flashRef = useRef<HTMLDivElement>(null)
-  const activeRowRef = useRef<HTMLDivElement>(null)
-  const nextRowRef = useRef<HTMLDivElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const selectedDeviceRef = useRef<string>('')
-  const frameImgRef = useRef<HTMLImageElement | null>(null)
-  const cameraZoneRef = useRef<HTMLDivElement>(null)
-
-  // ── Derived config ───────────────────────────────────────────────────────
-  const config = currentProject?.config
-  const aspectRatio = config?.ratio ? parseRatio(config.ratio) : 4 / 3
-  const cssFilter = config?.preset ? PRESET_FILTERS[config.preset] ?? 'none' : 'none'
-  const frameData = useMemo(() => {
-    if (!config?.frame) return null
-    if (config.frame !== '__FRAME_SAVED__') return config.frame
-    // Frame was stripped for sync — try to restore from separate localStorage key.
-    // This is a safety net: updateCurrentProject should have already restored it,
-    // but in case of a race condition or localStorage timing issue, we try here too.
-    try {
-      const projectId = currentProject?.id
-      if (projectId) {
-        const saved = localStorage.getItem(`saatiril_frame_${projectId}`)
-        if (saved) return saved
-      }
-    } catch {}
-    return null
-  }, [config?.frame, currentProject?.id])
 
   // ── Resize Observer: calculate camera dimensions ─────────────────────────
   useEffect(() => {
