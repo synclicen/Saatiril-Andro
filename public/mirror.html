@@ -243,6 +243,38 @@
         }
       }, 1500);
 
+      // ── IPC fast path for MIRROR_FRAME (Electron mode only) ────────────
+      // If running inside the Electron mirror BrowserWindow (opened via
+      // 'Buka di Projector' button), the operator sends JPEG Blobs directly
+      // via IPC (structured clone — no base64, no JSON, no socket.io). This
+      // is MUCH faster than the socket.io path → smooth on the projector.
+      // Falls back to socket.io MIRROR_FRAME if IPC not available (browser
+      // mode — tablet/phone accessing via URL).
+      var useIpcFrames = !!(window.saatirilAPI && window.saatirilAPI.onMirrorFrame);
+      if (useIpcFrames) {
+        console.log('[MIRROR] IPC fast path available — using direct Blob transfer from operator');
+        window.saatirilAPI.onMirrorFrame(function(blob) {
+          if (blob instanceof Blob && blob.size > 0) {
+            var newSrc = URL.createObjectURL(blob);
+            // Revoke previous blob URL to prevent memory leak.
+            if (img._lastBlobUrl && img._lastBlobUrl.indexOf('blob:') === 0) {
+              try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
+            }
+            img.src = newSrc;
+            img._lastBlobUrl = newSrc;
+            img.classList.remove('loading');
+            frameCount++;
+            lastFrameAt = Date.now();
+            if (frameCount === 1) {
+              status.classList.add('hidden');
+              console.log('[MIRROR] first IPC frame: blob size=', blob.size, 'B');
+            }
+          }
+        });
+      } else {
+        console.log('[MIRROR] IPC not available — using socket.io for frames (browser mode)');
+      }
+
       socket.on('lan-message', function(payload) {
         if (!payload || !payload.event) return;
         var data = payload.data || {};
@@ -250,6 +282,9 @@
         if (data.channel && data.channel !== channel && data.channel !== 'all' && data.channel !== 0) return;
 
         if (payload.event === 'MIRROR_FRAME') {
+          // Skip if IPC fast path is active (Electron mode handles frames
+          // via the onMirrorFrame listener above — avoids double-processing).
+          if (useIpcFrames) return;
           if (data.frame) {
             // Operator sends a base64 data URL string (toBlob + FileReader
             // async on operator side — no main-thread block there). We just

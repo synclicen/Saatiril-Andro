@@ -1198,6 +1198,44 @@ function registerIpcHandlers() {
     }
   })
 
+  // ── Mirror frame IPC fast path ────────────────────────────────────────
+  // The operator panel sends the JPEG Blob directly to the mirror window
+  // via IPC (structured clone — no base64, no JSON serialization, no
+  // socket.io). This is the FAST path for the projector scenario (Buka di
+  // Projector button opens a separate Electron BrowserWindow on the HDMI
+  // display). Much faster than the socket.io path:
+  //   - No FileReader.readAsDataURL (base64 encoding) — eliminated
+  //   - No JSON serialization of ~10KB base64 string — eliminated
+  //   - No socket.io wire transfer — eliminated
+  //   - No base64 decode on mirror side — eliminated (Blob → object URL)
+  // The only remaining overhead: canvas drawImage (GPU) + toBlob JPEG
+  // encoding (async, off-thread) + IPC structured clone (~1ms) +
+  // URL.createObjectURL (instant) + img.src decode (GPU).
+  // The mirror window's preload.ts exposes onMirrorFrame(callback) which
+  // listens for this IPC channel.
+  //
+  // If no mirror window is open (user hasn't clicked 'Buka di Projector'
+  // or the window was closed), the frame is silently dropped — the
+  // operator side should fall back to socket.io for cross-device scenarios.
+  ipcMain.on('send-mirror-frame', (_event, blob: Blob) => {
+    if (mirrorWindow && !mirrorWindow.isDestroyed()) {
+      try {
+        mirrorWindow.webContents.send('mirror-frame', blob)
+      } catch (err) {
+        // Window might have been destroyed mid-send — silently drop.
+      }
+    }
+    // If no mirror window, silently drop (operator side handles fallback).
+  })
+
+  // Query whether the mirror projector window is currently open — the
+  // operator panel uses this to decide whether to use the IPC fast path
+  // (mirror window open → IPC) or the socket.io slow path (no mirror
+  // window → for cross-device tablet/phone streaming).
+  ipcMain.handle('is-mirror-window-open', async () => {
+    return !!(mirrorWindow && !mirrorWindow.isDestroyed())
+  })
+
   // ── License IPC handlers ──────────────────────────────────────────────
 
   // Get current license status

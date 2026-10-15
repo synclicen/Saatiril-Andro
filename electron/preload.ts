@@ -49,6 +49,35 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('close-mirror-projector')
   },
 
+  // ── Mirror frame IPC fast path ───────────────────────────────────────────
+  // sendMirrorFrame(blob): sends a JPEG Blob directly to the mirror
+  // projector BrowserWindow via IPC (structured clone — no base64, no
+  // JSON, no socket.io). Much faster than the socket.io path. Called by
+  // the operator panel at 10+ FPS.
+  sendMirrorFrame: (blob: Blob): void => {
+    ipcRenderer.send('send-mirror-frame', blob)
+  },
+
+  // onMirrorFrame(callback): registers a listener for 'mirror-frame' IPC
+  // events. Called by the mirror.html page to receive frames directly
+  // from the operator (bypassing socket.io). Returns a cleanup function
+  // to remove the listener.
+  onMirrorFrame: (callback: (blob: Blob) => void): (() => void) => {
+    const handler = (_event: unknown, blob: Blob): void => {
+      callback(blob)
+    }
+    ipcRenderer.on('mirror-frame', handler)
+    return () => { ipcRenderer.removeListener('mirror-frame', handler) }
+  },
+
+  // isMirrorWindowOpen(): checks if the projector BrowserWindow is
+  // currently open. The operator uses this to decide whether to use the
+  // IPC fast path (window open → IPC) or socket.io slow path (closed →
+  // for cross-device streaming).
+  isMirrorWindowOpen: (): Promise<boolean> => {
+    return ipcRenderer.invoke('is-mirror-window-open')
+  },
+
   // ── License API ──────────────────────────────────────────────────────────
   getLicenseStatus: (): Promise<{
     isValid: boolean

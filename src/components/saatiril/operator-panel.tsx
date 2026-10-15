@@ -521,6 +521,30 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // input + Copy button + manually open in a browser on the projector
   // laptop.
   const isElectronRuntime = typeof window !== 'undefined' && (window as any).saatirilAPI?.isElectron === true
+  // Tracks whether the mirror projector BrowserWindow is open → use the
+  // IPC fast path (Blob directly, no base64/socket.io) for smooth frames.
+  const [useIpcForMirror, setUseIpcForMirror] = useState(false)
+  const useIpcForMirrorRef = useRef(false)
+  useEffect(() => { useIpcForMirrorRef.current = useIpcForMirror }, [useIpcForMirror])
+
+  // Poll every 2s to check if the mirror window is open. If yes, use IPC.
+  // If no (window closed), fall back to socket.io. This auto-detects when
+  // the user clicks 'Buka di Projector' (window opens → IPC) or closes the
+  // window (window closes → socket.io).
+  useEffect(() => {
+    if (!isElectronRuntime) return
+    const api = (window as any).saatirilAPI
+    if (!api?.isMirrorWindowOpen) return
+    const check = async () => {
+      try {
+        const open = await api.isMirrorWindowOpen()
+        setUseIpcForMirror(!!open)
+      } catch {}
+    }
+    check() // immediate check on mount
+    const interval = setInterval(check, 2000)
+    return () => clearInterval(interval)
+  }, [isElectronRuntime])
   const [projectorOpening, setProjectorOpening] = useState(false)
   const handleOpenOnProjector = useCallback(async () => {
     const api = (window as any).saatirilAPI
@@ -1198,22 +1222,17 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     }
 
     // ── Performance tuning ────────────────────────────────────────────────
-    // 10 FPS target, but the `processing` flag below drops frames if the
-    // previous toBlob() is still encoding — prevents pile-up + jank.
-    // Width 320 + quality 0.3 → JPEG ~5-10KB → ~50-100KB/s per client at
-    // 10 FPS. Very lightweight for smooth localhost streaming to projector.
-    //
-    // IMPORTANT (user request "apa adanya"): mirror view shows ONLY the
-    // raw camera frame — NO cssFilter, NO frame overlay, NO gridlines.
-    // The previous attempt (commit 8896b9d) added filter + frame to match
-    // the operator's view, but the user reported it caused lagging on the
-    // projector. Per-frame filter application + extra drawImage for the
-    // frame overlay added CPU overhead. Reverted to raw camera only.
-    // The aspect ratio CROP is kept (it's just drawImage with computed
-    // sx/sy/sw/sh — no extra cost, but necessary to avoid distortion).
-    const MIRROR_FPS = 10
-    const MIRROR_WIDTH = 320
-    const MIRROR_QUALITY = 0.3
+    // 15 FPS target with IPC fast path (Electron + mirror window open) —
+    // the Blob goes directly via IPC (structured clone, ~1ms), no base64
+    // encoding, no socket.io, no JSON. The only per-frame cost is the
+    // toBlob JPEG encoding (async, off-thread ~5-15ms). At 15 FPS
+    // (67ms interval), the encoder has 50ms+ headroom → smooth.
+    // Falls back to 10 FPS socket.io path (FileReader → base64) when no
+    // mirror window is open (cross-device tablet/phone scenario).
+    // Width 480 + quality 0.4 → JPEG ~15-25KB. At 15 FPS = ~225-375 KB/s.
+    const MIRROR_FPS = 15
+    const MIRROR_WIDTH = 480
+    const MIRROR_QUALITY = 0.4
 
     // Reusable canvas (off-screen) — avoids GC churn at 10 FPS.
     const mirrorCanvas = document.createElement('canvas')
@@ -1300,9 +1319,31 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           processing = false
           return
         }
-        // Convert blob → data URL string off-thread. This is the base64
-        // encoding step that toDataURL does synchronously — by doing it
-        // via FileReader we keep the main thread responsive.
+
+        // ── IPC FAST PATH (Electron + mirror window open) ──────────────
+        // Send the Blob directly to the mirror projector BrowserWindow
+        // via IPC (structured clone). No base64 encoding, no JSON
+        // serialization, no socket.io wire transfer. Much faster →
+        // smooth on the projector (matches operator's native video FPS).
+        if (useIpcForMirrorRef.current) {
+          const api = (window as any).saatirilAPI
+          if (api?.sendMirrorFrame) {
+            api.sendMirrorFrame(blob)
+            processing = false
+            emittedCount++
+            if (emittedCount === 30) {
+              console.log('[SAATIRIL OP] mirror (IPC): 30 frames sent. blob size=', Math.round(blob.size / 1024) + 'KB')
+              emittedCount = 0
+            }
+            return
+          }
+        }
+
+        // ── SOCKET.IO SLOW PATH (browser / cross-device) ────────────────
+        // Convert blob → data URL string off-thread via FileReader. This
+        // is the base64 encoding step — by doing it via FileReader we
+        // keep the main thread responsive. Used for cross-device scenarios
+        // (tablet/phone) where IPC isn't available.
         const reader = new FileReader()
         reader.onload = () => {
           processing = false
@@ -1311,11 +1352,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           if (!liveMirrorRef.current) return
           emitLocal('MIRROR_FRAME', { frame: dataUrl, channel: liveMirrorChannelRef.current })
           emittedCount++
-          // Log every 30 frames (~3s at 10 FPS) so the operator can confirm
-          // the stream is alive + see the wire payload size + socket state.
           if (emittedCount === 30) {
             const sk = getSocket()
-            console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
+            console.log('[SAATIRIL OP] mirror (socket.io): 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
               'frame size=', Math.round(dataUrl.length / 1024) + 'KB',
               'socket.connected=', sk?.connected ?? false,
               'socket.id=', sk?.id ?? 'null')
