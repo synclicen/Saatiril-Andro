@@ -282,9 +282,12 @@
         if (data.channel && data.channel !== channel && data.channel !== 'all' && data.channel !== 0) return;
 
         if (payload.event === 'MIRROR_FRAME') {
-          // Skip if IPC fast path is active (Electron mode handles frames
-          // via the onMirrorFrame listener above — avoids double-processing).
-          if (useIpcFrames) return;
+          // Process BOTH IPC + socket.io frames. The IPC path (Blob →
+          // object URL) is faster, but if IPC fails for any reason, the
+          // socket.io path (base64 data URL) is the backup. The img.src
+          // will be set twice per frame (once from IPC, once from socket.io)
+          // — the second one overwrites the first, no harm. This ensures
+          // the mirror NEVER goes black due to IPC failure.
           if (data.frame) {
             // Operator sends a base64 data URL string (toBlob + FileReader
             // async on operator side — no main-thread block there). We just

@@ -1324,26 +1324,33 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         // Send the Blob directly to the mirror projector BrowserWindow
         // via IPC (structured clone). No base64 encoding, no JSON
         // serialization, no socket.io wire transfer. Much faster →
-        // smooth on the projector (matches operator's native video FPS).
+        // smooth on the projector.
+        //
+        // IMPORTANT: This is a BONUS fast path, NOT a replacement for
+        // socket.io. We ALWAYS also send via socket.io (below) as a
+        // backup. If IPC fails for any reason (Blob not structured-cloned
+        // correctly, mirror window preload issue, etc.), the socket.io
+        // path ensures the mirror still gets frames. Without the socket.io
+        // backup, an IPC failure → permanent black screen (which is what
+        // the user experienced at commit 07a1ce5).
+        let ipcSent = false
         if (useIpcForMirrorRef.current) {
           const api = (window as any).saatirilAPI
           if (api?.sendMirrorFrame) {
-            api.sendMirrorFrame(blob)
-            processing = false
-            emittedCount++
-            if (emittedCount === 30) {
-              console.log('[SAATIRIL OP] mirror (IPC): 30 frames sent. blob size=', Math.round(blob.size / 1024) + 'KB')
-              emittedCount = 0
+            try {
+              api.sendMirrorFrame(blob)
+              ipcSent = true
+            } catch (err) {
+              console.warn('[SAATIRIL OP] IPC sendMirrorFrame failed, falling back to socket.io only:', err)
             }
-            return
           }
         }
 
-        // ── SOCKET.IO SLOW PATH (browser / cross-device) ────────────────
+        // ── SOCKET.IO PATH (always — backup + cross-device) ─────────────
         // Convert blob → data URL string off-thread via FileReader. This
         // is the base64 encoding step — by doing it via FileReader we
-        // keep the main thread responsive. Used for cross-device scenarios
-        // (tablet/phone) where IPC isn't available.
+        // keep the main thread responsive. ALWAYS run this path (even
+        // when IPC was sent) so the mirror has a backup if IPC fails.
         const reader = new FileReader()
         reader.onload = () => {
           processing = false
@@ -1354,7 +1361,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           emittedCount++
           if (emittedCount === 30) {
             const sk = getSocket()
-            console.log('[SAATIRIL OP] mirror (socket.io): 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
+            console.log('[SAATIRIL OP] mirror: 30 frames emitted (ch' + liveMirrorChannelRef.current + ').',
+              'ipc=' + (ipcSent ? 'yes' : 'no'),
               'frame size=', Math.round(dataUrl.length / 1024) + 'KB',
               'socket.connected=', sk?.connected ?? false,
               'socket.id=', sk?.id ?? 'null')
