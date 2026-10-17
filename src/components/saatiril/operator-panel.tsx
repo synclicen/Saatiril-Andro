@@ -47,6 +47,7 @@ import {
   Copy,
   Check,
   Monitor,
+  PowerOff,
 } from 'lucide-react'
 import {
   useSaatirilStore,
@@ -594,6 +595,59 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       setProjectorOpening(false)
     }
   }, [myChannel, toast])
+
+  // ── Close Projector handler ─────────────────────────────────────────────
+  // Closes the mirror projector BrowserWindow via Electron IPC. Also used
+  // by the auto-close useEffect (when project closes or component unmounts).
+  const [projectorClosing, setProjectorClosing] = useState(false)
+  const handleCloseProjector = useCallback(async () => {
+    const api = (window as any).saatirilAPI
+    if (!api?.isElectron || !api.closeMirrorProjector) return
+    setProjectorClosing(true)
+    try {
+      await api.closeMirrorProjector()
+      toast({
+        title: 'Projector ditutup',
+        description: `Window Live Mirror di external display sudah ditutup.`,
+      })
+    } catch (err: any) {
+      // Silent fail — the window might already be closed.
+    } finally {
+      setProjectorClosing(false)
+    }
+  }, [toast])
+
+  // ── Auto-close projector when project closes ────────────────────────────
+  // When the user goes back to the home/project-setup screen (currentProject
+  // becomes null), the operator panel keeps rendering (it shows "Memuat
+  // proyek..."). But the projector window should close — otherwise it stays
+  // open showing the last frame forever. This useEffect watches currentProject
+  // + closes the projector window when the project closes.
+  useEffect(() => {
+    if (!currentProject) {
+      const api = (window as any).saatirilAPI
+      if (api?.isElectron && api.closeMirrorProjector) {
+        api.closeMirrorProjector().catch(() => {})
+      }
+      // Also turn off Live Mirror — no point streaming frames when there's
+      // no project + no camera target.
+      if (liveMirrorRef.current) {
+        setLiveMirror(false)
+      }
+    }
+  }, [currentProject])
+
+  // ── Auto-close projector on component unmount ───────────────────────────
+  // Safety net: if the operator panel unmounts for any reason (e.g. user
+  // switches role, app closes), close the projector window too.
+  useEffect(() => {
+    return () => {
+      const api = (window as any).saatirilAPI
+      if (api?.isElectron && api.closeMirrorProjector) {
+        api.closeMirrorProjector().catch(() => {})
+      }
+    }
+  }, [])
 
   // Palm trigger: when ON, showing an open palm to the camera triggers the
   // selected shutter mode (manual → instant photo, timer → starts countdown).
@@ -2251,24 +2305,26 @@ Klik layar untuk fullscreen. Tombol: F = fullscreen, M = flip mirror.`}
             </button>
           </div>
 
-          {/* Buka di Projector button — only in Electron runtime. Opens a
-              separate BrowserWindow on the external display (HDMI) via
-              Electron IPC. Uses localhost socket.io (no network latency). */}
+          {/* Buka/Tutup Projector buttons — only in Electron runtime. Opens
+              or closes a separate BrowserWindow on the external display
+              (HDMI) via Electron IPC. Two buttons side-by-side so the
+              user can manually open/close the projector window without
+              having to toggle Live Mirror off + on. */}
           {isElectronRuntime && (
-            <button
-              type="button"
-              onClick={handleOpenOnProjector}
-              disabled={projectorOpening}
-              className={`flex items-center justify-center gap-1.5 rounded-md font-bold transition-all duration-200 w-full cursor-pointer
-                ${compact ? 'mt-1 px-2 py-1 text-[9px]' : 'mt-1.5 px-3 py-1.5 text-[11px]'}
-                ${projectorOpening ? 'opacity-60 cursor-wait' : 'hover:scale-[1.01]'}`}
-              style={{
-                backgroundColor: `${THEME.cyan}22`,
-                color: THEME.cyan,
-                border: `1px solid ${THEME.cyan}55`,
-                boxShadow: `0 0 8px ${THEME.cyan}22`,
-              }}
-              title={`Buka window Live Mirror di external display (projector via HDMI).
+            <div className={`flex gap-1 w-full ${compact ? 'mt-1' : 'mt-1.5'}`}>
+              <button
+                type="button"
+                onClick={handleOpenOnProjector}
+                disabled={projectorOpening}
+                className={`flex items-center justify-center gap-1 rounded-md font-bold transition-all duration-200 flex-1 cursor-pointer
+                  ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-2 py-1.5 text-[10px]'}
+                  ${projectorOpening ? 'opacity-60 cursor-wait' : 'hover:scale-[1.01]'}`}
+                style={{
+                  backgroundColor: `${THEME.cyan}22`,
+                  color: THEME.cyan,
+                  border: `1px solid ${THEME.cyan}55`,
+                }}
+                title={`Buka window Live Mirror di external display (projector via HDMI).
 
 PRASYARAT:
 1. Hubungkan projector via HDMI ke laptop ini.
@@ -2279,10 +2335,28 @@ PRASYARAT:
 
 Kalau tombol tidak aktif atau muncul error "Tidak ada layar
 eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
-            >
-              <Monitor className={compact ? 'size-3' : 'size-4'} />
-              <span>Buka di Projector (HDMI)</span>
-            </button>
+              >
+                <Monitor className={compact ? 'size-3' : 'size-3.5'} />
+                <span>Buka</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseProjector}
+                disabled={projectorClosing}
+                className={`flex items-center justify-center gap-1 rounded-md font-bold transition-all duration-200 flex-1 cursor-pointer
+                  ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-2 py-1.5 text-[10px]'}
+                  ${projectorClosing ? 'opacity-60 cursor-wait' : 'hover:scale-[1.01]'}`}
+                style={{
+                  backgroundColor: `${THEME.red}22`,
+                  color: THEME.red,
+                  border: `1px solid ${THEME.red}55`,
+                }}
+                title="Tutup window Live Mirror di external display. Window juga otomatis tertutup saat kembali ke halaman depan / membuat project baru."
+              >
+                <PowerOff className={compact ? 'size-3' : 'size-3.5'} />
+                <span>Tutup</span>
+              </button>
+            </div>
           )}
           </>
         )}
