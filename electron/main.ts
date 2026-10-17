@@ -677,6 +677,12 @@ function startStaticServer(outDir: string): Promise<void> {
         httpServer!.close()
         httpServer!.listen(httpPort, '0.0.0.0', () => {
           console.log(`[SAATIRIL] Static file server running on http://0.0.0.0:${httpPort} (accessible from LAN)`)
+          // BUG FIX (audit Remote BUG #5): add firewall rule for the
+          // ACTUAL port we're listening on (may be auto-incremented past
+          // the default 3000 if 3000 was in use). Without this, LAN
+          // clients get ERR_CONNECTION_REFUSED from Windows Firewall.
+          // addFirewallRule is idempotent (checks for existing rule first).
+          addFirewallRule(httpPort)
           resolve()
         })
       } else {
@@ -687,6 +693,9 @@ function startStaticServer(outDir: string): Promise<void> {
 
     httpServer.listen(httpPort, '0.0.0.0', () => {
       console.log(`[SAATIRIL] Static file server running on http://0.0.0.0:${httpPort} (accessible from LAN)`)
+      // BUG FIX (audit Remote BUG #5): also add firewall rule for the
+      // initial port (in case it didn't hit EADDRINUSE). Idempotent.
+      addFirewallRule(httpPort)
       resolve()
     })
   })
@@ -787,13 +796,38 @@ function startSocketServer(): Promise<void> {
         const info = clientRegistry.get(socket.id)
         if (!info) return
 
+        // BUG FIX (audit Remote BUG #1): admin role requires loopback origin.
+        // Previously any LAN client could claim role='admin' with no verification
+        // → full admin powers (set/clear session password, unrestricted relay).
+        // Now admin is only allowed from 127.0.0.1 / ::1 (the admin's own laptop).
+        // Remote clients must use 'mc' / 'operator' / 'mirror' roles.
+        if (data.role === 'admin') {
+          const addr = socket.handshake.address || ''
+          const isLoopback = addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+          if (!isLoopback) {
+            console.warn(`[SAATIRIL] Client ${socket.id} rejected: admin role from non-loopback address ${addr}`)
+            info.role = 'pending_auth'
+            info.channel = data.channel
+            socket.emit('auth-failed', { reason: 'admin_role_requires_loopback' })
+            return
+          }
+        }
+
         // Validate session password for non-admin when password is set
         if (data.role !== 'admin' && sessionPasswordHash) {
-          if (!data.sessionPasswordHash || data.sessionPasswordHash !== sessionPasswordHash) {
+          // BUG FIX (audit Remote BUG #6): timing-safe comparison.
+          // Previously used !== which short-circuits on first byte mismatch
+          // → timing attack could recover the hash byte-by-byte.
+          const clientHash = data.sessionPasswordHash || ''
+          const expected = sessionPasswordHash
+          // Use a constant-time comparison via Buffer.compare on equal-length
+          // buffers (both are 64-char SHA-256 hex strings). If lengths differ,
+          // still do a comparison to keep timing constant.
+          const a = Buffer.from(clientHash.padEnd(expected.length, '0'))
+          const b = Buffer.from(expected)
+          const matches = Buffer.compare(a, b) === 0 && clientHash.length === expected.length
+          if (!matches) {
             console.warn(`[SAATIRIL] Client ${socket.id} rejected: invalid session password (role: ${data.role})`)
-            // CRITICAL FIX: Set role to 'pending_auth' instead of leaving as 'unknown'
-            // This prevents the identification timeout from disconnecting the client.
-            // The client stays connected and can retry with the correct password.
             info.role = 'pending_auth'
             info.channel = data.channel
             socket.emit('auth-failed', { reason: 'session_password_required' })
@@ -846,6 +880,9 @@ function startSocketServer(): Promise<void> {
         httpForSocket.close()
         httpForSocket.listen(socketPort, '0.0.0.0', () => {
           console.log(`[SAATIRIL] Socket.io relay server running on port ${socketPort}`)
+          // BUG FIX (audit Remote BUG #5): add firewall rule for the actual
+          // socket port (may be auto-incremented past 3003).
+          addFirewallRule(socketPort)
           resolve()
         })
       } else {
@@ -856,6 +893,9 @@ function startSocketServer(): Promise<void> {
 
     httpForSocket.listen(socketPort, () => {
       console.log(`[SAATIRIL] Socket.io relay server running on port ${socketPort}`)
+      // BUG FIX (audit Remote BUG #5): also add firewall rule for the
+      // initial socket port (in case it didn't hit EADDRINUSE).
+      addFirewallRule(socketPort)
       resolve()
     })
   })

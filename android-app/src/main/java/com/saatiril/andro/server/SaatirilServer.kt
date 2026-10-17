@@ -446,6 +446,17 @@ object SaatirilServer {
 
         val session: ClientSession = if (sid == null) {
             // ── New WS-only session (no polling) ──
+            // BUG FIX (audit BUG #3): enforce MAX_CONNECTIONS for WS-only sessions
+            // too. Previously only the polling path checked the limit — all real
+            // clients (Android SocketManager + Electron socket.io-client with
+            // transports=['websocket']) take this WS-only path + bypassed the
+            // limit. A single misbehaving device could open hundreds of WS
+            // sessions → OOM-crash the admin phone mid-ceremony.
+            if (sessions.size >= MAX_CONNECTIONS) {
+                Log.w(TAG, "WS-only connection rejected — MAX_CONNECTIONS ($MAX_CONNECTIONS) reached (total=${sessions.size})")
+                ws.close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Connection limit reached"))
+                return
+            }
             val newSid = EngineIO.newSid()
             val s = ClientSession(newSid).apply { this.transport = "websocket" }
             sessions[newSid] = s

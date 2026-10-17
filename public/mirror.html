@@ -160,6 +160,8 @@
       var video = document.getElementById('mirror-video');
       var frameOverlay = document.getElementById('frame-overlay');
       var nativeCameraStarted = false;
+      var currentDeviceId = null;   // BUG #3 fix: track current camera device
+      var currentStream = null;     // BUG #3 fix: track current MediaStream for cleanup
       var countdown = document.getElementById('countdown');
       var flash = document.getElementById('flash');
       var hint = document.getElementById('hint');
@@ -216,14 +218,31 @@
       // some systems), fall back to the JPEG stream path (the <img>
       // stays visible + receives MIRROR_FRAME events).
       function startNativeCamera(deviceId) {
-        if (nativeCameraStarted) return;
+        // BUG FIX (audit Remote BUG #3): re-acquire camera when deviceId changes.
+        // Previously `if (nativeCameraStarted) return` blocked any re-acquisition
+        // after the first success → if the operator switched cameras mid-event
+        // (USB disconnect, capture card swap), the mirror kept showing the old
+        // camera stream. Now we track the current deviceId + re-start when it
+        // actually changes.
+        if (nativeCameraStarted && currentDeviceId === deviceId && currentStream) {
+          return;  // same camera already running — nothing to do
+        }
+        // Stop the previous stream if any (camera switch).
+        if (currentStream) {
+          try {
+            currentStream.getTracks().forEach(function(t) { t.stop(); });
+          } catch (e) {}
+          currentStream = null;
+        }
         nativeCameraStarted = true;
+        currentDeviceId = deviceId;
         console.log('[MIRROR] starting native camera, deviceId=', deviceId);
         var constraints = {
           video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         };
         navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+          currentStream = stream;
           video.srcObject = stream;
           video.style.display = '';
           img.style.display = 'none';  // hide JPEG stream img — native video is live
@@ -232,6 +251,8 @@
           console.warn('[MIRROR] native camera failed, using JPEG stream fallback:', err.name, err.message);
           // Keep the <img> visible (JPEG stream). Don't show the <video>.
           nativeCameraStarted = false;  // allow retry on next MIRROR_CONFIG
+          currentDeviceId = null;
+          currentStream = null;
         });
       }
 

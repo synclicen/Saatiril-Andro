@@ -418,16 +418,12 @@ function handleTriggerData(value) {
         });
         bleLog('Trigger forwarded via Socket.io: ' + action, 'success');
       }
-      bleLog('Also forwarding via HTTP...', 'warn');
-      fetch('/api/ble-trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action, studentId: studentId })
-      }).then(function(resp) {
-        bleLog('HTTP trigger OK (' + resp.status + ')', 'success');
-      }).catch(function(e) {
-        bleLog('HTTP trigger failed: ' + e.message, 'error');
-      });
+      // BUG FIX (audit Remote BUG #2): removed HTTP /api/ble-trigger fallback.
+      // Previously the trigger was sent via BOTH socket.io AND HTTP → server
+      // relayed BOTH → admin-dashboard's handleBLETrigger fired TWICE per
+      // trigger. For 'NEXT' this skipped 2 students instead of 1. The
+      // socket.io path is the reliable one (queued when disconnected, auth-
+      // gated). HTTP path had no auth + caused the double-fire.
     }
   } catch(e) {
     // Not JSON or parse error — ignore
@@ -469,8 +465,12 @@ function onDisconnected() {
   isConnected = false;
   if (dataSyncInterval) { clearInterval(dataSyncInterval); dataSyncInterval = null; }
   stopPolling();
-  setStatus('', 'MC terputus. Mencoba reconnect...');
-  setTimeout(connectMC, 3000);
+  // BUG FIX (audit Remote BUG #4): removed misleading "Mencoba reconnect..." text.
+  // navigator.bluetooth.requestDevice (called by connectMC) REQUIRES a user
+  // gesture — a setTimeout callback is NOT a user gesture, so the auto-reconnect
+  // always failed silently. Now we tell the user to click CONNECT manually.
+  setStatus('error', 'MC terputus. Klik CONNECT untuk reconnect.');
+  // Removed: setTimeout(connectMC, 3000); — always fails without user gesture.
 }
 
 // Send status update to MC (e.g., "done" after photo)

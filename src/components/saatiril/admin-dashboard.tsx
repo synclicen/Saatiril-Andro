@@ -244,7 +244,14 @@ export default function AdminDashboard() {
   // ── Socket listeners ─────────────────────────────────────────────
   useEffect(() => {
     const handlePhotosSaved = (data: PhotosSavedData) => {
-      const proj = currentProjectRef.current
+      // BUG FIX (audit Electron BUG #2): use sync getState() read instead of
+      // stale currentProjectRef.current. The ref only updates via useEffect
+      // after render — back-to-back PHOTOS_SAVED events (dual-photoshoot:
+      // both operators capture simultaneously, or socket.io batches events)
+      // would both read the SAME stale proj → second event OVERWRITES first
+      // event's photoHistory entry → first student's photo LOST + stuck in
+      // PROSES forever. Sync read from the store always returns the latest.
+      const proj = useSaatirilStore.getState().currentProject
       if (!proj) return
 
       // ── Determine version + filenames ──────────────────────────────────
