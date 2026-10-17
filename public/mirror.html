@@ -21,50 +21,49 @@
     }
     /* Mirror image — flipped by default so participants see themselves like a
        real mirror (raise right hand → hand appears on right side of screen).
-       Add ?flip=0 in the URL to disable (e.g. for rear-facing camera feed).
-       Uses object-contain so the FULL camera view is always visible —
-       no cropping/zooming. If the projector's aspect ratio doesn't match
-       the configured photo aspect (e.g. 16:9 projector showing a 4:3
-       image), the image is centered with black bars on the sides
-       (letterboxing). This matches the operator's camera zone layout
-       where the full camera view (cropped to config aspect) is shown
-       without further cropping. */
-    #mirror-img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      transform: scaleX(-1);
-      transition: opacity 150ms ease-out;
+       Add ?flip=0 in the URL to disable.
+       Uses object-cover + dynamic aspect-ratio (set via JS from MIRROR_CONFIG)
+       to DUPLICATE the operator's camera zone layout exactly:
+       - Operator: container with config aspect ratio + <video> object-cover
+         (video fills container, crops overflow to config aspect).
+       - Mirror: <video>/<img> with aspect-ratio: <config> + object-cover,
+         centered in the full projector. If projector aspect ≠ config aspect,
+         letterboxing appears (black bars) — but the VIDEO CONTENT is cropped
+         to config aspect, exactly matching what the operator sees.
+       The aspect-ratio is set via inline style by the MIRROR_CONFIG handler.
+       Default (before MIRROR_CONFIG arrives): 4/3 to avoid layout shift. */
+    #mirror-img, #mirror-video {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scaleX(-1);
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
     }
-    #mirror-img.no-flip { transform: none; }
+    #mirror-img { transition: opacity 150ms ease-out; }
+    #mirror-img.no-flip, #mirror-video.no-flip {
+      transform: translate(-50%, -50%);
+    }
     #mirror-img.loading { opacity: 0.4; }
 
-    /* Native <video> element — same styling as #mirror-img. Used when
-       getUserMedia succeeds (native 30 FPS, no JPEG encoding/transfer).
-       Hidden by default (display:none in HTML); shown when the native
-       camera path succeeds. When shown, #mirror-img is hidden. */
-    #mirror-video {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: contain;
-      transform: scaleX(-1);
-    }
-    #mirror-video.no-flip { transform: none; }
-
-    /* Frame overlay — sits ON TOP of the camera img, matching its
-       object-contain layout so the frame overlaps the camera exactly
-       (both centered with the same letterboxing). The frame is the
-       project's design element (text + logo for the final photo). It's
-       NOT flipped (even when the camera is flipped) so the text remains
-       readable. The frame is sent ONCE via MIRROR_CONFIG (not per-frame)
-       → no per-frame CPU cost. Hidden by default until MIRROR_CONFIG
-       arrives with frameData. */
+    /* Frame overlay — sits ON TOP of the camera, matching its aspect-ratio
+       + object-cover layout so the frame overlaps the camera exactly.
+       Same positioning as #mirror-img/#mirror-video (centered, dynamic
+       aspect-ratio). NOT flipped (frame text must remain readable).
+       Hidden by default until MIRROR_CONFIG arrives with frameData. */
     #frame-overlay {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: contain;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      aspect-ratio: 4 / 3;
+      object-fit: fill;
       pointer-events: none;
       opacity: 0;
       transition: opacity 200ms ease-out;
@@ -408,6 +407,19 @@
           } else {
             img.style.filter = '';
             video.style.filter = '';
+          }
+          // Apply the aspect ratio to video + img + frame overlay. This
+          // DUPLICATES the operator's camera zone layout: the video is
+          // cropped to the config aspect ratio (object-cover) + centered
+          // in the full projector. If projector aspect ≠ config aspect,
+          // letterboxing appears (black bars) — but the VIDEO CONTENT is
+          // cropped exactly like the operator sees it.
+          if (typeof data.aspectRatio === 'number' && data.aspectRatio > 0) {
+            var aspectCss = data.aspectRatio;  // e.g. 1.3333 for 4:3
+            img.style.aspectRatio = aspectCss;
+            video.style.aspectRatio = aspectCss;
+            frameOverlay.style.aspectRatio = aspectCss;
+            console.log('[MIRROR] applied aspectRatio:', aspectCss);
           }
           // Apply the frame overlay.
           if (typeof data.frameData === 'string' && data.frameData.length > 0) {
