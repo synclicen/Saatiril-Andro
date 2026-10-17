@@ -110,24 +110,8 @@
       transition: none;
     }
 
-    /* Connection status badge (top-left, dim). */
-    #status {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      color: #c4b5fd;
-      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-      font-size: 11px;
-      background: rgba(26, 11, 46, 0.7);
-      padding: 6px 10px;
-      border-radius: 6px;
-      border: 1px solid rgba(83, 52, 133, 0.5);
-      pointer-events: none;
-      z-index: 5;
-    }
-    #status.connected { color: #4ade80; border-color: rgba(74, 222, 128, 0.5); }
-    #status.disconnected { color: #f87171; border-color: rgba(248, 113, 113, 0.5); }
-    #status.hidden { display: none; }
+    /* Status badge REMOVED — projector view is clean (no UI clutter).
+       Debug info is still logged to the browser DevTools Console. */
 
     /* Hint banner — auto-hide after 5s. */
     #hint {
@@ -157,7 +141,6 @@
   <img id="frame-overlay" alt="" />
   <div id="countdown"></div>
   <div id="flash"></div>
-  <div id="status">Connecting…</div>
   <div id="hint">Klik untuk fullscreen · F fullscreen · M flip mirror</div>
 
   <script src="/js/socket.io.min.js"></script>
@@ -179,7 +162,6 @@
       var nativeCameraStarted = false;
       var countdown = document.getElementById('countdown');
       var flash = document.getElementById('flash');
-      var status = document.getElementById('status');
       var hint = document.getElementById('hint');
 
       if (!flip) img.classList.add('no-flip');
@@ -225,11 +207,6 @@
 
       var socket = io(serverUrl, socketOptions);
 
-      function setStatus(text, cls) {
-        status.textContent = text;
-        status.className = cls || '';
-      }
-
       // ── Native camera path ──────────────────────────────────────────
       // Calls getUserMedia with the operator's deviceId → native 30 FPS
       // video (no JPEG encoding/transfer). Chromium/Electron allows
@@ -251,8 +228,6 @@
           video.style.display = '';
           img.style.display = 'none';  // hide JPEG stream img — native video is live
           console.log('[MIRROR] native camera started — 30 FPS native video active');
-          setStatus('● ch' + channel + ' · native 30FPS', 'connected');
-          setTimeout(function() { status.classList.add('hidden'); }, 2000);
         }).catch(function(err) {
           console.warn('[MIRROR] native camera failed, using JPEG stream fallback:', err.name, err.message);
           // Keep the <img> visible (JPEG stream). Don't show the <video>.
@@ -262,7 +237,6 @@
 
       socket.on('connect', function() {
         console.log('[MIRROR] socket connected:', socket.id, '→ server:', serverUrl);
-        setStatus('● ch' + channel + (flip ? ' · mirror' : ' · no-flip'), 'connected');
         socket.emit('identify', { role: 'mirror', channel: channel });
         // Ask the operator for a current frame so the mirror isn't black until
         // the next interval tick.
@@ -271,23 +245,21 @@
 
       socket.on('disconnect', function() {
         console.log('[MIRROR] socket disconnected');
-        setStatus('● Disconnected · reconnecting…', 'disconnected');
       });
 
       socket.on('connect_error', function(err) {
         console.warn('[MIRROR] connect_error:', err.message || err);
-        setStatus('● Conn error: ' + (err.message || 'unknown'), 'disconnected');
       });
 
-      // Frame counter + last-frame timestamp for diagnostics. If no frame
-      // arrives within ~3s, the status flips to "menunggu frame…".
+      // Frame counter + last-frame timestamp for diagnostics. Logs to console
+      // only (no visual status badge — projector view is clean).
       var frameCount = 0;
       var lastFrameAt = 0;
       var lastFrameCheck = setInterval(function() {
         if (frameCount > 0 && Date.now() - lastFrameAt > 3000) {
           // Frames were arriving but stopped — operator likely toggled OFF
-          // or camera went inactive. Show a "no signal" hint.
-          setStatus('● ch' + channel + ' · menunggu frame…', 'disconnected');
+          // or camera went inactive. Log to console only.
+          console.warn('[MIRROR] no frames for 3s — operator may have toggled OFF');
         }
       }, 1500);
 
@@ -314,7 +286,6 @@
             frameCount++;
             lastFrameAt = Date.now();
             if (frameCount === 1) {
-              status.classList.add('hidden');
               console.log('[MIRROR] first IPC frame: blob size=', blob.size, 'B');
             }
           }
@@ -372,10 +343,9 @@
               img.classList.remove('loading');
               frameCount++;
               lastFrameAt = Date.now();
-              // After first frame, hide the status badge entirely (no need to
-              // see "connected" once we're actively rendering).
+              // After first frame, log the type of the first frame for
+              // debugging (helps debug future black-screen regressions).
               if (frameCount === 1) {
-                status.classList.add('hidden');
                 // Diagnostic: log the type of the first frame so we can
                 // verify what's actually arriving. Helps debug future
                 // black-screen regressions.
@@ -523,7 +493,7 @@
         } else if (e.key === 'm' || e.key === 'M') {
           img.classList.toggle('no-flip');
           flip = !img.classList.contains('no-flip');
-          setStatus('● ch' + channel + (flip ? ' · mirror' : ' · no-flip'), 'connected');
+          console.log('[MIRROR] mirror flip:', flip);
         } else if (e.key === 'Escape') {
           if (document.fullscreenElement) {
             var ex = document.exitFullscreen || document.webkitExitFullscreen;
