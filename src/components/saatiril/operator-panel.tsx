@@ -662,13 +662,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   //   current config immediately)
   const sendMirrorConfig = useCallback(() => {
     if (!liveMirrorRef.current) return
-    console.log('[SAATIRIL OP] sending MIRROR_CONFIG: cssFilter=', cssFilter, 'hasFrame=', !!frameData, 'ch=', liveMirrorChannelRef.current)
+    console.log('[SAATIRIL OP] sending MIRROR_CONFIG: cssFilter=', cssFilter, 'hasFrame=', !!frameData, 'deviceId=', selectedDeviceId, 'ch=', liveMirrorChannelRef.current)
     emitLocal('MIRROR_CONFIG', {
       cssFilter: cssFilter,
       frameData: frameData || null,
+      // Native camera path: send the deviceId + aspectRatio + mirror so the
+      // mirror window can call getUserMedia itself → native 30 FPS video
+      // (no JPEG encoding/transfer). Chromium/Electron allows multiple
+      // renderer processes to share the same camera.
+      deviceId: selectedDeviceId || null,
+      aspectRatio: aspectRatio,
+      mirror: mirror,
       channel: liveMirrorChannelRef.current,
     })
-  }, [cssFilter, frameData])
+  }, [cssFilter, frameData, selectedDeviceId, aspectRatio, mirror])
 
   // Watch config changes + emit MIRROR_CONFIG when they change (and
   // liveMirror is ON).

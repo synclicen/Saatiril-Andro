@@ -39,6 +39,19 @@
     #mirror-img.no-flip { transform: none; }
     #mirror-img.loading { opacity: 0.4; }
 
+    /* Native <video> element — same styling as #mirror-img. Used when
+       getUserMedia succeeds (native 30 FPS, no JPEG encoding/transfer).
+       Hidden by default (display:none in HTML); shown when the native
+       camera path succeeds. When shown, #mirror-img is hidden. */
+    #mirror-video {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      transform: scaleX(-1);
+    }
+    #mirror-video.no-flip { transform: none; }
+
     /* Frame overlay — sits ON TOP of the camera img, matching its
        object-contain layout so the frame overlaps the camera exactly
        (both centered with the same letterboxing). The frame is the
@@ -137,6 +150,10 @@
   </style>
 </head>
 <body>
+  <!-- Native <video> element — used when getUserMedia succeeds (native 30 FPS,
+       no JPEG encoding/transfer). Hidden by default until getUserMedia works. -->
+  <video id="mirror-video" autoplay playsinline muted style="display:none;"></video>
+  <!-- <img> fallback — used when getUserMedia fails (JPEG stream via socket.io/IPC). -->
   <img id="mirror-img" alt="Live Camera Mirror" class="loading" />
   <img id="frame-overlay" alt="" />
   <div id="countdown"></div>
@@ -158,7 +175,9 @@
       var SOCKET_PORT = parseInt(params.get('socketPort') || '3003', 10) || 3003;
 
       var img = document.getElementById('mirror-img');
+      var video = document.getElementById('mirror-video');
       var frameOverlay = document.getElementById('frame-overlay');
+      var nativeCameraStarted = false;
       var countdown = document.getElementById('countdown');
       var flash = document.getElementById('flash');
       var status = document.getElementById('status');
@@ -210,6 +229,36 @@
       function setStatus(text, cls) {
         status.textContent = text;
         status.className = cls || '';
+      }
+
+      // ── Native camera path ──────────────────────────────────────────
+      // Calls getUserMedia with the operator's deviceId → native 30 FPS
+      // video (no JPEG encoding/transfer). Chromium/Electron allows
+      // multiple renderer processes to share the same camera. If this
+      // succeeds, hide the <img> (JPEG stream) + show the <video>. If
+      // it fails (NotReadableError — camera held by another process on
+      // some systems), fall back to the JPEG stream path (the <img>
+      // stays visible + receives MIRROR_FRAME events).
+      function startNativeCamera(deviceId) {
+        if (nativeCameraStarted) return;
+        nativeCameraStarted = true;
+        console.log('[MIRROR] starting native camera, deviceId=', deviceId);
+        var constraints = {
+          video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        };
+        navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+          video.srcObject = stream;
+          video.style.display = '';
+          img.style.display = 'none';  // hide JPEG stream img — native video is live
+          console.log('[MIRROR] native camera started — 30 FPS native video active');
+          setStatus('● ch' + channel + ' · native 30FPS', 'connected');
+          setTimeout(function() { status.classList.add('hidden'); }, 2000);
+        }).catch(function(err) {
+          console.warn('[MIRROR] native camera failed, using JPEG stream fallback:', err.name, err.message);
+          // Keep the <img> visible (JPEG stream). Don't show the <video>.
+          nativeCameraStarted = false;  // allow retry on next MIRROR_CONFIG
+        });
       }
 
       socket.on('connect', function() {
@@ -350,17 +399,17 @@
         // (GPU-accelerated, no per-frame CPU cost). The MIRROR_FRAME
         // wire payload stays minimal — just the raw JPEG.
         if (payload.event === 'MIRROR_CONFIG') {
-          // Apply the CSS filter (e.g. 'grayscale(1)', 'sepia(0.5)') to
-          // the camera img. The browser's GPU applies it for every
-          // rendered frame at NO CPU cost. 'none' = no filter.
+          // Apply the CSS filter to BOTH the <img> (JPEG fallback) and the
+          // <video> (native camera path). GPU-accelerated, no per-frame CPU.
           if (typeof data.cssFilter === 'string' && data.cssFilter !== 'none') {
             img.style.filter = data.cssFilter;
+            video.style.filter = data.cssFilter;
             console.log('[MIRROR] applied cssFilter:', data.cssFilter);
           } else {
             img.style.filter = '';
+            video.style.filter = '';
           }
-          // Apply the frame overlay (base64 data URL of the project's
-          // frame image). Set src + show; or hide if no frame.
+          // Apply the frame overlay.
           if (typeof data.frameData === 'string' && data.frameData.length > 0) {
             frameOverlay.src = data.frameData;
             frameOverlay.classList.add('show');
@@ -368,6 +417,24 @@
           } else {
             frameOverlay.classList.remove('show');
             frameOverlay.removeAttribute('src');
+          }
+          // Apply the mirror (flip) setting to both img + video.
+          if (data.mirror === false) {
+            img.classList.add('no-flip');
+            video.classList.add('no-flip');
+          } else {
+            img.classList.remove('no-flip');
+            video.classList.remove('no-flip');
+          }
+          // ── NATIVE CAMERA PATH ──────────────────────────────────────
+          // Try getUserMedia with the operator's deviceId → native 30 FPS
+          // video (no JPEG encoding/transfer). Chromium/Electron allows
+          // multiple renderer processes to share the same camera. If this
+          // succeeds, hide the <img> (JPEG stream) + show the <video>.
+          // If it fails (NotReadableError — camera already held by another
+          // process on some systems), fall back to the JPEG stream path.
+          if (data.deviceId && !nativeCameraStarted) {
+            startNativeCamera(data.deviceId);
           }
           return;
         }
