@@ -308,11 +308,34 @@ function handleGenerateLicenseApi(
  * admin dashboard handles by looking up the next student and emitting a
  * proper MC_CALL with { student, channel }. Mirrors Android SaatirilServer
  * POST /api/ble-trigger after the fix in d07fdeb.
+ *
+ * BUG #11 fix (audit Remote/Mirror batch 2): restrict to loopback only.
+ * Previously this endpoint accepted requests from ANY LAN client — anyone
+ * could POST { action: 'NEXT' } and trigger an unsolicited student advance.
+ * The admin-ble.html page runs on the admin laptop itself (it talks to MC
+ * via BLE then forwards to the local Electron server), so loopback is
+ * sufficient. Non-loopback requests are rejected with 403.
  */
 function handleBleTriggerApi(
   req: import('http').IncomingMessage,
   res: import('http').ServerResponse,
 ) {
+  // BUG #11 fix: loopback-only check. req.socket.remoteAddress may be
+  // '127.0.0.1', '::1', '::ffff:127.0.0.1', or undefined (for unix sockets —
+  // treat as loopback since unix sockets are local by definition).
+  const remoteAddr = req.socket.remoteAddress || ''
+  const isLoopback =
+    remoteAddr === '127.0.0.1' ||
+    remoteAddr === '::1' ||
+    remoteAddr === '::ffff:127.0.0.1' ||
+    remoteAddr === ''
+  if (!isLoopback) {
+    console.warn(`[SAATIRIL] /api/ble-trigger rejected from non-loopback address: ${remoteAddr}`)
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ success: false, error: 'Forbidden: loopback only' }))
+    return
+  }
+
   if (req.method !== 'POST') {
     res.writeHead(405, { 'Content-Type': 'text/plain' })
     res.end('Method Not Allowed')
@@ -411,17 +434,11 @@ function startStaticServer(outDir: string): Promise<void> {
     }
 
     // ── GitHub Release asset type ──────────────────────────────────
-    interface GhAsset {
-      name: string
-      url: string
-      size: number
-      updated_at: string
-      browser_download_url: string
-    }
-    interface GhRelease {
-      assets: GhAsset[]
-      published_at: string
-    }
+    // BUG #2 cross-cutting fix: removed the unused GhAsset/GhRelease
+    // interfaces that were only referenced by the dead duplicate
+    // /api/apk-download handler (now also removed). The first handler uses
+    // the proper fetchLatestReleaseInfo() + CachedRelease types defined at
+    // the module level — no need for these local interfaces.
 
     httpServer = createServer((req, res) => {
       // ── CORS headers for all responses ──────────────────────────────────
@@ -485,6 +502,32 @@ function startStaticServer(outDir: string): Promise<void> {
         return
       }
 
+      // BUG #3 cross-cutting fix (audit Remote/Mirror batch 2): 301 redirect
+      // the legacy .html variants (/mc.html, /operator.html) to the React app
+      // — same destination as the /mc + /operator redirects above. Without
+      // this, anyone who bookmarked or QR-coded the old .html URL would still
+      // get the stale standalone HTML (via the static file server's
+      // `urlPath + '.html'` fallback further down), bypassing the unified
+      // React panel. 301 (permanent) so browsers cache the redirect + don't
+      // re-hit the legacy URL on every load. We DO NOT redirect /mirror.html,
+      // /admin-ble.html, /mc-ble.html — those have no React equivalent and
+      // must still be served as standalone HTML.
+      if (urlPath === '/mc.html' || urlPath === '/operator.html') {
+        const role = urlPath === '/mc.html' ? 'mc' : 'operator'
+        // Strip the password query param if present (BUG #9 fix — no password
+        // in URLs). Other params (channel, socketPort, v) are preserved.
+        const params = new URLSearchParams(urlQuery)
+        params.delete('password')
+        params.set('role', role)
+        const newQuery = params.toString()
+        res.writeHead(301, {
+          Location: `/?${newQuery}`,
+          'Cache-Control': 'public, max-age=86400',
+        })
+        res.end()
+        return
+      }
+
       // ── Version endpoint — lightweight probe for monitoring/diagnostics ──
       // Returns the Saatiril build version (v24-client-sync-fix). MC + operator HTML
       // also expose this via <meta name="saatiril-version"> + console.log.
@@ -538,98 +581,15 @@ function startStaticServer(outDir: string): Promise<void> {
       // POST: admin-dashboard.tsx pushes project data here (more reliable than
       //       relying on SYNC_DB capture, which only fires for socket relay)
 
-      // ── API route: /api/apk-download ──────────────────────────────
-      // Proxies APK/Portable downloads from GitHub Releases so LAN
-      // operators can download even without direct internet access.
-      if (urlPath === '/api/apk-download') {
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
-        if (req.method === 'OPTIONS') {
-          res.writeHead(200)
-          res.end()
-          return
-        }
-
-        // GET: return release info (APK + Portable availability)
-        if (req.method === 'GET') {
-          const fetchReleaseInfo = async () => {
-            try {
-              const ghRes = await fetch(`https://api.github.com/repos/synclicen/Saatiril-Fullset/releases/tags/latest`, {
-                headers: { Accept: 'application/vnd.github+json' },
-              })
-              if (!ghRes.ok) throw new Error(`GitHub API returned ${ghRes.status}`)
-              const release = await ghRes.json() as GhRelease
-              const assets: GhAsset[] = release.assets || []
-              const apkAsset = assets.find((a) => a.name.endsWith('.apk'))
-              const portableAsset = assets.find((a) => a.name.endsWith('-portable.exe') || a.name === 'saatiril-portable.exe')
-
-              const toInfo = (a: GhAsset | undefined) =>
-                a ? { available: true, sizeMB: (a.size / (1024 * 1024)).toFixed(1), assetName: a.name, lastModified: a.updated_at, downloadUrl: a.browser_download_url }
-                  : { available: false, error: 'Not found in latest release' }
-
-              res.writeHead(200, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ apk: toInfo(apkAsset), portable: toInfo(portableAsset) }))
-            } catch (err: any) {
-              res.writeHead(200, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ apk: { available: false, error: err.message }, portable: { available: false, error: err.message } }))
-            }
-          }
-          fetchReleaseInfo()
-          return
-        }
-
-        // POST: proxy download from GitHub Releases
-        if (req.method === 'POST') {
-          const proxyDownload = async () => {
-            try {
-              let body: any = {}
-              try { body = await new Promise((resolve) => { let d = ''; req.on('data', (c: Buffer) => d += c); req.on('end', () => resolve(JSON.parse(d || '{}'))) }) } catch { body = {} }
-              const type = body.type || 'apk'
-
-              const ghRes = await fetch(`https://api.github.com/repos/synclicen/Saatiril-Fullset/releases/tags/latest`, {
-                headers: { Accept: 'application/vnd.github+json' },
-              })
-              if (!ghRes.ok) throw new Error(`GitHub API returned ${ghRes.status}`)
-              const release = await ghRes.json() as GhRelease
-              const assets: GhAsset[] = release.assets || []
-              const asset = type === 'portable'
-                ? assets.find((a) => a.name.endsWith('-portable.exe') || a.name === 'saatiril-portable.exe')
-                : assets.find((a) => a.name.endsWith('.apk'))
-
-              if (!asset) {
-                res.writeHead(404, { 'Content-Type': 'application/json' })
-                res.end(JSON.stringify({ error: `${type} not available in latest release` }))
-                return
-              }
-
-              // Download from GitHub and pipe to client
-              const downloadRes = await fetch(asset.url, {
-                headers: { Accept: 'application/octet-stream' },
-                redirect: 'follow',
-              })
-              if (!downloadRes.ok) throw new Error(`GitHub download returned ${downloadRes.status}`)
-
-              const buffer = Buffer.from(await downloadRes.arrayBuffer())
-              const contentType = type === 'portable' ? 'application/x-msdownload' : 'application/vnd.android.package-archive'
-              const filename = type === 'portable' ? 'saatiril-portable.exe' : 'saatiril-operator.apk'
-
-              res.writeHead(200, {
-                'Content-Type': contentType,
-                'Content-Disposition': `attachment; filename="${filename}"`,
-                'Content-Length': buffer.length.toString(),
-              })
-              res.end(buffer)
-            } catch (err: any) {
-              res.writeHead(500, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ error: err.message }))
-            }
-          }
-          proxyDownload()
-          return
-        }
-      }
+      // BUG #2 cross-cutting fix (audit Remote/Mirror batch 2): removed the
+      // dead duplicate /api/apk-download handler that previously lived here.
+      // The first /api/apk-download handler (above, around line 446) calls
+      // handleApkDownloadApi() — a proper function with the same GET/POST
+      // behavior + caching via fetchLatestReleaseInfo. The duplicate below
+      // was UNREACHABLE because the first handler returns immediately, but
+      // it was a maintenance hazard (two implementations of the same route
+      // could drift silently). Also removed the now-unused GhAsset/GhRelease
+      // interfaces that were only referenced by the dead handler.
 
       // Check cache first (O(1) lookup instead of 3× fs.existsSync)
       const cachedPath = filePathCache.get(urlPath)
@@ -813,8 +773,21 @@ function startSocketServer(): Promise<void> {
           }
         }
 
-        // Validate session password for non-admin when password is set
-        if (data.role !== 'admin' && sessionPasswordHash) {
+        // Validate session password for non-admin when password is set.
+        // BUG #4 (audit-electron-side): role='mirror' is EXEMPT from the
+        // session password requirement. The mirror is display-only (no
+        // state mutations — it only emits MIRROR_REQUEST to ask the operator
+        // for MIRROR_CONFIG). Without this exemption, when a session password
+        // is set, the mirror's identify is rejected → role becomes
+        // 'pending_auth' → its MIRROR_REQUEST lan-message is blocked by the
+        // relay auth check (line ~850) → the operator never receives the
+        // request → MIRROR_CONFIG is never sent until the operator's 10s
+        // periodic re-emit kicks in → 10s black screen on the projector.
+        // Mirrors cannot inject malicious events: the operator only acts on
+        // MIRROR_REQUEST (responding with read-only MIRROR_CONFIG); any other
+        // lan-message they emit is still subject to the receiver-side
+        // merge/sync logic which doesn't regress statuses.
+        if (data.role !== 'admin' && data.role !== 'mirror' && sessionPasswordHash) {
           // BUG FIX (audit Remote BUG #6): timing-safe comparison.
           // Previously used !== which short-circuits on first byte mismatch
           // → timing attack could recover the hash byte-by-byte.
@@ -854,7 +827,34 @@ function startSocketServer(): Promise<void> {
           }
           return
         }
-        socket.broadcast.emit('lan-message', payload)
+        // BUG #5 (audit-electron-side): filter the broadcast by role so
+        // clients only receive events they actually need. Previously
+        // `socket.broadcast.emit('lan-message', payload)` sent EVERY event
+        // to EVERY socket — including unauthenticated + wrong-role clients.
+        // The mirror (display-only) was receiving 5MB PHOTOS_SAVED payloads
+        // + full SYNC_DB databases it discards, causing CPU/memory pressure
+        // on low-power projector devices. Unauthenticated clients on the LAN
+        // also received all student data + photo base64 (the session password
+        // only blocked RELAY, not RECEIVING).
+        //  - MIRROR_* events → only 'mirror' role clients (display-only).
+        //  - All other events (SYNC_DB, MC_CALL, PHOTOS_SAVED, STUDENT_DONE,
+        //    STUDENT_RESET, OP_PROGRESS, BLE_TRIGGER, …) → only 'admin',
+        //    'mc', 'operator' roles (state-bearing clients). 'pending_auth'
+        //    + 'unknown' are excluded (they get data via the periodic 3s
+        //    SYNC_DB from admin-dashboard once they authenticate).
+        const ev = payload?.event || ''
+        const isMirrorEvent = typeof ev === 'string' && ev.indexOf('MIRROR_') === 0
+        const statefulRoles = new Set(['admin', 'mc', 'operator'])
+        const mirrorRoles = new Set(['mirror'])
+        const targetRoles = isMirrorEvent ? mirrorRoles : statefulRoles
+        for (const [sid, sinfo] of clientRegistry.entries()) {
+          if (sid === socket.id) continue  // don't echo back to sender
+          if (!targetRoles.has(sinfo.role)) continue
+          const targetSocket = socketServer!.sockets.sockets.get(sid)
+          if (targetSocket) {
+            targetSocket.emit('lan-message', payload)
+          }
+        }
       })
 
       socket.on('server-stats', (callback: (stats: any) => void) => {
@@ -1029,6 +1029,34 @@ function registerIpcHandlers() {
     } catch (err: any) {
       console.error('[SAATIRIL] count-photos failed:', err.message)
       return 0
+    }
+  })
+
+  // BUG #7 (audit-electron-side): read a photo file from disk + return it as a
+  // base64 data URL. Used by the admin gallery to LAZILY rehydrate thumbnails
+  // after an app restart — saveProjectsToStorage strips photo base64 from
+  // photoHistory (to stay under localStorage quotas), so after a restart the
+  // gallery showed entries with NO thumbnails (just the ImageIcon placeholder).
+  // The admin can now see the actual photos again without re-capturing. The
+  // renderer calls this on-demand for each visible gallery item whose `photos`
+  // array is empty. Returns null if the file is missing (e.g. operator saved
+  // to a different folder) — caller falls back to the placeholder.
+  ipcMain.handle('read-photo', async (_event, data: { filename: string; targetFolder: string }) => {
+    try {
+      const { filename, targetFolder } = data
+      if (!targetFolder || !filename) return null
+      const filePath = path.join(targetFolder, filename)
+      if (!fs.existsSync(filePath)) return null
+      const buffer = fs.readFileSync(filePath)
+      // Convert to base64 data URL (matches the format the operator emits in
+      // PHOTOS_SAVED, so the renderer's <img src> handling is identical).
+      const base64 = buffer.toString('base64')
+      const ext = path.extname(filename).toLowerCase()
+      const mime = ext === '.png' ? 'image/png' : 'image/jpeg'
+      return `data:${mime};base64,${base64}`
+    } catch (err: any) {
+      console.error('[SAATIRIL] read-photo failed:', err.message)
+      return null
     }
   })
 
@@ -1430,6 +1458,11 @@ let mainWindow: BrowserWindow | null = null
 // Uses localhost socket.io (no network latency) → smooth at 10 FPS, no WiFi
 // streaming jank. Closed automatically when the main window closes.
 let mirrorWindow: BrowserWindow | null = null
+// BUG #14 fix (audit Remote/Mirror batch 2): store the powerSaveBlocker ID
+// so we can stop it on app quit (see createWindow's 'closed' handler + the
+// app 'before-quit' event). Previously the ID was discarded → the display-
+// sleep blocker leaked past app shutdown on Windows.
+let powerSaveBlockerId: number | null = null
 const MAX_LOAD_RETRIES = 5
 const LOAD_RETRY_DELAY = 1500 // ms
 let currentRetryCount = 0
@@ -1571,10 +1604,20 @@ function createWindow() {
   mainWindow.on('minimize', handleMinimize)
   // Prevent screen sleep
   // powerSaveBlocker imported at top
-  powerSaveBlocker.start('prevent-display-sleep')
+  // BUG #14 fix (audit Remote/Mirror batch 2): store the powerSaveBlocker ID
+  // so we can stop it on app quit. Previously the ID was discarded → the
+  // blocker leaked past app shutdown on Windows (display stayed awake even
+  // after Saatiril closed). Now we stop it explicitly in the 'closed'
+  // handler + the app 'before-quit' event (whichever fires first).
+  powerSaveBlockerId = powerSaveBlocker.start('prevent-display-sleep')
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // BUG #14 fix: stop the powerSaveBlocker + release the display-sleep lock.
+    if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+      try { powerSaveBlocker.stop(powerSaveBlockerId) } catch (e) {}
+      powerSaveBlockerId = null
+    }
     // Also close the Live Mirror projector window (if open) — it doesn't
     // make sense to keep the projector view alive without the operator's
     // main window.
@@ -1669,4 +1712,13 @@ app.on('before-quit', () => {
   console.log('[SAATIRIL] App shutting down...')
   httpServer?.close()
   socketServer?.close()
+  // BUG #14 fix (audit Remote/Mirror batch 2): stop the powerSaveBlocker on
+  // quit so the display-sleep lock is released. The 'closed' handler on the
+  // main window already does this, but if the user quits via Ctrl+C / tray
+  // menu / app.quit() without first closing the main window, 'closed' may
+  // not fire before the process exits. This is the catch-all safety net.
+  if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+    try { powerSaveBlocker.stop(powerSaveBlockerId) } catch (e) {}
+    powerSaveBlockerId = null
+  }
 })

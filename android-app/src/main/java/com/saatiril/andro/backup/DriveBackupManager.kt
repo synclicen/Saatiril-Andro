@@ -152,21 +152,52 @@ class DriveBackupManager(private val context: Context) {
      * Upload a single photo to a SPECIFIC project's backup folder (PER-PROJECT).
      * @param treeUriString the project's driveFolder (SAF tree Uri string from
      *   ProjectConfig.driveFolder). null/empty → skip (no backup for this
-     *   project — NOT auto-connected). Synchronous local SAF copy (fast —
-     *   called from Dispatchers.IO in AdminViewModel.handlePhotosSaved).
-     *   No retry queue (the global enqueueUpload has the queue; the per-project
-     *   case is a direct copy).
-     * @return true if the copy succeeded, false if skipped or failed.
+     *   project — NOT auto-connected).
+     *
+     * BUG #6 fix: route through [UploadQueueStore] so per-project uploads get
+     * the same retry / persistence / worker-drain guarantees as global uploads.
+     * The previous implementation did a direct synchronous copy on the
+     * caller's thread — if it failed (Drive app not yet synced, transient
+     * I/O error, …) the photo was silently NOT backed up and there was no
+     * retry path. Now the photo is enqueued with the per-project tree URI;
+     * [DriveUploadWorker] picks it up via [processNext] and retries on
+     * failure with the same exponential-backoff path the global folder uses.
+     *
+     * @return true always (the enqueue itself is best-effort and retried by
+     *   the worker). False only if the tree URI is null/empty (no backup
+     *   configured for this project).
      */
     fun uploadPhotoForProject(localUri: String, filename: String, treeUriString: String?): Boolean {
         if (treeUriString.isNullOrEmpty()) {
             Log.i(TAG, "uploadPhotoForProject: no driveFolder for this project — skipping (local save only)")
             return false
         }
+        // Validate the tree URI parses before enqueueing (cheap sanity check).
         val treeUri = try { Uri.parse(treeUriString) } catch (_: Exception) { return false }
-        // Reuse the core upload logic with the project's treeUri (not the global).
-        return uploadPhotoToTreeUri(localUri, filename, treeUri)
+        // BUG #6: enqueue with the per-project tree URI. The worker will read
+        // item.treeUri and route the upload via uploadPhotoToTreeUri.
+        val projectName = _currentProjectNameForQueue
+        queueStore.enqueue(filename, localUri, projectName, treeUri.toString())
+        Log.i(TAG, "BUG#6: enqueued per-project upload: $filename → tree=$treeUri (project=$projectName)")
+        return true
     }
+
+    /**
+     * BUG #6 helper: the worker reads [UploadItem.treeUri] and dispatches to
+     * either the global [uploadPhoto] (treeUri == null) or the per-project
+     * [uploadPhotoToTreeUri] (treeUri != null). Exposed so [processNext] can
+     * route correctly.
+     */
+    private fun uploadItem(item: UploadItem): Boolean {
+        return if (item.treeUri.isNullOrEmpty()) {
+            uploadPhoto(item.localUri, item.filename)
+        } else {
+            uploadPhotoToTreeUri(item.localUri, item.filename, Uri.parse(item.treeUri))
+        }
+    }
+
+    /** BUG #6: per-project name tag used in queue rows (best-effort). */
+    @Volatile private var _currentProjectNameForQueue: String = "default"
 
     /** Core upload logic — shared by uploadPhoto (global) + uploadPhotoForProject (per-project). */
     private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri): Boolean {
@@ -260,7 +291,9 @@ class DriveBackupManager(private val context: Context) {
 
         queueStore.markUploading(item.id)
 
-        val success = uploadPhoto(item.localUri, item.filename)
+        // BUG #6: route via uploadItem which dispatches to the per-project
+        // tree URI (if set) or the global backup folder (if not).
+        val success = uploadItem(item)
 
         if (success) {
             queueStore.markDone(item.id)

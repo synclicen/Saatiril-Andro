@@ -18,10 +18,14 @@ import com.saatiril.andro.server.ServerService
 import com.saatiril.andro.server.ServerStats
 import com.saatiril.andro.util.ExcelImporter
 import com.saatiril.andro.util.PhotoSaver
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -456,6 +460,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val _project = MutableStateFlow<Project?>(null)
     val project: StateFlow<Project?> = _project.asStateFlow()
 
+    // BUG #2 fix: serialize all read-modify-write mutations of _project.value.
+    // Multiple lan-message handlers (handlePhotosSaved, handleMcCall,
+    // handleStudentDone, handleStudentReset) plus UI actions (callStudent,
+    // resetStudent, markStudentDone, handleLocalCapture, …) all do
+    // `_project.value = _project.value.copy(...)` — without serialization,
+    // two concurrent updates race and one update is silently lost.
+    private val projectMutex = Mutex()
+
+    // BUG #9 fix: app-scoped CoroutineScope so persistProject() survives
+    // ViewModel clear (the ViewModel is destroyed when the user leaves the
+    // Admin screen mid-ceremony, but the foreground ServerService keeps the
+    // process alive — we still want the final project state on disk).
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     /** Startup error message (shown on the Setup screen if the server fails to start). */
     private val _startupError = MutableStateFlow<String?>(null)
     val startupError: StateFlow<String?> = _startupError.asStateFlow()
@@ -764,47 +782,90 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Handle trigger from MC Remote (via BLE). */
     private fun handleBLETrigger(action: String, studentId: String?) {
-        val proj = _project.value ?: return
-        val myChannel = 1 // Admin is always channel 1 in combined mode
+        // BUG #2 fix: wrap the entire action in a single coroutine so the
+        // final pushBLEQueueData / pushBLENextStudent observe the updated
+        // state. Previously callStudent / resetStudent did their own (now
+        // async) RMW launches and the synchronous pushBLE* at the end read
+        // stale state — the MC's queue list flickered back to the pre-action
+        // state for one frame.
+        viewModelScope.launch {
+            val myChannel = 1 // Admin is always channel 1 in combined mode
 
-        when (action) {
-            com.saatiril.andro.ble.BLEProtocol.Action.PANGGIL -> {
-                // Call the next pending student
-                val nextPending = proj.database.firstOrNull { it.status == "pending" }
-                if (nextPending != null) {
-                    callStudent(nextPending, myChannel)
-                }
-            }
-            com.saatiril.andro.ble.BLEProtocol.Action.NEXT -> {
-                // Skip current active, call next pending
-                val active = proj.database.firstOrNull { isActiveStatus(it.status) }
-                if (active != null) {
-                    // Reset active to pending, then call next
-                    resetStudent(active.id, myChannel)
-                    val nextPending = proj.database.firstOrNull { it.status == "pending" }
+            when (action) {
+                com.saatiril.andro.ble.BLEProtocol.Action.PANGGIL -> {
+                    val nextPending = _project.value?.database?.firstOrNull { it.status == "pending" }
                     if (nextPending != null) {
-                        callStudent(nextPending, myChannel)
-                    }
-                } else {
-                    // No active, just call next pending
-                    val nextPending = proj.database.firstOrNull { it.status == "pending" }
-                    if (nextPending != null) {
-                        callStudent(nextPending, myChannel)
+                        applyCallStudent(nextPending, myChannel)
                     }
                 }
-            }
-            com.saatiril.andro.ble.BLEProtocol.Action.RESET -> {
-                // Reset current active student
-                val active = proj.database.firstOrNull { isActiveStatus(it.status) }
-                if (active != null) {
-                    resetStudent(active.id, myChannel)
+                com.saatiril.andro.ble.BLEProtocol.Action.NEXT -> {
+                    val proj = _project.value
+                    if (proj != null) {
+                        val active = proj.database.firstOrNull { isActiveStatus(it.status) }
+                        if (active != null) {
+                            applyResetStudent(active.id, myChannel)
+                            val nextPending = _project.value?.database?.firstOrNull { it.status == "pending" }
+                            if (nextPending != null) {
+                                applyCallStudent(nextPending, myChannel)
+                            }
+                        } else {
+                            val nextPending = proj.database.firstOrNull { it.status == "pending" }
+                            if (nextPending != null) {
+                                applyCallStudent(nextPending, myChannel)
+                            }
+                        }
+                    }
+                }
+                com.saatiril.andro.ble.BLEProtocol.Action.RESET -> {
+                    val active = _project.value?.database?.firstOrNull { isActiveStatus(it.status) }
+                    if (active != null) {
+                        applyResetStudent(active.id, myChannel)
+                    }
                 }
             }
+
+            // Update BLE data after action — now reads the updated _project.value.
+            pushBLEQueueData()
+            pushBLENextStudent()
         }
+    }
 
-        // Update BLE data after action
-        pushBLEQueueData()
-        pushBLENextStudent()
+    /**
+     * BUG #2 helper: inlined callStudent RMW (acquires projectMutex).
+     * Used by [handleBLETrigger] so the whole action runs in one coroutine
+     * (calling the public [callStudent] would launch a SEPARATE coroutine
+     * and the parent's subsequent pushBLE* would race the state update).
+     */
+    private suspend fun applyCallStudent(student: Student, channel: Int) {
+        projectMutex.withLock {
+            val cur = _project.value ?: return@withLock
+            val updatedDb = cur.database.map { s ->
+                if (s.id == student.id) s.copy(status = "active_$channel") else s
+            }
+            val updated = cur.copy(database = updatedDb)
+            _project.value = updated
+            persistProject(updated)
+        }
+        SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, channel))
+        pushSyncDb()
+        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.READY, student.id)
+    }
+
+    /** BUG #2 helper: inlined resetStudent RMW (acquires projectMutex). See [applyCallStudent]. */
+    private suspend fun applyResetStudent(studentId: String, channel: Int) {
+        projectMutex.withLock {
+            val cur = _project.value ?: return@withLock
+            val updatedDb = cur.database.map { s ->
+                if (s.id == studentId) s.copy(status = "pending") else s
+            }
+            val updatedHistory = cur.photoHistory.filterNot { it.student.id == studentId }
+            val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory)
+            _project.value = updated
+            persistProject(updated)
+        }
+        SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
+        pushSyncDb()
+        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.STANDBY, studentId)
     }
 
     /** Push current queue data to MC via BLE. */
@@ -957,7 +1018,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             _capturePhase.value = if (currentPhotos.size == 1) CapturePhase.READY_2 else CapturePhase.READY_1
             // #11: Emit OP_PROGRESS so MC tab shows live operator status (matches Electron operator-panel.tsx:805)
             val progressMsg = if (currentPhotos.size == 1) "Pose 1 OK — Siap Foto 2" else "Siap Foto 1"
-            _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, progressMsg) }
+            // BUG #15 fix: use _opProgress.update { } for atomic RMW.
+            _opProgress.update { it.toMutableMap().apply { put(channel, progressMsg) } }
             SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
                 OpProgressData(channel = channel, status = progressMsg))
             return
@@ -985,84 +1047,103 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Save each photo to the SAF output folder (on IO dispatcher)
-        // CRITICAL: This must complete BEFORE we broadcast PHOTOS_SAVED.
-        // The save is synchronous within the coroutine to ensure photos are
-        // actually written to disk before the app reports success.
-        viewModelScope.launch(Dispatchers.IO) {
-            // First verify the output folder is accessible
-            val folderUri = photoSaver.getOutputFolder()
-            if (folderUri == null) {
-                Log.e(TAG, "=== SAVE FAILED: No output folder set! ===")
-                Log.e(TAG, "PhotoSaver.getOutputFolder() returned null. " +
-                    "Check if pickOutputFolder() was called and persisted URI permission was granted.")
+        // BUG #1 fix: photo save MUST complete (await) BEFORE the DB is marked
+        // "done". The previous implementation launched the save fire-and-forget
+        // on Dispatchers.IO and immediately marked the student done in the DB +
+        // broadcast PHOTOS_SAVED. If the save failed (SAF folder revoked, disk
+        // full, …) the operator was already advanced and the photos were lost
+        // with no UI signal. Now the save is awaited inline; on failure we
+        // surface an error and DO NOT mark done (the operator can retry the
+        // shutter).
+        viewModelScope.launch {
+            val savedOk = withContext(Dispatchers.IO) {
+                val folderUri = photoSaver.getOutputFolder()
+                if (folderUri == null) {
+                    Log.e(TAG, "=== SAVE FAILED: No output folder set! ===")
+                    return@withContext false
+                }
+                Log.i(TAG, "=== Saving ${photos.size} photo(s) to folder: $folderUri ===")
+                for ((i, photo) in photos.withIndex()) {
+                    try {
+                        Log.i(TAG, "Saving photo ${i+1}/${photos.size}: ${filenames[i]}")
+                        val savedUri = photoSaver.savePhoto(photo, filenames[i])
+                        if (savedUri != null) {
+                            Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
+                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder)
+                        } else {
+                            Log.e(TAG, "❌ Photo save returned null: ${filenames[i]}")
+                            return@withContext false
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to save ${filenames[i]}: ${e.message}", e)
+                        return@withContext false
+                    }
+                }
+                Log.i(TAG, "=== Save complete: ${photos.size} photo(s) processed ===")
+                true
+            }
+
+            if (!savedOk) {
+                // BUG #1: save failed — DO NOT mark done. Reset phase so the
+                // operator can retry the shutter, and surface the error.
+                _capturePhase.value = if (photosPerSession == 2) CapturePhase.READY_2 else CapturePhase.READY_1
+                val errMsg = "Gagal simpan foto ke disk — coba lagi"
+                _opProgress.update { it.toMutableMap().apply { put(channel, errMsg) } }
+                SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
+                    OpProgressData(channel = channel, status = errMsg))
                 return@launch
             }
-            Log.i(TAG, "=== Saving ${photos.size} photo(s) to folder: $folderUri ===")
 
-            for ((i, photo) in photos.withIndex()) {
-                try {
-                    Log.i(TAG, "Saving photo ${i+1}/${photos.size}: ${filenames[i]} " +
-                        "(base64 length: ${photo.length})")
-                    val savedUri = photoSaver.savePhoto(photo, filenames[i])
-                    if (savedUri != null) {
-                        Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
-                        // Per-project Google Drive backup (PER-PROJECT, opt-in).
-                        // uploadPhotoForProject uses THIS project's driveFolder
-                        // (null = no backup for this project — NOT auto-connected).
-                        // Synchronous local SAF copy on Dispatchers.IO (fast).
-                        driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder)
-                    } else {
-                        Log.e(TAG, "❌ Photo save returned null: ${filenames[i]} " +
-                            "(savePhoto returned null — check PhotoSaver logs)")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Failed to save ${filenames[i]}: ${e.message}", e)
+            // BUG #2 fix: serialize the read-modify-write on _project.value.
+            // handleMcCall / handleStudentReset / handlePhotosSaved may run
+            // concurrently on the lan-message handler thread; without the
+            // mutex a concurrent update would be silently lost.
+            val rmwOk = projectMutex.withLock {
+                val cur = _project.value ?: return@withLock false
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) {
+                        // Dual-photoshoot: done if EITHER channel has photographed.
+                        // Other modes: done after this capture session.
+                        s.copy(status = "done")
+                    } else s
                 }
+                val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
+                val updatedVersions = cur.captureVersions.toMutableMap().apply { put(versionKey, newVersion) }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
+                _project.value = updated
+                persistProject(updated)
+                true
             }
-            Log.i(TAG, "=== Save complete: ${photos.size} photo(s) processed ===")
+            if (!rmwOk) return@launch
+
+            // Broadcast PHOTOS_SAVED (so remote operators/MCs update) + SYNC_DB
+            SaatirilServer.broadcastLanMessage(SocketEvents.PHOTOS_SAVED, PhotosSavedData(
+                student = student.copy(status = "done"),
+                photos = photos,
+                channel = channel,
+                version = newVersion,
+                filename = filenames.firstOrNull() ?: ""
+            ))
+            // In non-photoshoot modes, also emit STUDENT_DONE (matches Electron operator-panel.tsx:894)
+            // so the MC panel unblocks immediately without waiting for the heavy PHOTOS_SAVED payload.
+            if (!isPhotoshoot) {
+                SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(student.id, channel))
+            }
+            // #11: Emit OP_PROGRESS "Selesai" so MC knows operator is done (matches Electron operator-panel.tsx:907)
+            _opProgress.update { it.toMutableMap().apply { put(channel, "Selesai — Menunggu target...") } }
+            SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
+                OpProgressData(channel = channel, status = "Selesai — Menunggu target..."))
+            pushSyncDb()
+
+            // Update BLE MC Remote — photo done, ready for next
+            bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.DONE, student.id)
+            pushBLEQueueData()
+            pushBLENextStudent()
+
+            // Reset capture state for the next student
+            resetCaptureState()
         }
-
-        // Update project DB
-        val updatedDb = proj.database.map { s ->
-            if (s.id == student.id) {
-                // Dual-photoshoot: done if EITHER channel has photographed.
-                // Other modes: done after this capture session.
-                s.copy(status = "done")
-            } else s
-        }
-        val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
-        val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
-        val updatedVersions = proj.captureVersions.toMutableMap().apply { put(versionKey, newVersion) }
-        _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
-        _project.value?.let { persistProject(it) }
-
-        // Broadcast PHOTOS_SAVED (so remote operators/MCs update) + SYNC_DB
-        SaatirilServer.broadcastLanMessage(SocketEvents.PHOTOS_SAVED, PhotosSavedData(
-            student = student.copy(status = "done"),
-            photos = photos,
-            channel = channel,
-            version = newVersion,
-            filename = filenames.firstOrNull() ?: ""
-        ))
-        // In non-photoshoot modes, also emit STUDENT_DONE (matches Electron operator-panel.tsx:894)
-        // so the MC panel unblocks immediately without waiting for the heavy PHOTOS_SAVED payload.
-        if (!isPhotoshoot) {
-            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(student.id, channel))
-        }
-        // #11: Emit OP_PROGRESS "Selesai" so MC knows operator is done (matches Electron operator-panel.tsx:907)
-        _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, "Selesai — Menunggu target...") }
-        SaatirilServer.broadcastLanMessage(SocketEvents.OP_PROGRESS,
-            OpProgressData(channel = channel, status = "Selesai — Menunggu target..."))
-        pushSyncDb()
-
-        // Update BLE MC Remote — photo done, ready for next
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.DONE, student.id)
-        pushBLEQueueData()
-        pushBLENextStudent()
-
-        // Reset capture state for the next student
-        resetCaptureState()
     }
 
     // ─── Server state (delegated to SaatirilServer singleton) ───
@@ -1085,26 +1166,26 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * Channels are INDEPENDENT in dual mode — ch1 MC → ch1 operator only.
      */
     fun callStudent(student: Student, channel: Int) {
-        _project.value?.let { proj ->
-            // Simple map — only set the called student to active_N. No stale-reset
-            // scan (matches the Electron handleCallNow fix ce50e92: in normal flow
-            // STUDENT_DONE marks the previous student 'done' before the MC calls
-            // the next, so no stale active_N to reset).
-            val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "active_$channel") else s
+        // BUG #2 fix: serialize the RMW on _project.value via projectMutex.
+        // The broadcast + BLE push happen INSIDE the same coroutine so they
+        // observe the updated state (pushSyncDb / pushBLEQueueData read
+        // _project.value).
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) s.copy(status = "active_$channel") else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes (same rationale as handleMcCall — a
-            // crash mid-ceremony must not revert the call queue).
-            persistProject(updated)
+            SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, channel))
+            pushSyncDb()
+            pushBLEQueueData()
+            pushBLENextStudent()
+            bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.READY, student.id)
         }
-        SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, channel))
-        pushSyncDb()
-        // Update BLE MC Remote
-        pushBLEQueueData()
-        pushBLENextStudent()
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.READY, student.id)
     }
 
     /**
@@ -1114,20 +1195,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * Sets status to 'sent' (not active_N), operators pick from queue.
      */
     fun sendToOperator(student: Student, channels: List<Int>) {
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = "sent") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) s.copy(status = "sent") else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes (crash mid-ceremony must not revert).
-            persistProject(updated)
+            for (ch in channels) {
+                SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, ch))
+            }
+            pushSyncDb()
         }
-        // Emit MC_CALL to each requested channel
-        for (ch in channels) {
-            SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(student, ch))
-        }
-        pushSyncDb()
     }
 
     /**
@@ -1146,64 +1229,66 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun sendBatchToOperator(students: List<Student>, channels: List<Int>) {
         if (students.isEmpty()) return
-        _project.value?.let { proj ->
-            val selectedIds = students.map { it.id }.toSet()
-            val updatedDb = proj.database.map { s ->
-                if (selectedIds.contains(s.id)) s.copy(status = "sent") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val selectedIds = students.map { it.id }.toSet()
+                val updatedDb = cur.database.map { s ->
+                    if (selectedIds.contains(s.id)) s.copy(status = "sent") else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes (crash mid-ceremony must not revert the
-            // batch send).
-            persistProject(updated)
-        }
-        // Emit MC_CALL for each (student × channel). Order matters in dual mode
-        // (both channels must see the same student before the next).
-        for (student in students) {
-            val sentStudent = student.copy(status = "sent")
-            for (ch in channels) {
-                SaatirilServer.broadcastLanMessage(
-                    SocketEvents.MC_CALL,
-                    McCallData(sentStudent, ch)
-                )
+            for (student in students) {
+                val sentStudent = student.copy(status = "sent")
+                for (ch in channels) {
+                    SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(sentStudent, ch))
+                }
             }
+            pushSyncDb()
         }
-        // Lightweight SYNC_DB once at the end (photos stripped).
-        pushSyncDb()
     }
 
     fun resetStudent(studentId: String, channel: Int) {
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == studentId) s.copy(status = "pending") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == studentId) s.copy(status = "pending") else s
+                }
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == studentId }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory)
+                _project.value = updated
+                persistProject(updated)
             }
-            // Clear ALL photoHistory entries for this student (matches Electron mc-panel.tsx 423-425)
-            val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
-            _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
-            _project.value?.let { persistProject(it) }
+            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
+            pushSyncDb()
+            pushBLEQueueData()
+            pushBLENextStudent()
+            bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.STANDBY, studentId)
         }
-        SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
-        pushSyncDb()
-        // Update BLE MC Remote
-        pushBLEQueueData()
-        pushBLENextStudent()
-        bleServerManager.updateStatus(com.saatiril.andro.ble.BLEProtocol.Phase.STANDBY, studentId)
     }
 
     /** markStudentDone is now ONLY called automatically by handlePhotosSaved/handleLocalCapture.
      *  Removed from MC panel — completion is event-driven (operator photo → auto-done). */
     fun markStudentDone(studentId: String, channel: Int) {
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == studentId) s.copy(status = "done") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == studentId) s.copy(status = "done") else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes (same rationale as handleStudentDone).
-            persistProject(updated)
+            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(studentId, channel))
+            pushSyncDb()
         }
-        SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_DONE, StudentDoneData(studentId, channel))
-        pushSyncDb()
     }
 
     /**
@@ -1215,10 +1300,14 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * own folder (or none).
      */
     fun setProjectDriveFolder(folderUri: String?) {
-        _project.value?.let { proj ->
-            val updated = proj.copy(config = proj.config.copy(driveFolder = folderUri))
-            _project.value = updated
-            persistProject(updated)
+        // BUG #2 fix: serialize RMW via projectMutex.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updated = cur.copy(config = cur.config.copy(driveFolder = folderUri))
+                _project.value = updated
+                persistProject(updated)
+            }
         }
     }
 
@@ -1245,7 +1334,8 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val obj = data as? JsonObject ?: return
         val channel = obj.get("channel")?.takeIf { !it.isJsonNull }?.asInt ?: return
         val status = obj.get("status")?.takeIf { !it.isJsonNull }?.asString ?: return
-        _opProgress.value = _opProgress.value.toMutableMap().apply { put(channel, status) }
+        // BUG #15 fix: use _opProgress.update { } for atomic RMW.
+        _opProgress.update { it.toMutableMap().apply { put(channel, status) } }
         Log.d(TAG, "OP_PROGRESS ch$channel: $status")
     }
 
@@ -1284,58 +1374,66 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val isDualPhotoshoot = mode == CameraModes.DUAL_PHOTOSHOOT
         val photosPerSession = CameraModes.photosPerSession(mode)
 
-        // hasEnoughPhotos check (matches Electron admin-dashboard.tsx line 173)
         if (photos.size < photosPerSession) {
             Log.w(TAG, "PHOTOS_SAVED: not enough photos (${photos.size} < $photosPerSession) — ignoring")
             return
         }
 
-        // Save each photo to the SAF output folder.
-        viewModelScope.launch(Dispatchers.IO) {
-            for ((i, photo) in photos.withIndex()) {
-                val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size, isPhotoshoot)
-                try {
-                    val savedUri = photoSaver.savePhoto(photo, filename)
-                    if (savedUri != null) {
-                        // Per-project Google Drive backup (PER-PROJECT, opt-in).
-                        // Uses THIS project's driveFolder (null = no backup —
-                        // NOT auto-connected). Synchronous local SAF copy.
-                        driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder)
+        // BUG #1 fix: await the photo save BEFORE marking done. The previous
+        // implementation launched the save fire-and-forget on Dispatchers.IO
+        // and immediately marked the student done in the DB — if the save
+        // failed the photos were lost and the student was wrongly shown as
+        // done. Now the save is awaited; on failure we DO NOT mark done.
+        viewModelScope.launch {
+            val savedOk = withContext(Dispatchers.IO) {
+                var allOk = true
+                for ((i, photo) in photos.withIndex()) {
+                    val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size, isPhotoshoot)
+                    try {
+                        val savedUri = photoSaver.savePhoto(photo, filename)
+                        if (savedUri != null) {
+                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder)
+                        } else {
+                            Log.e(TAG, "Failed to save photo $filename: savePhoto returned null")
+                            allOk = false
+                            break
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save photo $filename: ${e.message}")
+                        allOk = false
+                        break
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save photo $filename: ${e.message}")
                 }
+                allOk
+            }
+            if (!savedOk) {
+                Log.e(TAG, "handlePhotosSaved: photo save failed — DB NOT marked done (operator may retry)")
+                return@launch
+            }
+
+            val shouldMarkDone = if (isDualPhotoshoot) {
+                val otherChannel = if (channel == 1) 2 else 1
+                proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
+            } else {
+                true
+            }
+
+            // BUG #2 fix: serialize the read-modify-write on _project.value.
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
+                }
+                val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
+                val updatedVersions = cur.captureVersions.toMutableMap().apply {
+                    put("${student.id}_$channel", version)
+                }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
+                _project.value = updated
+                persistProject(updated)
             }
         }
-
-        // Determine if the student is "done":
-        // - Standard / single-photoshoot: done after this PHOTOS_SAVED.
-        // - Dual-photoshoot (#9): done only when BOTH channels have photographed —
-        //   this channel just got its photos, so require the OTHER channel's
-        //   photoHistory entry too (the cross-channel check that was previously
-        //   computed but never used — `otherHasPhotos` was dead code).
-        val shouldMarkDone = if (isDualPhotoshoot) {
-            val otherChannel = if (channel == 1) 2 else 1
-            proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
-        } else {
-            true
-        }
-
-        // Update project: add to photoHistory, mark student done (if applicable).
-        val updatedDb = proj.database.map { s ->
-            if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
-        }
-        val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
-        val updatedHistory = proj.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
-        val updatedVersions = proj.captureVersions.toMutableMap().apply {
-            put("${student.id}_$channel", version)
-        }
-        _project.value = proj.copy(
-            database = updatedDb,
-            photoHistory = updatedHistory,
-            captureVersions = updatedVersions
-        )
-        _project.value?.let { persistProject(it) }
     }
 
     private fun handleMcCall(data: JsonElement?) {
@@ -1343,65 +1441,58 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val studentObj = obj.get("student") as? JsonObject ?: return
         val student = parseStudent(studentObj)
         val channel = obj.get("channel")?.takeIf { !it.isJsonNull }?.asInt ?: 1
-        _project.value?.let { proj ->
-            // Mode-aware status: photoshoot → "sent" (queued for operator to
-            // pick from list), non-photoshoot → "active_$channel" (one student
-            // on stage at a time). This is critical for the MC remote's
-            // multi-select batch-send flow: the MC emits MC_CALL with the
-            // student carrying status="sent", and we must NOT revert it back to
-            // "active_$channel" on the server side — otherwise the SYNC_DB we
-            // broadcast would overwrite the MC's local "sent" status, breaking
-            // the operator queue (operators show 'sent'/'active_N' students as
-            // photographable, but "active_N" semantically means "currently on
-            // stage", which is wrong for the photoshoot queue).
-            val mode = proj.config.mode
-            val newStatus = if (CameraModes.isPhotoshootMode(mode)) "sent" else "active_$channel"
-            val updatedDb = proj.database.map { s ->
-                if (s.id == student.id) s.copy(status = newStatus) else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val mode = cur.config.mode
+                val newStatus = if (CameraModes.isPhotoshootMode(mode)) "sent" else "active_$channel"
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) s.copy(status = newStatus) else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes so a crash mid-ceremony doesn't revert
-            // the MC call queue.
-            persistProject(updated)
+            pushSyncDb()
         }
-        // Broadcast updated DB to all clients (including the MC that sent this)
-        // so MC web panel sees the status change confirmed
-        pushSyncDb()
     }
 
     private fun handleStudentDone(data: JsonElement?) {
         val obj = data as? JsonObject ?: return
         val studentId = obj.get("studentId")?.takeIf { !it.isJsonNull }?.asString ?: return
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == studentId) s.copy(status = "done") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == studentId) s.copy(status = "done") else s
+                }
+                val updated = cur.copy(database = updatedDb)
+                _project.value = updated
+                persistProject(updated)
             }
-            val updated = proj.copy(database = updatedDb)
-            _project.value = updated
-            // #7: persist status changes so a crash mid-ceremony doesn't revert
-            // the student's done state.
-            persistProject(updated)
+            pushSyncDb()
         }
-        // Broadcast updated DB to all clients
-        pushSyncDb()
     }
 
     private fun handleStudentReset(data: JsonElement?) {
         val obj = data as? JsonObject ?: return
         val studentId = obj.get("studentId")?.takeIf { !it.isJsonNull }?.asString ?: return
-        _project.value?.let { proj ->
-            val updatedDb = proj.database.map { s ->
-                if (s.id == studentId) s.copy(status = "pending") else s
+        // BUG #2 fix: serialize RMW via projectMutex; broadcast after the state update.
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == studentId) s.copy(status = "pending") else s
+                }
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == studentId }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory)
+                _project.value = updated
+                persistProject(updated)
             }
-            // Clear ALL photoHistory entries for this student so the operator
-            // queue re-shows them (matches Electron mc-panel.tsx lines 423-425).
-            val updatedHistory = proj.photoHistory.filterNot { it.student.id == studentId }
-            _project.value = proj.copy(database = updatedDb, photoHistory = updatedHistory)
-            _project.value?.let { persistProject(it) }
+            pushSyncDb()
         }
-        // Broadcast updated DB to all clients
-        pushSyncDb()
     }
 
     private fun handleRequestState(senderSid: String?) {
@@ -1431,8 +1522,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     private val saveMutex = Mutex()
 
     private fun persistProject(project: Project) {
-        viewModelScope.launch(Dispatchers.IO) {
-            saveMutex.withLock { projectStore.save(project) }
+        // BUG #9 fix: use appScope (SupervisorJob + Dispatchers.IO) instead of
+        // viewModelScope. viewModelScope is cancelled on ViewModel clear (when
+        // the user leaves the Admin screen mid-ceremony); if a persistProject
+        // call was in-flight at that moment the file write was cancelled and
+        // the on-disk project JSON could be left in an inconsistent state
+        // (missing the last status update). appScope outlives the ViewModel —
+        // the foreground ServerService keeps the process alive, so the
+        // coroutine completes the disk write even after the ViewModel is gone.
+        // NonCancellable is wrapped around the actual save so the save
+        // completes even if the launching scope itself is cancelled mid-write.
+        appScope.launch {
+            saveMutex.withLock {
+                withContext(NonCancellable) { projectStore.save(project) }
+            }
         }
     }
 

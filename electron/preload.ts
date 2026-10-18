@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('count-photos', data)
   },
 
+  // BUG #7 (audit-electron-side): read a photo from disk → base64 data URL.
+  // Used by the admin gallery to lazily rehydrate thumbnails after an app
+  // restart (saveProjectsToStorage strips photo base64 from photoHistory to
+  // stay under localStorage quotas). Returns null if the file is missing.
+  readPhoto: (data: { filename: string; targetFolder: string }): Promise<string | null> => {
+    return ipcRenderer.invoke('read-photo', data)
+  },
+
   getLanInfo: (): Promise<{
     httpPort: number
     socketPort: number

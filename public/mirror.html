@@ -162,6 +162,13 @@
       var nativeCameraStarted = false;
       var currentDeviceId = null;   // BUG #3 fix: track current camera device
       var currentStream = null;     // BUG #3 fix: track current MediaStream for cleanup
+      // BUG #10 (audit-electron-side): track the last applied frameData so we
+      // skip the (expensive) `frameOverlay.src = data.frameData` re-assignment
+      // when the operator's periodic 10s MIRROR_CONFIG re-sends the SAME
+      // frameData (which is the common case after the initial config). Setting
+      // .src to a 500KB-2MB base64 data URL forces the browser to re-decode
+      // the image; over a 4-hour ceremony that's ~1440 redundant decodes.
+      var lastAppliedFrameData = '';
       var countdown = document.getElementById('countdown');
       var flash = document.getElementById('flash');
       var hint = document.getElementById('hint');
@@ -276,6 +283,20 @@
       // only (no visual status badge — projector view is clean).
       var frameCount = 0;
       var lastFrameAt = 0;
+      // BUG #8 fix (audit Remote/Mirror batch 2): track when the IPC fast path
+      // last set img.src. The socket.io MIRROR_FRAME handler is a backup that
+      // often arrives ~50-150ms AFTER the IPC frame for the same capture (the
+      // operator sends both simultaneously, IPC is faster). Previously the
+      // socket.io handler unconditionally revoked img._lastBlobUrl (which was
+      // the IPC's CURRENT blob URL — still pointed to by img.src) and then
+      // overwrote img.src with an OLDER frame. This caused:
+      //   1. Brief flicker (newer IPC frame replaced by older socket.io frame).
+      //   2. The displayed image's blob URL was revoked before being replaced,
+      //      so for 1 frame the <img> pointed at a revoked blob: URL.
+      // Now the socket.io handler skips its img.src assignment entirely when
+      // IPC set one within the last 100ms — IPC frames always win when both
+      // are flowing, and socket.io only takes over if IPC went silent.
+      var lastIpcFrameAt = 0;
       var lastFrameCheck = setInterval(function() {
         if (frameCount > 0 && Date.now() - lastFrameAt > 3000) {
           // Frames were arriving but stopped — operator likely toggled OFF
@@ -306,6 +327,9 @@
             img.classList.remove('loading');
             frameCount++;
             lastFrameAt = Date.now();
+            // BUG #8 fix: mark IPC as the most-recent path so the socket.io
+            // backup handler can defer for the next 100ms.
+            lastIpcFrameAt = lastFrameAt;
             if (frameCount === 1) {
               console.log('[MIRROR] first IPC frame: blob size=', blob.size, 'B');
             }
@@ -328,7 +352,22 @@
           // will be set twice per frame (once from IPC, once from socket.io)
           // — the second one overwrites the first, no harm. This ensures
           // the mirror NEVER goes black due to IPC failure.
+          //
+          // BUG #8 fix (audit Remote/Mirror batch 2): if IPC just set img.src
+          // within the last 100ms, SKIP this socket.io frame entirely. The
+          // socket.io path arrives ~50-150ms after IPC for the same capture
+          // (operator emits both simultaneously). Without this skip, the
+          // socket.io handler would revoke the IPC's CURRENT blob URL (still
+          // pointed to by img.src) and overwrite img.src with an OLDER frame,
+          // causing a visible flicker + a 1-frame window where img.src points
+          // at a revoked blob: URL. With the skip, IPC frames always win when
+          // both are flowing; socket.io only takes over if IPC went silent.
           if (data.frame) {
+            if (lastIpcFrameAt && (Date.now() - lastIpcFrameAt) < 100) {
+              // IPC is actively streaming — defer to the faster path. Don't
+              // even decode the base64 / revoke the blob URL.
+              return;
+            }
             // Operator sends a base64 data URL string (toBlob + FileReader
             // async on operator side — no main-thread block there). We just
             // set img.src directly — the browser handles the base64 decode
@@ -413,13 +452,24 @@
             console.log('[MIRROR] applied aspectRatio:', aspectCss);
           }
           // Apply the frame overlay.
+          // BUG #10 (audit-electron-side): skip the .src re-assignment if the
+          // frameData is unchanged since the last MIRROR_CONFIG. The operator
+          // re-emits MIRROR_CONFIG every 10s (periodic) regardless of whether
+          // frameData changed — re-setting .src forces a redundant image
+          // decode (500KB-2MB) each time, causing CPU/memory pressure on
+          // low-power projector devices. We compare against the last applied
+          // value + only write .src when it actually changed.
           if (typeof data.frameData === 'string' && data.frameData.length > 0) {
-            frameOverlay.src = data.frameData;
+            if (data.frameData !== lastAppliedFrameData) {
+              frameOverlay.src = data.frameData;
+              lastAppliedFrameData = data.frameData;
+              console.log('[MIRROR] applied frame overlay, size=', Math.round(data.frameData.length / 1024) + 'KB');
+            }
             frameOverlay.classList.add('show');
-            console.log('[MIRROR] applied frame overlay, size=', Math.round(data.frameData.length / 1024) + 'KB');
           } else {
             frameOverlay.classList.remove('show');
             frameOverlay.removeAttribute('src');
+            lastAppliedFrameData = '';
           }
           // Apply the mirror (flip) setting to both img + video.
           if (data.mirror === false) {
@@ -483,7 +533,24 @@
       });
 
       // ── Cleanup blob URL on page unload (prevent memory leak) ─────────────
+      // BUG #14 fix (audit Remote/Mirror batch 2): also clear the watchdog
+      // interval (lastFrameCheck) + stop the native camera stream (if any)
+      // on beforeunload. Previously the 1.5s interval kept firing after the
+      // page was closed → zombie timer in some embedded projector browsers
+      // (Raspberry Pi, kiosk-mode Chromium) that don't immediately tear down
+      // the JS context on page close. Also the native camera stream stayed
+      // held (NotReadableError for the next page that tried to use it).
       window.addEventListener('beforeunload', function() {
+        if (lastFrameCheck) {
+          try { clearInterval(lastFrameCheck); } catch (e) {}
+          lastFrameCheck = null;
+        }
+        if (currentStream) {
+          try {
+            currentStream.getTracks().forEach(function(t) { t.stop(); });
+          } catch (e) {}
+          currentStream = null;
+        }
         if (img._lastBlobUrl) {
           try { URL.revokeObjectURL(img._lastBlobUrl); } catch (e) {}
           img._lastBlobUrl = null;

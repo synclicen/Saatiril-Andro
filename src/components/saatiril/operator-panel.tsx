@@ -671,6 +671,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const nextRowRef = useRef<HTMLDivElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const selectedDeviceRef = useRef<string>('')
+  // BUG #7 fix (audit Remote/Mirror batch 2): generation token so in-flight
+  // startCamera can detect that the camera was released during getUserMedia's
+  // await and bail out before assigning streamRef. Incremented each time the
+  // camera effect starts; cleanup sets it to -1 to invalidate any in-flight
+  // call.
+  const cameraGenRef = useRef<number>(0)
   const frameImgRef = useRef<HTMLImageElement | null>(null)
   const cameraZoneRef = useRef<HTMLDivElement>(null)
 
@@ -839,11 +845,23 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // (where students are 'active_N') the queue was ALWAYS empty after reopen,
     // even though the DB had the active students (PROSES count was correct).
     // 'sent'/'active_N' = NOT yet photographed (photographed = 'done' = excluded
-    // via doneIds). No alreadyPhotographed check (a 'sent'/'active_N' student
-    // is by definition not photographed; the check caused stale-photoHistory
-    // exclusion after reopen — see commit f96e64f).
+    // via doneIds).
+    //
+    // BUG #1 (audit-electron-side): we ALSO exclude students whose id already
+    // appears in the CURRENT-CHANNEL photoHistory (`alreadyPhotographed`). This
+    // prevents a fast-clicking operator from re-capturing a photoshoot student
+    // before the admin's SYNC_DB (which flips status to 'done') arrives, which
+    // previously created unintended v2 retake files on disk without the MC's
+    // explicit reset+resend flow. The historical stale-photoHistory exclusion
+    // bug (commit f96e64f) was a CROSS-CHANNEL problem; `alreadyPhotographed`
+    // here is built from CURRENT-channel entries only (line 828), so this is
+    // safe. In wisuda mode this is a no-op (those students are already 'done'
+    // and excluded via doneIds).
     const dbItems = currentProject.database.filter(
-      (s) => (s.status === 'sent' || isActiveStatus(s.status)) && !doneIds.has(s.id)
+      (s) =>
+        (s.status === 'sent' || isActiveStatus(s.status)) &&
+        !doneIds.has(s.id) &&
+        !alreadyPhotographed.has(s.id)
     )
     dbItems.forEach((s) => dbQueueIds.add(s.id))
     const bufferItems = mcCallBuffer.filter(
@@ -970,8 +988,15 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   }, [selectedDeviceId, myChannel])
 
   // ── Camera: start stream ─────────────────────────────────────────────────
+  // BUG #7 fix (audit Remote/Mirror batch 2): startCamera now accepts an
+  // optional generation token (gen). After the await getUserMedia, we check
+  // cameraGenRef.current — if it doesn't match gen, the camera was released
+  // during the await (cleanup ran, or a newer startCamera superseded us) so
+  // we stop the new stream immediately + bail out without touching streamRef.
+  // This prevents the in-flight getUserMedia from re-grabbing the camera
+  // after cleanup explicitly released it.
   const startCamera = useCallback(
-    async (deviceId?: string) => {
+    async (deviceId?: string, gen?: number) => {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
         setCameraAvailable(false)
         return
@@ -1001,6 +1026,15 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        // BUG #7 fix: if the camera was released during the await (cleanup
+        // ran + cameraGenRef set to -1, or a newer startCamera superseded
+        // us with a different gen), stop the new stream immediately and bail
+        // out without touching streamRef — the cleanup already released the
+        // previous stream and we must NOT re-grab the camera.
+        if (gen !== undefined && cameraGenRef.current !== gen) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
         streamRef.current = stream
         setCameraAvailable(true)
         if (videoRef.current) videoRef.current.srcObject = stream
@@ -1028,6 +1062,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             fallbackConstraints = { video: true, audio: false }
           }
           const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+          // BUG #7 fix: same generation check after the fallback await.
+          if (gen !== undefined && cameraGenRef.current !== gen) {
+            stream.getTracks().forEach((t) => t.stop())
+            return
+          }
           streamRef.current = stream
           setCameraAvailable(true)
           if (videoRef.current) videoRef.current.srcObject = stream
@@ -1047,10 +1086,22 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // (admin on Admin/MC tab), release the camera so the Operator Electron App
     // (if running on the same laptop) can use it. When cameraActive becomes
     // true (admin switches to Live/Operator view), re-start the camera.
-    if (cameraActive) {
-      queueMicrotask(() => void startCamera())
-    }
+    //
+    // BUG #7 fix (audit Remote/Mirror batch 2): previously used
+    //   queueMicrotask(() => void startCamera())
+    // but the microtask could fire AFTER cleanup ran (if cameraActive flipped
+    // back to false, or React StrictMode double-invoked the effect), causing
+    // startCamera() to re-acquire the camera we just released — visible as a
+    // brief camera grab on the operator Electron app or a "camera in use"
+    // error. Now we call startCamera directly + use a generation token
+    // (cameraGenRef) so any in-flight getUserMedia can detect that the camera
+    // was released during the await and bail out before touching streamRef.
+    if (!cameraActive) return
+    const gen = ++cameraGenRef.current
+    void startCamera(undefined, gen)
     return () => {
+      // Invalidate this generation so any in-flight startCamera aborts.
+      cameraGenRef.current = -1
       // Always release on cleanup (unmount OR cameraActive flip to false).
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
@@ -1085,9 +1136,14 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // This was the root cause of the dual-photoshoot camera conflict: device
     // selections triggered by the channel selector / device list bypassed the
     // cameraActive gate. Now the camera only starts when cameraActive is true.
+    //
+    // BUG #7 fix (audit Remote/Mirror batch 2): drop queueMicrotask + use the
+    // generation token so a stale device-change doesn't grab the camera after
+    // a newer selection (or a cameraActive=false cleanup) invalidated it.
     if (cameraActive && selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
       selectedDeviceRef.current = selectedDeviceId
-      queueMicrotask(() => void startCamera(selectedDeviceId))
+      const gen = ++cameraGenRef.current
+      void startCamera(selectedDeviceId, gen)
     }
   }, [selectedDeviceId, startCamera, cameraActive])
 

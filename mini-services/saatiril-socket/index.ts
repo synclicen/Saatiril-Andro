@@ -22,7 +22,13 @@ const MAX_HTTP_BUFFER = 20e6 // 20MB — supports dual-channel photo bursts (4 �
 const PING_INTERVAL = 5000   // 5s — aggressive ping for crowded WiFi (was 10s)
 const PING_TIMEOUT = 15000   // 15s — fail faster when device unreachable (was 20s)
 const MAX_CONNECTIONS = 10   // Max concurrent clients (admin + 2×MC + 2×OP + buffer)
-const IDENTIFICATION_TIMEOUT_MS = 10000 // 10s — clients must identify within this time
+// BUG #1 cross-cutting fix (audit Remote/Mirror batch 2): the value is now
+// 30000ms (extended from 10s to give non-admin clients time to enter the
+// session password before being disconnected). Previously the constant was
+// declared as 10000 but never used — the actual setTimeout used a hardcoded
+// 30000 literal. Now the constant drives the setTimeout so there's a single
+// source of truth (and the startup log line below is accurate).
+const IDENTIFICATION_TIMEOUT_MS = 30000 // 30s — clients must identify within this time
 
 // ─── Health tracking ───────────────────────────────────────────────────────
 let totalMessagesRelayed = 0
@@ -130,16 +136,19 @@ io.on('connection', (socket: Socket) => {
     passwordRequired: sessionPasswordHash !== null,
   })
 
-  // ── Identification timeout — disconnect if not identified within 30s ───
-  // Extended from 10s to 30s to give non-admin clients time to enter
-  // the session password before being disconnected.
+  // ── Identification timeout — disconnect if not identified within IDENTIFICATION_TIMEOUT_MS ───
+  // BUG #1 cross-cutting fix: previously used a hardcoded 30000 literal that
+  // drifted from the IDENTIFICATION_TIMEOUT_MS constant (which was 10000).
+  // Now both use the same 30000ms value — single source of truth. The 30s
+  // window gives non-admin clients time to enter the session password before
+  // being disconnected.
   const identificationTimeout = setTimeout(() => {
     const info = clientRegistry.get(socket.id)
     if (info && info.role === 'unknown') {
-      console.warn(`[SAATIRIL] Client ${socket.id} disconnected: failed to identify within 30s`)
+      console.warn(`[SAATIRIL] Client ${socket.id} disconnected: failed to identify within ${IDENTIFICATION_TIMEOUT_MS}ms`)
       socket.disconnect(true)
     }
-  }, 30000)
+  }, IDENTIFICATION_TIMEOUT_MS)
 
   // ── SET_SESSION_PASSWORD — admin sets the session password ─────────────
   socket.on('SET_SESSION_PASSWORD', (data: { passwordHash: string }) => {

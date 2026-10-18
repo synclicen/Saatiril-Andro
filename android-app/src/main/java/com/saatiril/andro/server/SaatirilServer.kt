@@ -233,8 +233,16 @@ object SaatirilServer {
         try {
             broadcastLanMessage("SERVER_SHUTDOWN", null)
         } catch (e: Exception) { Log.w(TAG, "SERVER_SHUTDOWN broadcast failed: ${e.message}") }
-        // Brief delay to let the broadcast flush
-        try { Thread.sleep(500) } catch (_: Exception) {}
+        // BUG #13 fix: brief delay to let the broadcast flush. Thread.sleep
+        // blocks the calling thread — and on Android this is often called
+        // from a coroutine on Dispatchers.IO, where blocking the thread
+        // prevents other coroutines (including the broadcast's own send
+        // coroutine) from making progress on the same dispatcher. Using
+        // runBlocking { delay(500) } suspends instead, yielding the thread
+        // to other coroutines so the broadcast actually flushes within the
+        // 500ms window. (runBlocking is safe here because stop() is a
+        // one-shot teardown, not on the main thread.)
+        try { kotlinx.coroutines.runBlocking { kotlinx.coroutines.delay(500) } } catch (_: Exception) {}
 
         cleanupJob?.cancel()
         cleanupJob = null
@@ -787,11 +795,21 @@ object SaatirilServer {
             var fallback: String? = null
             for (intf in interfaces) {
                 if (!intf.isUp || intf.isLoopback) continue
-                // #6: prefer WiFi / hotspot interfaces (wlan*/ap*/swlan*) — the
-                // first non-loopback address may be cellular (rmnet*) or a VPN
-                // (tun*), which LAN clients cannot reach.
+                // BUG #14 fix: prefer WiFi / hotspot interfaces. The original
+                // code only matched wlan*/ap* — on many OEM Android forks the
+                // hotspot/hotspot-secondary interfaces are named differently:
+                //  - swlan*   (Samsung — "softAP wlan" hybrid)
+                //  - p2p*     (Wi-Fi Direct / Miracast — same radio)
+                //  - softap*  (MediaTek / older Qualcomm)
+                //  - wifix*   (some Xiaomi / Redmi MIUI variants)
+                // On those devices the original matcher fell through to the
+                // first non-loopback IPv4 (often cellular rmnet*) and the QR
+                // code pointed operators at an unreachable IP. The expanded
+                // list below catches all known hotspot/wifi variants.
                 val name = intf.name?.lowercase() ?: ""
-                val isLan = name.contains("wlan") || name.contains("ap")
+                val isLan = name.contains("wlan") || name.contains("ap") ||
+                            name.contains("swlan") || name.contains("p2p") ||
+                            name.contains("softap") || name.contains("wifix")
                 for (a in intf.inetAddresses.toList()) {
                     if (!a.isLoopbackAddress && a.hostAddress?.contains(':') == false) {
                         if (isLan) return a.hostAddress
