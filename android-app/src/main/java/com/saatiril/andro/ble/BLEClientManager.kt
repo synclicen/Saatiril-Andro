@@ -55,23 +55,10 @@ class BLEClientManager(private val context: Context) {
     @Volatile private var lastConnectedDevice: BluetoothDevice? = null
     @Volatile private var isClosing = false
     @Volatile private var reconnectAttempts = 0
-    private val reconnectHandler = Handler(Looper.getMainLooper())
-    private val reconnectRunnable = Runnable {
-        val device = lastConnectedDevice ?: return@Runnable
-        if (isClosing || isConnected || isConnecting) return@Runnable
-        Log.i(TAG, "BUG#5: auto-reconnect attempt #${reconnectAttempts + 1} (device=${device.address})")
-        reconnectAttempts++
-        try {
-            val gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            if (gatt != null) {
-                try { bluetoothGatt?.close() } catch (_: Exception) {}
-                bluetoothGatt = gatt
-                isConnecting = true
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "BUG#5: reconnect connectGatt failed: ${e.message}")
-        }
-    }
+    // BUG #5 fix: reconnectHandler + reconnectRunnable moved to AFTER gattCallback
+    // declaration (see below) to avoid Kotlin "Type checking has run into a recursive
+    // problem" error — reconnectRunnable references gattCallback which was declared
+    // after it.
 
     /**
      * BUG #5 helper: schedule a reconnect attempt with exponential backoff
@@ -420,6 +407,27 @@ class BLEClientManager(private val context: Context) {
             // Without this, a failed trigger write would stall the queue
             // forever and all subsequent triggers would be silently dropped.
             onGattOpFinished(gatt)
+        }
+    }
+
+    // BUG #5 fix: reconnectHandler + reconnectRunnable declared AFTER gattCallback
+    // to avoid Kotlin recursive type checking error (reconnectRunnable references
+    // gattCallback in connectGatt call).
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val reconnectRunnable = Runnable {
+        val device = lastConnectedDevice ?: return@Runnable
+        if (isClosing || isConnected || isConnecting) return@Runnable
+        Log.i(TAG, "BUG#5: auto-reconnect attempt #${reconnectAttempts + 1} (device=${device.address})")
+        reconnectAttempts++
+        try {
+            val gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            if (gatt != null) {
+                try { bluetoothGatt?.close() } catch (_: Exception) {}
+                bluetoothGatt = gatt
+                isConnecting = true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BUG#5: reconnect connectGatt failed: ${e.message}")
         }
     }
 
