@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -104,68 +105,10 @@ class DriveBackupManager(private val context: Context) {
             Log.e(TAG, "uploadPhoto FAILED: no backup folder set")
             return false
         }
-
-        // If projectName is set, create/use a project subfolder (mirrors local structure).
-        // Otherwise upload to root (legacy behavior).
-        val parentDocUri = if (!projectName.isNullOrBlank()) {
-            val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
-            if (subfolderUri != null) {
-                Log.i(TAG, "uploadPhoto (global): using project subfolder → $subfolderUri")
-                normalizeToDocumentUri(subfolderUri)
-            } else {
-                Log.w(TAG, "uploadPhoto (global): subfolder creation FAILED for '$projectName' — uploading to ROOT (flat)")
-                normalizeToDocumentUri(treeUri)
-            }
-        } else {
-            Log.i(TAG, "uploadPhoto (global): no projectName — uploading to ROOT (flat)")
-            normalizeToDocumentUri(treeUri)
-        }
-
-        return try {
-            // Create the document in the Drive folder (or project subfolder)
-            val docUri = DocumentsContract.createDocument(
-                resolver,
-                parentDocUri,
-                MIME_JPEG,
-                filename
-            ) ?: run {
-                Log.e(TAG, "uploadPhoto FAILED: createDocument returned null for '$filename'")
-                return false
-            }
-
-            // Copy bytes: local photo → Drive document
-            val input: InputStream = resolver.openInputStream(Uri.parse(localUri))
-                ?: run {
-                    Log.e(TAG, "uploadPhoto FAILED: cannot open input stream for $localUri")
-                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
-                    return false
-                }
-
-            val output: OutputStream = resolver.openOutputStream(docUri)
-                ?: run {
-                    Log.e(TAG, "uploadPhoto FAILED: cannot open output stream for $docUri")
-                    input.close()
-                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
-                    return false
-                }
-
-            input.use { inp ->
-                output.use { out ->
-                    val buffer = ByteArray(8192)
-                    var read: Int
-                    while (inp.read(buffer).also { read = it } > 0) {
-                        out.write(buffer, 0, read)
-                    }
-                    out.flush()
-                }
-            }
-
-            Log.i(TAG, "uploadPhoto SUCCESS: $filename → $docUri")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "uploadPhoto EXCEPTION for $filename — ${e.message}", e)
-            false
-        }
+        // Delegate to uploadPhotoToTreeUri (uses DocumentFile — reliable across
+        // SAF providers including Google Drive). This ensures the global backup
+        // path also creates project subfolders + uses the same reliable code.
+        return uploadPhotoToTreeUri(localUri, filename, treeUri, projectName)
     }
 
     /**
@@ -264,47 +207,66 @@ class DriveBackupManager(private val context: Context) {
      * Idempotent: queries for existing folder first, creates if missing, caches.
      */
     private fun ensureProjectSubfolder(treeUri: Uri, projectName: String): Uri? {
-        if (projectName.isBlank()) return null
+        if (projectName.isBlank()) {
+            Log.w(TAG, "ensureProjectSubfolder: projectName is blank — returning null")
+            return null
+        }
         val cacheKey = "$treeUri|$projectName"
-        projectSubfolderCache[cacheKey]?.let { cached -> return Uri.parse(cached) }
+        projectSubfolderCache[cacheKey]?.let { cached ->
+            Log.i(TAG, "ensureProjectSubfolder: cache hit → $cached")
+            return Uri.parse(cached)
+        }
 
         val sanitizedName = projectName.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "").replace(Regex("\\s+"), "_")
-        if (sanitizedName.isBlank()) return null
+        if (sanitizedName.isBlank()) {
+            Log.w(TAG, "ensureProjectSubfolder: sanitized name is blank (original='$projectName') — returning null")
+            return null
+        }
 
-        val parentDocUri = normalizeToDocumentUri(treeUri)
+        Log.i(TAG, "ensureProjectSubfolder: treeUri=$treeUri, sanitizedName='$sanitizedName'")
+
+        // Use DocumentFile (androidx.documentfile) — more reliable across SAF providers
+        // (Google Drive, OneDrive, etc.) than raw DocumentsContract.createDocument.
+        // DocumentFile abstracts away provider-specific quirks.
         return try {
-            // Check if folder already exists (matches PhotoSaver.createSubfolder logic).
-            val docIdOfParent = DocumentsContract.getDocumentId(parentDocUri)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentDocUri, docIdOfParent)
-            val cursor = resolver.query(
-                childrenUri,
-                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
-                null, null, null
-            )
-            cursor?.use { c ->
-                while (c.moveToNext()) {
-                    val name = c.getString(1)
-                    val mime = c.getString(2)
-                    if (name == sanitizedName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        val docId = c.getString(0)
-                        val subUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                        projectSubfolderCache[cacheKey] = subUri.toString()
-                        Log.i(TAG, "ensureProjectSubfolder: existing → $subUri")
-                        return subUri
-                    }
-                }
+            val rootDocFile = DocumentFile.fromTreeUri(context, treeUri)
+            if (rootDocFile == null) {
+                Log.e(TAG, "ensureProjectSubfolder: DocumentFile.fromTreeUri returned null for $treeUri")
+                return null
             }
+            if (!rootDocFile.canWrite()) {
+                Log.e(TAG, "ensureProjectSubfolder: root folder is NOT writable — check permissions")
+                return null
+            }
+
+            // Check if folder already exists.
+            val existing = rootDocFile.findFile(sanitizedName)
+            if (existing != null && existing.isDirectory) {
+                val subUri = existing.uri
+                projectSubfolderCache[cacheKey] = subUri.toString()
+                Log.i(TAG, "ensureProjectSubfolder: existing folder found → $subUri")
+                return subUri
+            }
+            if (existing != null && !existing.isDirectory) {
+                // A FILE with the same name exists — can't create folder.
+                Log.e(TAG, "ensureProjectSubfolder: a FILE named '$sanitizedName' already exists (not a directory) — cannot create folder")
+                return null
+            }
+
             // Folder doesn't exist — create it.
-            val newFolderUri = DocumentsContract.createDocument(
-                resolver, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, sanitizedName
-            )
-            if (newFolderUri != null) {
-                projectSubfolderCache[cacheKey] = newFolderUri.toString()
-                Log.i(TAG, "ensureProjectSubfolder: created → $newFolderUri")
+            Log.i(TAG, "ensureProjectSubfolder: creating directory '$sanitizedName' in $treeUri")
+            val newFolder = rootDocFile.createDirectory(sanitizedName)
+            if (newFolder != null) {
+                val subUri = newFolder.uri
+                projectSubfolderCache[cacheKey] = subUri.toString()
+                Log.i(TAG, "ensureProjectSubfolder: CREATED → $subUri")
+                subUri
+            } else {
+                Log.e(TAG, "ensureProjectSubfolder: createDirectory returned null for '$sanitizedName'")
+                null
             }
-            newFolderUri
         } catch (e: Exception) {
-            Log.e(TAG, "ensureProjectSubfolder FAILED for '$sanitizedName' — ${e.message}", e)
+            Log.e(TAG, "ensureProjectSubfolder EXCEPTION for '$sanitizedName' — ${e.message}", e)
             null
         }
     }
@@ -314,37 +276,43 @@ class DriveBackupManager(private val context: Context) {
      *  instead of a flat root/filename dump. */
     private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri, projectName: String? = null): Boolean {
         Log.i(TAG, "uploadPhotoToTreeUri: filename=$filename, project='$projectName', treeUri=$treeUri")
-        // Determine the parent folder: if projectName is set, use a project subfolder
-        // (matching local structure: root/projectName/file.jpg). Otherwise upload to root.
-        val parentDocUri = if (!projectName.isNullOrBlank()) {
-            val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
-            if (subfolderUri != null) {
-                Log.i(TAG, "uploadPhotoToTreeUri: using project subfolder → $subfolderUri")
-                normalizeToDocumentUri(subfolderUri)
-            } else {
-                Log.w(TAG, "uploadPhotoToTreeUri: subfolder creation FAILED for '$projectName' — uploading to ROOT instead (flat)")
-                normalizeToDocumentUri(treeUri)
-            }
-        } else {
-            Log.i(TAG, "uploadPhotoToTreeUri: no projectName — uploading to ROOT (flat)")
-            normalizeToDocumentUri(treeUri)
-        }
-
+        // Use DocumentFile for both subfolder + file creation — more reliable
+        // across SAF providers (Google Drive, OneDrive, etc.).
         return try {
-            val docUri = DocumentsContract.createDocument(
-                resolver,
-                parentDocUri,
-                MIME_JPEG,
-                filename
-            ) ?: run {
-                Log.e(TAG, "uploadPhotoToTreeUri FAILED: createDocument returned null for '$filename'")
+            val rootDocFile = DocumentFile.fromTreeUri(context, treeUri)
+            if (rootDocFile == null) {
+                Log.e(TAG, "uploadPhotoToTreeUri: DocumentFile.fromTreeUri returned null for $treeUri")
                 return false
             }
+
+            // Determine the parent folder: project subfolder if projectName is set,
+            // otherwise root.
+            val parentFolder = if (!projectName.isNullOrBlank()) {
+                val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
+                if (subfolderUri != null) {
+                    Log.i(TAG, "uploadPhotoToTreeUri: using project subfolder → $subfolderUri")
+                    DocumentFile.fromTreeUri(context, subfolderUri) ?: rootDocFile
+                } else {
+                    Log.w(TAG, "uploadPhotoToTreeUri: subfolder creation FAILED for '$projectName' — uploading to ROOT (flat)")
+                    rootDocFile
+                }
+            } else {
+                Log.i(TAG, "uploadPhotoToTreeUri: no projectName — uploading to ROOT (flat)")
+                rootDocFile
+            }
+
+            // Create the photo file in the parent folder.
+            val photoFile = parentFolder.createFile(MIME_JPEG, filename)
+            if (photoFile == null) {
+                Log.e(TAG, "uploadPhotoToTreeUri FAILED: createFile returned null for '$filename'")
+                return false
+            }
+            val docUri = photoFile.uri
 
             val input: InputStream = resolver.openInputStream(Uri.parse(localUri))
                 ?: run {
                     Log.e(TAG, "uploadPhotoToTreeUri FAILED: cannot open input stream for $localUri")
-                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
+                    try { photoFile.delete() } catch (_: Exception) {}
                     return false
                 }
 
@@ -352,7 +320,7 @@ class DriveBackupManager(private val context: Context) {
                 ?: run {
                     Log.e(TAG, "uploadPhotoToTreeUri FAILED: cannot open output stream for $docUri")
                     input.close()
-                    try { resolver.delete(docUri, null, null) } catch (_: Exception) {}
+                    try { photoFile.delete() } catch (_: Exception) {}
                     return false
                 }
 
