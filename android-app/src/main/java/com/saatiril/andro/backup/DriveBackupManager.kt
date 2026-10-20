@@ -86,23 +86,40 @@ class DriveBackupManager(private val context: Context) {
     }
 
     /**
-     * Upload a single photo to the Google Drive backup folder.
+     * Upload a single photo to the Google Drive backup folder (GLOBAL backup).
+     *
+     * Now mirrors the LOCAL folder structure: uploads to root/projectName/filename
+     * instead of a flat root/filename dump. The projectName is sanitized the same
+     * way as local save (strip non-alphanumeric, spaces → underscores) so the
+     * folder name matches local exactly.
      *
      * @param localUri The content URI of the locally-saved photo (from PhotoSaver)
      * @param filename The filename to use in the Drive folder
+     * @param projectName The project name — used to create a subfolder (mirrors local)
      * @return true if upload succeeded, false otherwise
      */
-    fun uploadPhoto(localUri: String, filename: String): Boolean {
+    fun uploadPhoto(localUri: String, filename: String, projectName: String? = null): Boolean {
         val treeUri = getBackupFolder() ?: run {
             Log.e(TAG, "uploadPhoto FAILED: no backup folder set")
             return false
         }
 
-        // Normalize tree URI to document URI (same fix as PhotoSaver)
-        val parentDocUri = normalizeToDocumentUri(treeUri)
+        // If projectName is set, create/use a project subfolder (mirrors local structure).
+        // Otherwise upload to root (legacy behavior).
+        val parentDocUri = if (!projectName.isNullOrBlank()) {
+            val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
+            if (subfolderUri != null) {
+                normalizeToDocumentUri(subfolderUri)
+            } else {
+                Log.w(TAG, "uploadPhoto: subfolder creation failed for '$projectName' — uploading to root")
+                normalizeToDocumentUri(treeUri)
+            }
+        } else {
+            normalizeToDocumentUri(treeUri)
+        }
 
         return try {
-            // Create the document in the Drive folder
+            // Create the document in the Drive folder (or project subfolder)
             val docUri = DocumentsContract.createDocument(
                 resolver,
                 parentDocUri,
@@ -167,18 +184,19 @@ class DriveBackupManager(private val context: Context) {
      *   the worker). False only if the tree URI is null/empty (no backup
      *   configured for this project).
      */
-    fun uploadPhotoForProject(localUri: String, filename: String, treeUriString: String?): Boolean {
+    fun uploadPhotoForProject(localUri: String, filename: String, treeUriString: String?, projectName: String? = null): Boolean {
         if (treeUriString.isNullOrEmpty()) {
             Log.i(TAG, "uploadPhotoForProject: no driveFolder for this project — skipping (local save only)")
             return false
         }
         // Validate the tree URI parses before enqueueing (cheap sanity check).
         val treeUri = try { Uri.parse(treeUriString) } catch (_: Exception) { return false }
-        // BUG #6: enqueue with the per-project tree URI. The worker will read
-        // item.treeUri and route the upload via uploadPhotoToTreeUri.
-        val projectName = _currentProjectNameForQueue
-        queueStore.enqueue(filename, localUri, projectName, treeUri.toString())
-        Log.i(TAG, "BUG#6: enqueued per-project upload: $filename → tree=$treeUri (project=$projectName)")
+        // Use the actual project name (passed by caller) — NOT the stale
+        // _currentProjectNameForQueue field which was always "default".
+        // This ensures the Drive subfolder matches the local folder structure.
+        val actualProjectName = if (!projectName.isNullOrBlank()) projectName else _currentProjectNameForQueue
+        queueStore.enqueue(filename, localUri, actualProjectName, treeUri.toString())
+        Log.i(TAG, "BUG#6: enqueued per-project upload: $filename → tree=$treeUri (project=$actualProjectName)")
         return true
     }
 
@@ -190,16 +208,30 @@ class DriveBackupManager(private val context: Context) {
      */
     private fun uploadItem(item: UploadItem): Boolean {
         return if (item.treeUri.isNullOrEmpty()) {
-            uploadPhoto(item.localUri, item.filename)
+            // Global backup path — pass projectName so it creates a subfolder too.
+            uploadPhoto(item.localUri, item.filename, item.projectName)
         } else {
-            // Pass projectName so uploadPhotoToTreeUri creates/uploads to a
-            // project subfolder (mirrors local structure: root/projectName/file.jpg).
+            // Per-project backup path — pass projectName for subfolder creation.
             uploadPhotoToTreeUri(item.localUri, item.filename, Uri.parse(item.treeUri), item.projectName)
         }
     }
 
-    /** BUG #6: per-project name tag used in queue rows (best-effort). */
+    /** BUG #6: per-project name tag used in queue rows (best-effort).
+     *  Updated via setCurrentProjectName() when a project is loaded.
+     *  Used as fallback when callers don't pass projectName explicitly. */
     @Volatile private var _currentProjectNameForQueue: String = "default"
+
+    /**
+     * Set the current project name for the Drive backup queue. Called when a
+     * project is loaded/started so that even if uploadPhotoForProject is called
+     * without an explicit projectName, the correct subfolder is created.
+     */
+    fun setCurrentProjectName(name: String?) {
+        _currentProjectNameForQueue = if (!name.isNullOrBlank()) name else "default"
+        // Clear the subfolder cache so a new project gets a fresh subfolder lookup.
+        projectSubfolderCache.clear()
+        Log.i(TAG, "setCurrentProjectName: $_currentProjectNameForQueue (cache cleared)")
+    }
 
     // Cache: project subfolder URIs so we don't query/create the folder on every photo upload.
     // Key = "<treeUriString>|<projectName>", Value = subfolder Uri (as string).

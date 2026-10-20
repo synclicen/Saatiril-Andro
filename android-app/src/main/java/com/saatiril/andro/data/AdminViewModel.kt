@@ -547,6 +547,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
 
                 persistProject(project)
                 _project.value = project
+                // Update Drive backup with the current project name so photos
+                // are uploaded to a project subfolder (mirrors local structure).
+                driveBackupManager.setCurrentProjectName(project.name)
                 refreshProjects()
 
                 // Wire the lan-message handler BEFORE starting the server.
@@ -697,6 +700,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         // The UI flips immediately; teardown runs on Dispatchers.IO.
         _project.value = null
         _screen.value = Screen.HUB
+        // Clear the Drive backup project name so no new uploads go to the
+        // previous project's subfolder.
+        driveBackupManager.setCurrentProjectName(null)
         SaatirilServer.onLanMessage = null
         SaatirilServer.onBleTrigger = null
         viewModelScope.launch(Dispatchers.IO) {
@@ -1069,7 +1075,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         val savedUri = photoSaver.savePhoto(photo, filenames[i])
                         if (savedUri != null) {
                             Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
-                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder)
+                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder, _project.value?.name)
                         } else {
                             Log.e(TAG, "❌ Photo save returned null: ${filenames[i]}")
                             return@withContext false
@@ -1392,7 +1398,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         val savedUri = photoSaver.savePhoto(photo, filename)
                         if (savedUri != null) {
-                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder)
+                            driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder, proj.name)
                         } else {
                             Log.e(TAG, "Failed to save photo $filename: savePhoto returned null")
                             allOk = false
