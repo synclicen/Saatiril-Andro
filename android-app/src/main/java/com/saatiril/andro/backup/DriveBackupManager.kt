@@ -192,17 +192,91 @@ class DriveBackupManager(private val context: Context) {
         return if (item.treeUri.isNullOrEmpty()) {
             uploadPhoto(item.localUri, item.filename)
         } else {
-            uploadPhotoToTreeUri(item.localUri, item.filename, Uri.parse(item.treeUri))
+            // Pass projectName so uploadPhotoToTreeUri creates/uploads to a
+            // project subfolder (mirrors local structure: root/projectName/file.jpg).
+            uploadPhotoToTreeUri(item.localUri, item.filename, Uri.parse(item.treeUri), item.projectName)
         }
     }
 
     /** BUG #6: per-project name tag used in queue rows (best-effort). */
     @Volatile private var _currentProjectNameForQueue: String = "default"
 
-    /** Core upload logic — shared by uploadPhoto (global) + uploadPhotoForProject (per-project). */
-    private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri): Boolean {
-        // Normalize tree URI to document URI (same fix as PhotoSaver)
+    // Cache: project subfolder URIs so we don't query/create the folder on every photo upload.
+    // Key = "<treeUriString>|<projectName>", Value = subfolder Uri (as string).
+    // Matches the LOCAL folder structure: root/projectName/photo.jpg → Drive: root/projectName/photo.jpg
+    private val projectSubfolderCache = mutableMapOf<String, String>()
+
+    /**
+     * Ensure a project subfolder exists in the Drive backup tree + return its Uri.
+     * Mirrors the LOCAL folder structure (root/projectName/) so the Drive backup
+     * has the SAME layout as the local save: Drive:/<projectName>/<photo>.jpg
+     * instead of a flat Drive:/<photo>.jpg dump.
+     *
+     * Idempotent: queries for existing folder first, creates if missing, caches.
+     */
+    private fun ensureProjectSubfolder(treeUri: Uri, projectName: String): Uri? {
+        if (projectName.isBlank()) return null
+        val cacheKey = "$treeUri|$projectName"
+        projectSubfolderCache[cacheKey]?.let { cached -> return Uri.parse(cached) }
+
+        val sanitizedName = projectName.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "").replace(Regex("\\s+"), "_")
+        if (sanitizedName.isBlank()) return null
+
         val parentDocUri = normalizeToDocumentUri(treeUri)
+        return try {
+            // Check if folder already exists (matches PhotoSaver.createSubfolder logic).
+            val docIdOfParent = DocumentsContract.getDocumentId(parentDocUri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parentDocUri, docIdOfParent)
+            val cursor = resolver.query(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
+                null, null, null
+            )
+            cursor?.use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(1)
+                    val mime = c.getString(2)
+                    if (name == sanitizedName && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        val docId = c.getString(0)
+                        val subUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        projectSubfolderCache[cacheKey] = subUri.toString()
+                        Log.i(TAG, "ensureProjectSubfolder: existing → $subUri")
+                        return subUri
+                    }
+                }
+            }
+            // Folder doesn't exist — create it.
+            val newFolderUri = DocumentsContract.createDocument(
+                resolver, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, sanitizedName
+            )
+            if (newFolderUri != null) {
+                projectSubfolderCache[cacheKey] = newFolderUri.toString()
+                Log.i(TAG, "ensureProjectSubfolder: created → $newFolderUri")
+            }
+            newFolderUri
+        } catch (e: Exception) {
+            Log.e(TAG, "ensureProjectSubfolder FAILED for '$sanitizedName' — ${e.message}", e)
+            null
+        }
+    }
+
+    /** Core upload logic — shared by uploadPhoto (global) + uploadPhotoForProject (per-project).
+     *  Now mirrors the LOCAL folder structure: uploads to root/projectName/filename
+     *  instead of a flat root/filename dump. */
+    private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri, projectName: String? = null): Boolean {
+        // Determine the parent folder: if projectName is set, use a project subfolder
+        // (matching local structure: root/projectName/file.jpg). Otherwise upload to root.
+        val parentDocUri = if (!projectName.isNullOrBlank()) {
+            val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
+            if (subfolderUri != null) {
+                normalizeToDocumentUri(subfolderUri)
+            } else {
+                Log.w(TAG, "uploadPhotoToTreeUri: subfolder creation failed for '$projectName' — uploading to root instead")
+                normalizeToDocumentUri(treeUri)
+            }
+        } else {
+            normalizeToDocumentUri(treeUri)
+        }
 
         return try {
             val docUri = DocumentsContract.createDocument(
@@ -241,7 +315,7 @@ class DriveBackupManager(private val context: Context) {
                 }
             }
 
-            Log.i(TAG, "uploadPhotoToTreeUri SUCCESS: $filename → $docUri")
+            Log.i(TAG, "uploadPhotoToTreeUri SUCCESS: $filename → $docUri (project=$projectName)")
             true
         } catch (e: Exception) {
             Log.e(TAG, "uploadPhotoToTreeUri EXCEPTION for $filename — ${e.message}", e)
