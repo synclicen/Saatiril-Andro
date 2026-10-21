@@ -1642,7 +1642,16 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           if (api?.savePhoto) {
             const targetFolder = projConfig.targetFolder
             console.log(`[SAATIRIL OP] Saving photo to disk: ${targetFolder}/${vFilename}`)
-            api.savePhoto({ base64Data: allPhotos[0], filename: vFilename, targetFolder }).then((path: string | null) => {
+            api.savePhoto({
+              base64Data: allPhotos[0],
+              filename: vFilename,
+              targetFolder,
+              // Pass backupFolder + projectName so the Electron savePhoto IPC
+              // creates a project subfolder in the backup folder (mirrors
+              // local structure: backupFolder/projectName/filename).
+              backupFolder: projConfig.driveFolder ?? null,
+              projectName: useSaatirilStore.getState().currentProject?.name ?? null,
+            }).then((path: string | null) => {
               // Detect the legacy fake-delegation sentinel returned by an OLD
               // operator-exe preload (pre-fix). The new preload (after CHANGE 3)
               // returns a real filesystem path or null — never this sentinel.
@@ -1750,8 +1759,20 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             const targetFolder = projConfig.targetFolder
             console.log(`[SAATIRIL OP] Saving 2 photos to disk: ${targetFolder}/`)
             Promise.all([
-              api.savePhoto({ base64Data: allPhotos[0], filename: togaFilename, targetFolder }),
-              api.savePhoto({ base64Data: allPhotos[1], filename: ijazahFilename, targetFolder }),
+              api.savePhoto({
+                base64Data: allPhotos[0],
+                filename: togaFilename,
+                targetFolder,
+                backupFolder: projConfig.driveFolder ?? null,
+                projectName: useSaatirilStore.getState().currentProject?.name ?? null,
+              }),
+              api.savePhoto({
+                base64Data: allPhotos[1],
+                filename: ijazahFilename,
+                targetFolder,
+                backupFolder: projConfig.driveFolder ?? null,
+                projectName: useSaatirilStore.getState().currentProject?.name ?? null,
+              }),
             ]).then(([path1, path2]) => {
               // Detect the legacy fake-delegation sentinel returned by an OLD
               // operator-exe preload (pre-fix). The new preload (after CHANGE 3)

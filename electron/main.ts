@@ -971,9 +971,9 @@ function registerIpcHandlers() {
   })
 
   // Save photo to disk
-  ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null }) => {
+  ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }) => {
     try {
-      const { base64Data, filename, targetFolder, backupFolder } = data
+      const { base64Data, filename, targetFolder, backupFolder, projectName } = data
 
       // Ensure target folder exists
       fs.mkdirSync(targetFolder, { recursive: true })
@@ -994,15 +994,44 @@ function registerIpcHandlers() {
       // via the Admin tab's Google Drive section. If driveFolder is null/
       // undefined, no backup (the local copy is still safe). Each project
       // can have its own folder (or none).
+      //
+      // MIRRORS the local folder structure: backupFolder/projectName/filename
+      // (not flat backupFolder/filename). The projectName is sanitized the
+      // same way as local save (strip non-alphanumeric, spaces → underscores)
+      // so the folder name matches local exactly.
       try {
         // Prefer the per-project backupFolder passed in the savePhoto call.
         // Fall back to the legacy global getBackupFolder() for backward
         // compat with older callers that don't pass backupFolder.
         const backupFolderToUse = backupFolder ?? getBackupFolder()
         if (backupFolderToUse) {
-          const backupPath = path.join(backupFolderToUse, filename)
+          // Determine the subfolder path: backupFolder/projectName/filename.
+          // If projectName is not provided, fall back to flat (legacy behavior).
+          let backupPath: string
+          if (projectName && projectName.trim()) {
+            // Sanitize projectName the SAME way as local save (project-setup.tsx):
+            // strip non-alphanumeric (keep _, -, space), then spaces → underscores.
+            const sanitizedName = projectName.trim()
+              .replace(/[^a-zA-Z0-9_\-\s]/g, '')
+              .replace(/\s+/g, '_')
+            if (sanitizedName) {
+              const projectSubfolder = path.join(backupFolderToUse, sanitizedName)
+              // Ensure the project subfolder exists (mkdir -p). Idempotent —
+              // won't fail if it already exists.
+              fs.mkdirSync(projectSubfolder, { recursive: true })
+              backupPath = path.join(projectSubfolder, filename)
+              console.log(`[SAATIRIL] Photo backup (project subfolder): ${backupPath}`)
+            } else {
+              // Sanitized name is empty — fall back to flat.
+              backupPath = path.join(backupFolderToUse, filename)
+              console.log(`[SAATIRIL] Photo backup (flat — sanitized name empty): ${backupPath}`)
+            }
+          } else {
+            // No projectName — flat backup (legacy behavior).
+            backupPath = path.join(backupFolderToUse, filename)
+            console.log(`[SAATIRIL] Photo backup (flat — no projectName): ${backupPath}`)
+          }
           fs.writeFileSync(backupPath, buffer)
-          console.log(`[SAATIRIL] Photo backup: ${backupPath}`)
         }
       } catch (backupErr: any) {
         // Backup failure is non-fatal — local photo is already saved

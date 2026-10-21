@@ -352,6 +352,10 @@ export default function AdminDashboard() {
                   // which copies the photo to this folder after the local save.
                   // NOT auto-connected — the admin explicitly sets it per-project.
                   backupFolder: proj.config?.driveFolder ?? null,
+                  // Pass projectName so the Electron savePhoto IPC creates a
+                  // project subfolder in the backup folder (mirrors local
+                  // structure: backupFolder/projectName/filename).
+                  projectName: proj.name,
                 })
                 if (p) {
                   console.log(`[SAATIRIL ADMIN] Photo saved to disk (Electron IPC, v${version}): ${item.filename} → ${p}`)
