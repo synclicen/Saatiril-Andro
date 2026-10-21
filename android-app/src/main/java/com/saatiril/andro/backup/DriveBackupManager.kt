@@ -206,7 +206,7 @@ class DriveBackupManager(private val context: Context) {
      *
      * Idempotent: queries for existing folder first, creates if missing, caches.
      */
-    private fun ensureProjectSubfolder(treeUri: Uri, projectName: String): Uri? {
+    private fun ensureProjectSubfolder(treeUri: Uri, projectName: String): DocumentFile? {
         if (projectName.isBlank()) {
             Log.w(TAG, "ensureProjectSubfolder: projectName is blank — returning null")
             return null
@@ -214,7 +214,10 @@ class DriveBackupManager(private val context: Context) {
         val cacheKey = "$treeUri|$projectName"
         projectSubfolderCache[cacheKey]?.let { cached ->
             Log.i(TAG, "ensureProjectSubfolder: cache hit → $cached")
-            return Uri.parse(cached)
+            // Return a DocumentFile from the cached URI. Use fromSingleUri
+            // (not fromTreeUri) because the cached URI is a document URI
+            // returned by createDirectory, NOT a tree URI.
+            return DocumentFile.fromSingleUri(context, Uri.parse(cached))
         }
 
         val sanitizedName = projectName.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "").replace(Regex("\\s+"), "_")
@@ -225,9 +228,6 @@ class DriveBackupManager(private val context: Context) {
 
         Log.i(TAG, "ensureProjectSubfolder: treeUri=$treeUri, sanitizedName='$sanitizedName'")
 
-        // Use DocumentFile (androidx.documentfile) — more reliable across SAF providers
-        // (Google Drive, OneDrive, etc.) than raw DocumentsContract.createDocument.
-        // DocumentFile abstracts away provider-specific quirks.
         return try {
             val rootDocFile = DocumentFile.fromTreeUri(context, treeUri)
             if (rootDocFile == null) {
@@ -242,14 +242,12 @@ class DriveBackupManager(private val context: Context) {
             // Check if folder already exists.
             val existing = rootDocFile.findFile(sanitizedName)
             if (existing != null && existing.isDirectory) {
-                val subUri = existing.uri
-                projectSubfolderCache[cacheKey] = subUri.toString()
-                Log.i(TAG, "ensureProjectSubfolder: existing folder found → $subUri")
-                return subUri
+                projectSubfolderCache[cacheKey] = existing.uri.toString()
+                Log.i(TAG, "ensureProjectSubfolder: existing folder found → ${existing.uri}")
+                return existing
             }
             if (existing != null && !existing.isDirectory) {
-                // A FILE with the same name exists — can't create folder.
-                Log.e(TAG, "ensureProjectSubfolder: a FILE named '$sanitizedName' already exists (not a directory) — cannot create folder")
+                Log.e(TAG, "ensureProjectSubfolder: a FILE named '$sanitizedName' already exists (not a directory)")
                 return null
             }
 
@@ -257,10 +255,9 @@ class DriveBackupManager(private val context: Context) {
             Log.i(TAG, "ensureProjectSubfolder: creating directory '$sanitizedName' in $treeUri")
             val newFolder = rootDocFile.createDirectory(sanitizedName)
             if (newFolder != null) {
-                val subUri = newFolder.uri
-                projectSubfolderCache[cacheKey] = subUri.toString()
-                Log.i(TAG, "ensureProjectSubfolder: CREATED → $subUri")
-                subUri
+                projectSubfolderCache[cacheKey] = newFolder.uri.toString()
+                Log.i(TAG, "ensureProjectSubfolder: CREATED → ${newFolder.uri}")
+                newFolder
             } else {
                 Log.e(TAG, "ensureProjectSubfolder: createDirectory returned null for '$sanitizedName'")
                 null
@@ -276,8 +273,6 @@ class DriveBackupManager(private val context: Context) {
      *  instead of a flat root/filename dump. */
     private fun uploadPhotoToTreeUri(localUri: String, filename: String, treeUri: Uri, projectName: String? = null): Boolean {
         Log.i(TAG, "uploadPhotoToTreeUri: filename=$filename, project='$projectName', treeUri=$treeUri")
-        // Use DocumentFile for both subfolder + file creation — more reliable
-        // across SAF providers (Google Drive, OneDrive, etc.).
         return try {
             val rootDocFile = DocumentFile.fromTreeUri(context, treeUri)
             if (rootDocFile == null) {
@@ -286,12 +281,14 @@ class DriveBackupManager(private val context: Context) {
             }
 
             // Determine the parent folder: project subfolder if projectName is set,
-            // otherwise root.
+            // otherwise root. ensureProjectSubfolder now returns a DocumentFile
+            // directly (not a Uri) — avoids the fromTreeUri/fromSingleUri mismatch
+            // that caused the previous flat-upload bug.
             val parentFolder = if (!projectName.isNullOrBlank()) {
-                val subfolderUri = ensureProjectSubfolder(treeUri, projectName)
-                if (subfolderUri != null) {
-                    Log.i(TAG, "uploadPhotoToTreeUri: using project subfolder → $subfolderUri")
-                    DocumentFile.fromTreeUri(context, subfolderUri) ?: rootDocFile
+                val subfolder = ensureProjectSubfolder(treeUri, projectName)
+                if (subfolder != null) {
+                    Log.i(TAG, "uploadPhotoToTreeUri: using project subfolder → ${subfolder.uri}")
+                    subfolder
                 } else {
                     Log.w(TAG, "uploadPhotoToTreeUri: subfolder creation FAILED for '$projectName' — uploading to ROOT (flat)")
                     rootDocFile
