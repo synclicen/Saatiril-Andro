@@ -193,15 +193,13 @@ class DriveBackupManager(private val context: Context) {
      */
     fun setCurrentProjectName(name: String?) {
         _currentProjectNameForQueue = if (!name.isNullOrBlank()) name else "default"
-        // Clear the subfolder cache so a new project gets a fresh subfolder lookup.
-        projectSubfolderCache.clear()
-        Log.i(TAG, "setCurrentProjectName: $_currentProjectNameForQueue (cache cleared)")
+        Log.i(TAG, "setCurrentProjectName: $_currentProjectNameForQueue")
     }
 
-    // Cache: project subfolder URIs so we don't query/create the folder on every photo upload.
-    // Key = "<treeUriString>|<projectName>", Value = subfolder Uri (as string).
-    // Matches the LOCAL folder structure: root/projectName/photo.jpg → Drive: root/projectName/photo.jpg
-    private val projectSubfolderCache = mutableMapOf<String, String>()
+    // Note: projectSubfolderCache was REMOVED. Caching caused the "only 1 photo
+    // uploaded" bug — DocumentFile.fromSingleUri (used to re-create from cached
+    // URI) returns a non-writable DocumentFile that doesn't support createFile.
+    // Now ensureProjectSubfolder re-queries from root every time (reliable).
 
     /**
      * Ensure a project subfolder exists in the Drive backup tree + return its Uri.
@@ -216,14 +214,6 @@ class DriveBackupManager(private val context: Context) {
             Log.w(TAG, "ensureProjectSubfolder: projectName is blank — returning null")
             return null
         }
-        val cacheKey = "$treeUri|$projectName"
-        projectSubfolderCache[cacheKey]?.let { cached ->
-            Log.i(TAG, "ensureProjectSubfolder: cache hit → $cached")
-            // Return a DocumentFile from the cached URI. Use fromSingleUri
-            // (not fromTreeUri) because the cached URI is a document URI
-            // returned by createDirectory, NOT a tree URI.
-            return DocumentFile.fromSingleUri(context, Uri.parse(cached))
-        }
 
         val sanitizedName = projectName.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "").replace(Regex("\\s+"), "_")
         if (sanitizedName.isBlank()) {
@@ -233,6 +223,12 @@ class DriveBackupManager(private val context: Context) {
 
         Log.i(TAG, "ensureProjectSubfolder: treeUri=$treeUri, sanitizedName='$sanitizedName'")
 
+        // CRITICAL: do NOT cache the DocumentFile. DocumentFile.fromSingleUri
+        // returns a non-writable DocumentFile (doesn't support createFile).
+        // Only TreeDocumentFile (from fromTreeUri + findFile/createDirectory)
+        // supports createFile. If we cache + re-create via fromSingleUri, the
+        // 2nd+ photo uploads would fail silently (createFile returns null).
+        // Instead, re-query from root every time — slightly slower but reliable.
         return try {
             val rootDocFile = DocumentFile.fromTreeUri(context, treeUri)
             if (rootDocFile == null) {
@@ -247,7 +243,6 @@ class DriveBackupManager(private val context: Context) {
             // Check if folder already exists.
             val existing = rootDocFile.findFile(sanitizedName)
             if (existing != null && existing.isDirectory) {
-                projectSubfolderCache[cacheKey] = existing.uri.toString()
                 Log.i(TAG, "ensureProjectSubfolder: existing folder found → ${existing.uri}")
                 return existing
             }
@@ -260,7 +255,6 @@ class DriveBackupManager(private val context: Context) {
             Log.i(TAG, "ensureProjectSubfolder: creating directory '$sanitizedName' in $treeUri")
             val newFolder = rootDocFile.createDirectory(sanitizedName)
             if (newFolder != null) {
-                projectSubfolderCache[cacheKey] = newFolder.uri.toString()
                 Log.i(TAG, "ensureProjectSubfolder: CREATED → ${newFolder.uri}")
                 newFolder
             } else {
