@@ -293,6 +293,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val setupPreset: StateFlow<String> = _setupPreset.asStateFlow()
     fun setSetupPreset(v: String) { _setupPreset.value = v }
 
+    // Drive backup folder for the project being set up. Restored from saved
+    // project on editProject so the connection persists across close/reopen.
+    private val _setupDriveFolder = MutableStateFlow<String?>(null)
+    val setupDriveFolder: StateFlow<String?> = _setupDriveFolder.asStateFlow()
+    fun setSetupDriveFolder(v: String?) { _setupDriveFolder.value = v }
+
     private val _setupPassword = MutableStateFlow<String?>(null)
     val setupPassword: StateFlow<String?> = _setupPassword.asStateFlow()
     fun setSetupPassword(v: String?) { _setupPassword.value = v?.takeIf { it.isNotBlank() } }
@@ -414,6 +420,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         _setupMode.value = p.config.mode
         _setupRatio.value = p.config.ratio
         _setupPreset.value = p.config.preset
+        // ISSUE 2 fix: restore driveFolder so the Google Drive backup
+        // connection persists across project close/reopen. Previously
+        // driveFolder was NOT restored here → createAndStartProject created
+        // a new config with driveFolder=null → backup connection lost.
+        _setupDriveFolder.value = p.config.driveFolder
         _setupPassword.value = p.config.sessionPassword?.takeIf { it != "__PASSWORD_SET__" }
         _setupStudents.value = p.database
         // Restore per-channel data (split the database back into channels)
@@ -538,7 +549,12 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                         targetFolder = _setupOutputFolderUri.value ?: "",
                         frame = _setupFrame.value,
                         sessionPassword = password,
-                        localFolder = sanitizedName
+                        localFolder = sanitizedName,
+                        // ISSUE 2 fix: restore driveFolder from setup state so
+                        // the Google Drive backup connection persists across
+                        // project close/reopen. The setup state is restored in
+                        // editProject from the saved project's config.
+                        driveFolder = _setupDriveFolder.value
                     ),
                     database = students,
                     photoHistory = emptyList(),
@@ -1306,6 +1322,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * own folder (or none).
      */
     fun setProjectDriveFolder(folderUri: String?) {
+        // Also update _setupDriveFolder so it persists across close/reopen
+        // (editProject restores from _setupDriveFolder → createAndStartProject
+        // includes it in the new config).
+        _setupDriveFolder.value = folderUri
         // BUG #2 fix: serialize RMW via projectMutex.
         viewModelScope.launch {
             projectMutex.withLock {

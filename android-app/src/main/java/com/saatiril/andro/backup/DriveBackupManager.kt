@@ -64,6 +64,11 @@ class DriveBackupManager(private val context: Context) {
     /** Returns true if a backup folder has been configured. */
     fun hasBackupFolder(): Boolean = getBackupFolder() != null
 
+    /** ISSUE 1 fix: reset stuck UPLOADING items back to PENDING. */
+    fun resetStuckUploads() {
+        queueStore.resetStuckItems()
+    }
+
     /** Returns the configured backup folder tree URI, or null if not set. */
     fun getBackupFolder(): Uri? {
         val s = prefs.getString(KEY_DRIVE_URI, null) ?: return null

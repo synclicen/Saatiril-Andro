@@ -53,6 +53,10 @@ class DriveUploadWorker(private val context: Context) {
             Log.d(TAG, "Worker already running")
             return
         }
+        // ISSUE 1 fix: reset stuck UPLOADING items on start. If the app was
+        // killed while an item was UPLOADING, it would stay stuck forever
+        // (dequeue only returns PENDING). This recovers all stuck items.
+        driveBackupManager.resetStuckUploads()
         workerJob = scope.launch {
             Log.i(TAG, "Drive upload worker started")
             while (true) {

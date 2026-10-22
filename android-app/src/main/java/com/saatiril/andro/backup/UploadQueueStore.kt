@@ -144,6 +144,26 @@ class UploadQueueStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, nu
         }
     }
 
+    /**
+     * ISSUE 1 fix: reset all UPLOADING items back to PENDING.
+     * Called on worker start to recover from stuck items — if the app was
+     * killed (Android power management, crash) while an item was UPLOADING,
+     * that item would stay in UPLOADING status forever (dequeue only returns
+     * PENDING items) → remaining items never processed → "only 1 photo
+     * uploaded" bug.
+     */
+    fun resetStuckItems() {
+        val count = writableDatabase.update(
+            TABLE,
+            ContentValues().apply { put(COL_STATUS, STATUS_PENDING) },
+            "$COL_STATUS = ?",
+            arrayOf(STATUS_UPLOADING)
+        )
+        if (count > 0) {
+            Log.i(TAG, "resetStuckItems: reset $count stuck UPLOADING items → PENDING")
+        }
+    }
+
     /** Mark an item as currently uploading. */
     fun markUploading(id: Long) {
         val values = ContentValues().apply { put(COL_STATUS, STATUS_UPLOADING) }
