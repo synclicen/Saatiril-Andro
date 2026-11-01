@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -230,6 +231,15 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
 
     // ── Flash overlay on capture ──
     var showFlash by remember { mutableStateOf(false) }
+    // ── Capture status overlay states ──
+    // 'saving' → progress bar (gold, left→right, ~1s). Shows while photo is
+    //   being saved (isCapturing=true).
+    // 'ready' → green checkmark that fades out after ~1.5s. Shows when
+    //   capture is complete + DSLR shutter detector is ready for next shot.
+    // null → no overlay (clean preview — operator knows the camera is live
+    //   and no action is pending).
+    var captureStatus by remember { mutableStateOf<String?>(null) }  // null | "saving" | "ready"
+    var readyFadeAlpha by remember { mutableStateOf(1f) }
 
     // ── Capture phase (from ViewModel) ──
     val capturePhase by viewModel.capturePhase.collectAsState()
@@ -280,6 +290,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
             val doCapture: () -> Unit = {
                 isCapturing = true
+                captureStatus = "saving"  // Show progress bar overlay
                 scope.launch(Dispatchers.Default) {
                     try {
                         // ISSUE 3 FIX: retry black frame detection. Sometimes TextureView
@@ -349,6 +360,15 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             // immediately ready for the NEXT shutter (critical
                             // for wisuda 2-shoot: toga→ijazah berurutan).
                             dslrShutterDetector.resetCooldown()
+                            // Show "ready" checkmark overlay → fades out after 1.5s
+                            captureStatus = "ready"
+                            readyFadeAlpha = 1f
+                            scope.launch {
+                                delay(300); readyFadeAlpha = 0.7f
+                                delay(300); readyFadeAlpha = 0.4f
+                                delay(300); readyFadeAlpha = 0.15f
+                                delay(600); captureStatus = null; readyFadeAlpha = 1f
+                            }
                         }
                     }
                 }
@@ -916,6 +936,64 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             modifier = Modifier.padding(horizontal = 30.dp, vertical = 12.dp),
                             style = TextStyle(color = GOLD, fontSize = 48.sp, fontWeight = FontWeight.Black)
                         )
+                    }
+                }
+            }
+
+            // ── Capture status overlay: saving (progress bar) / ready (checkmark) ──
+            // Simple, non-intrusive indicator so the operator knows:
+            // - "saving" (gold progress bar, left→right): photo is being saved
+            // - "ready" (green checkmark, fades out): DSLR shutter ready for next shot
+            when (captureStatus) {
+                "saving" -> {
+                    // Progress bar at bottom of camera preview — gold, animates left→right
+                    val progressAnim = remember { androidx.compose.animation.core.Animatable(0f) }
+                    LaunchedEffect(captureStatus) {
+                        progressAnim.snapTo(0f)
+                        progressAnim.animateTo(1f, animationSpec = androidx.compose.animation.core.tween(durationMillis = 800, easing = androidx.compose.animation.core.LinearEasing))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(Color.Black.copy(alpha = 0.5f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressAnim.value)
+                                .fillMaxHeight()
+                                .background(GOLD)
+                        )
+                    }
+                }
+                "ready" -> {
+                    // Green checkmark badge — top-right corner, fades out
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .graphicsLayer { alpha = readyFadeAlpha }
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Siap",
+                                tint = Color(0xFF4ADE80),  // emerald green
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                "Siap",
+                                style = TextStyle(
+                                    color = Color(0xFF4ADE80),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        }
                     }
                 }
             }
