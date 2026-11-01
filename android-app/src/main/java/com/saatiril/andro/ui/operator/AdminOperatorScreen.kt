@@ -482,7 +482,10 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     // brightness change would be misdetected as a shutter.
                     if (!isCapturingRef.value) {
                         try {
-                            val bitmap = textureView.bitmap
+                            // CRITICAL: textureView.bitmap MUST be called on the main thread.
+                            // Calling it on Dispatchers.Default can return null or stale bitmap
+                            // → shutter not detected.
+                            val bitmap = withContext(kotlinx.coroutines.Dispatchers.Main) { textureView.bitmap }
                             if (bitmap != null && !bitmap.isRecycled) {
                                 dslrShutterDetector.processFrame(bitmap)
                             }
@@ -490,7 +493,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             // Expected — keep polling
                         }
                     }
-                    kotlinx.coroutines.delay(200)  // 5fps polling (matches ARAY)
+                    kotlinx.coroutines.delay(100)  // 10fps polling (was 200ms/5fps — faster = catches shorter blackouts)
                 }
             }
             onDispose {

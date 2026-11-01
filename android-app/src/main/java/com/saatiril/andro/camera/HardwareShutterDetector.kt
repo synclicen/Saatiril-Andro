@@ -140,6 +140,20 @@ class HardwareShutterDetector(
 
         if (brightness < 0) return false
 
+        // ── SIMPLE BRIGHTNESS DIP FALLBACK (no history needed) ──
+        // This catches shutters even when history is empty (right after
+        // resetCooldown — e.g. toga→ijazah fast succession). If brightness
+        // drops >40% from the LAST frame (tracked even without history),
+        // trigger immediately. This is a safety net that doesn't need 3+
+        // frames of pixel change history.
+        if (lastBrightness > MIN_AVG_BRIGHTNESS && brightness < lastBrightness * 0.60f) {
+            Log.i(TAG, "Hardware shutter (simple dip fallback)! ${lastBrightness.toInt()} → ${brightness.toInt()}")
+            lastTriggerTime = now
+            resetState()
+            onShutterDetected?.invoke()
+            return true
+        }
+
         // ── AUTO mode: smart detection (pixel change spike + brightness dip) ──
         // Matches ARAY's auto mode: mirror flip causes massive pixel change
         // + brightness dip simultaneously.

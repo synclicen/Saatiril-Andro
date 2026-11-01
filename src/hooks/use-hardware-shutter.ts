@@ -125,14 +125,14 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
         // Skip during capture (the capture's own flash/brightness change
         // would be misdetected as a shutter)
         if (isCapturingRef.current) {
-          await new Promise(r => setTimeout(r, 200))
+          await new Promise(r => setTimeout(r, 100))
           continue
         }
 
         // Cooldown check
         const now = Date.now()
         if (now - lastTriggerTimeRef.current < COOLDOWN_MS) {
-          await new Promise(r => setTimeout(r, 200))
+          await new Promise(r => setTimeout(r, 100))
           continue
         }
 
@@ -140,7 +140,7 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
         const ctx = sampleCtxRef.current
         const canvas = sampleCanvasRef.current
         if (!video || !ctx || !canvas || video.readyState < 2) {
-          await new Promise(r => setTimeout(r, 200))
+          await new Promise(r => setTimeout(r, 100))
           continue
         }
 
@@ -174,11 +174,20 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
           lastFrameDataRef.current = new Uint8ClampedArray(data)
 
           if (brightness < 0) {
-            await new Promise(r => setTimeout(r, 200))
+            await new Promise(r => setTimeout(r, 100))
             continue
           }
 
           let triggered = false
+
+          // ── SIMPLE BRIGHTNESS DIP FALLBACK (no history needed) ──
+          // Catches shutters even when history is empty (right after
+          // resetCooldown — e.g. toga→ijazah fast succession).
+          if (lastBrightnessRef.current > MIN_AVG_BRIGHTNESS &&
+              brightness < lastBrightnessRef.current * 0.60) {
+            console.log(`[HW Shutter] simple dip fallback! ${lastBrightnessRef.current.toFixed(0)} → ${brightness.toFixed(0)}`)
+            triggered = true
+          }
 
           // ── AUTO mode: pixel change spike + brightness dip ──
           if (sensitivity === 'auto') {
@@ -254,7 +263,7 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
         }
 
         // 200ms polling (5fps, matches ARAY)
-        await new Promise(r => setTimeout(r, 200))
+        await new Promise(r => setTimeout(r, 100))
       }
     }
 
