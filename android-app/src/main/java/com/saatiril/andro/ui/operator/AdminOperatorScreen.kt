@@ -133,6 +133,15 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // (CameraX ImageCapture captures the raw sensor frame, not the TextureView
     // display) — photos are saved correctly oriented.
     var mirror by remember { mutableStateOf(false) }
+    // ── Crop OSD (hide HDMI info overlay from DSLR/capture card) ──
+    // Some capture cards + DSLRs show OSD info (F, ISO, resolution, battery)
+    // on the HDMI output even when "HDMI Info" is OFF in the camera menu.
+    // This toggle crops ~8% from top + bottom of the camera preview, hiding
+    // the OSD bars. Also crops the captured photo (via CameraCapture).
+    // Persisted in SharedPreferences so it survives tab switches.
+    val cropOsdPrefs = remember { context.getSharedPreferences("saatiril_operator", android.content.Context.MODE_PRIVATE) }
+    var cropOsd by remember { mutableStateOf(cropOsdPrefs.getBoolean("crop_osd_enabled", false)) }
+    LaunchedEffect(cropOsd) { cropOsdPrefs.edit().putBoolean("crop_osd_enabled", cropOsd).apply() }
     var timerCountdown by remember { mutableStateOf<Int?>(null) }
     var timerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
@@ -350,7 +359,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             if (blackAttempts >= 3) {
                                 Log.w("OperatorScreen", "Capture: all 3 attempts were black — capturing anyway")
                             }
-                            val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
+                            // Crop OSD if enabled — crop 8% from top + bottom
+                            val captureBitmap = if (cropOsd) {
+                                val cropH = bitmap.height / 12  // ~8% each side
+                                android.graphics.Bitmap.createBitmap(
+                                    bitmap, 0, cropH, bitmap.width, bitmap.height - cropH * 2
+                                )
+                            } else bitmap
+                            val processed = try { CameraCapture.processFrame(captureBitmap, proj.config, frameBitmap) } catch (e: Exception) { captureBitmap }
                             val base64 = CameraCapture.bitmapToBase64(processed, 95)
                             withContext(Dispatchers.Main) {
                                 showFlash = true
@@ -760,7 +776,19 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             ) {
                 AndroidView(
                     factory = { textureView },
-                    modifier = Modifier.fillMaxSize().then(if (mirror) Modifier.scale(scaleX = -1f, scaleY = 1f) else Modifier)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // Crop OSD: if enabled, crop 8% from top + bottom by
+                        // scaling the TextureView UP + offsetting so the OSD
+                        // bars are outside the visible area. The capture also
+                        // crops via CameraCapture.
+                        .then(
+                            if (cropOsd) Modifier
+                                .fillMaxHeight(1.16f)  // 16% taller = 8% crop top + 8% crop bottom
+                                .offset(y = (-8).dp)   // shift up so crop is centered
+                            else Modifier
+                        )
+                        .then(if (mirror) Modifier.scale(scaleX = -1f, scaleY = 1f) else Modifier)
                 )
 
                 // Gridline overlay (inside ratio box so it matches the preview)
@@ -1189,6 +1217,18 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     Text("⇄", style = TextStyle(color = if (mirror) GOLD else MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
                     Text("Mirror", style = TextStyle(color = if (mirror) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
                     if (mirror) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
+                }
+            }
+            // Row 1.5b: Crop OSD toggle — hide HDMI info overlay (F, ISO, etc.)
+            // Crops 8% from top + bottom of preview + captured photo.
+            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable { cropOsd = !cropOsd }
+                .border(1.dp, if (cropOsd) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                colors = CardDefaults.cardColors(containerColor = if (cropOsd) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("✂", style = TextStyle(color = if (cropOsd) GOLD else MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    Text("Crop OSD", style = TextStyle(color = if (cropOsd) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                    if (cropOsd) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
+                    else { Spacer(Modifier.weight(1f)); Text("Sembunyikan info HDMI", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 7.sp)) }
                 }
             }
             // Row 1.6: Hot shoe trigger toggle (camera physical shutter → audio
