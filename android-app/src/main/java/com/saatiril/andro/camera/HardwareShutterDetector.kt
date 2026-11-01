@@ -36,16 +36,6 @@ class HardwareShutterDetector(
 ) {
     companion object {
         private const val TAG = "HWShutterDetector"
-
-        // Sensitivity-based thresholds (matches ARAY's BLACKOUT_THRESHOLD)
-        // 'high'   = 0.70 (trigger on 30% drop)
-        // 'medium' = 0.60 (trigger on 40% drop)
-        // 'low'    = 0.40 (trigger on 60% drop)
-        private val BLACKOUT_THRESHOLD = when (sensitivity) {
-            "high" -> 0.70f
-            "low" -> 0.40f
-            else -> 0.60f  // medium + auto
-        }
         private const val MIN_AVG_BRIGHTNESS = 20f
         private const val COOLDOWN_MS = 3000L
 
@@ -54,6 +44,18 @@ class HardwareShutterDetector(
         private const val PIXEL_CHANGE_SPIKE_MULTIPLIER = 3.0f
         private const val PIXEL_CHANGE_MIN_ABSOLUTE = 30f
         private const val BRIGHTNESS_DIP_RATIO = 0.80f  // 20% drop
+    }
+
+    // Sensitivity-based threshold (matches ARAY's BLACKOUT_THRESHOLD).
+    // Must be in the instance body (not companion object) because it depends
+    // on the `sensitivity` constructor parameter.
+    // 'high'   = 0.70 (trigger on 30% drop)
+    // 'medium' = 0.60 (trigger on 40% drop)
+    // 'low'    = 0.40 (trigger on 60% drop)
+    private val BLACKOUT_THRESHOLD = when (sensitivity) {
+        "high" -> 0.70f
+        "low" -> 0.40f
+        else -> 0.60f  // medium + auto
     }
 
     /** Called when a shutter press is detected. Set by the caller. */
