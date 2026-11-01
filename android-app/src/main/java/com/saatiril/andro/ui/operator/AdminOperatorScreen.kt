@@ -343,7 +343,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { captureError = "Gagal: ${e.message}" }
                     } finally {
-                        withContext(Dispatchers.Main) { isCapturing = false }
+                        withContext(Dispatchers.Main) {
+                            isCapturing = false
+                            // Reset DSLR shutter detector cooldown so it's
+                            // immediately ready for the NEXT shutter (critical
+                            // for wisuda 2-shoot: toga→ijazah berurutan).
+                            dslrShutterDetector.resetCooldown()
+                        }
                     }
                 }
             }

@@ -37,7 +37,12 @@ class HardwareShutterDetector(
     companion object {
         private const val TAG = "HWShutterDetector"
         private const val MIN_AVG_BRIGHTNESS = 20f
-        private const val COOLDOWN_MS = 3000L
+        // Cooldown setelah shutter terdeteksi — cukup untuk mencegah double-
+        // trigger dari mirror flip + recovery (~200-400ms). ARAY pakai 3000ms
+        // tapi Saatiril butuh faster turnaround untuk wisuda 2-shoot (toga→ijazah
+        // berurutan). 800ms cukup: mirror flip ~100ms + blackout ~200ms +
+        // buffer 500ms. Shutter berikutnya bisa trigger dalam ~0.8 detik.
+        private const val COOLDOWN_MS = 800L
 
         // Pixel change tracking for Auto mode (matches ARAY)
         private const val PIXEL_CHANGE_SIZE = 5
@@ -229,6 +234,22 @@ class HardwareShutterDetector(
         lastBrightness = -1f
         dipDetected = false
         lastFramePixels = null
+    }
+
+    /**
+     * Reset cooldown + state so the detector is immediately ready for the
+     * next shutter. Called by AdminOperatorScreen when isCapturing goes
+     * false (capture complete) — the detector can detect the NEXT shutter
+     * without waiting for the cooldown to expire.
+     *
+     * This is critical for wisuda 2-shoot mode (toga→ijazah berurutan):
+     * without this, the detector would wait COOLDOWN_MS after the toga
+     * shutter before it can detect the ijazah shutter.
+     */
+    fun resetCooldown() {
+        lastTriggerTime = 0L
+        resetState()
+        Log.d(TAG, "Cooldown reset — detector ready for next shutter")
     }
 
     fun start() {
