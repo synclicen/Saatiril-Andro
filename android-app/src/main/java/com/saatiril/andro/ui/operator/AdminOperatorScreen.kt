@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -140,7 +141,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // capture (same as tapping the on-screen shutter). Uses AUDIO JACK (not
     // Bluetooth) → no conflict with BLE MC remote. Simultaneous with USB video
     // capture (different input paths).
-    var hotShoeTrigger by remember { mutableStateOf(false) }
+    var hotShoeTrigger by rememberSaveable { mutableStateOf(false) }
 
     // ── DSLR Hardware Shutter Detection (visual — adapted from ARAY) ──
     // Detects DSLR shutter press via USB capture card by analyzing brightness +
@@ -149,7 +150,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // 2. Viewfinder briefly goes dark → brightness drops
     // This is a VISUAL approach (no audio cable needed) — works with any
     // USB capture card + DSLR combo.
-    var dslrShutterTrigger by remember { mutableStateOf(false) }
+    var dslrShutterTrigger by rememberSaveable { mutableStateOf(false) }
     val dslrShutterDetector = remember { com.saatiril.andro.camera.HardwareShutterDetector(sensitivity = "auto") }
     var hotShoePulseCount by remember { mutableStateOf(0) }
 
@@ -279,17 +280,72 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
             val doCapture: () -> Unit = {
                 isCapturing = true
-                try {
-                    val bitmap = textureView.bitmap
-                    val proj = project
-                    if (bitmap != null && proj != null) {
-                        val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
-                        val base64 = CameraCapture.bitmapToBase64(processed, 95)
-                        showFlash = true
-                        scope.launch { delay(200); showFlash = false }
-                        viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
-                    } else { captureError = if (bitmap == null) "Preview belum siap." else "Proyek tidak ditemukan." }
-                } catch (e: Exception) { captureError = "Gagal: ${e.message}" } finally { isCapturing = false }
+                scope.launch(Dispatchers.Default) {
+                    try {
+                        // ISSUE 3 FIX: retry black frame detection. Sometimes TextureView
+                        // returns a black bitmap (USB capture card not ready, frame not
+                        // rendered yet). Retry up to 3 times with 100ms delay between
+                        // attempts. If all 3 are black, capture anyway (better than no
+                        // photo — the admin can retake).
+                        var bitmap: android.graphics.Bitmap? = null
+                        var blackAttempts = 0
+                        for (attempt in 0 until 3) {
+                            bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
+                            if (bitmap == null || bitmap.isRecycled) {
+                                delay(100)
+                                continue
+                            }
+                            // Check if bitmap is all black (same logic as UVCCameraManager.isBitmapBlack)
+                            val w = bitmap.width
+                            val h = bitmap.height
+                            val stepX = maxOf(1, w / 20)
+                            val stepY = maxOf(1, h / 20)
+                            var blackCount = 0
+                            var totalCount = 0
+                            for (x in 0 until w step stepX) {
+                                for (y in 0 until h step stepY) {
+                                    val pixel = bitmap.getPixel(x, y)
+                                    totalCount++
+                                    val r = (pixel shr 16) and 0xFF
+                                    val g = (pixel shr 8) and 0xFF
+                                    val b = pixel and 0xFF
+                                    if (r + g + b < 30) blackCount++
+                                }
+                            }
+                            if (totalCount > 0 && blackCount.toFloat() / totalCount > 0.95f) {
+                                // >95% black — likely USB capture card not ready. Retry.
+                                blackAttempts++
+                                bitmap.recycle()
+                                bitmap = null
+                                delay(150)
+                                continue
+                            }
+                            break  // Good frame found
+                        }
+
+                        val proj = project
+                        if (bitmap != null && proj != null) {
+                            if (blackAttempts >= 3) {
+                                Log.w("OperatorScreen", "Capture: all 3 attempts were black — capturing anyway")
+                            }
+                            val processed = try { CameraCapture.processFrame(bitmap, proj.config, frameBitmap) } catch (e: Exception) { bitmap }
+                            val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                            withContext(Dispatchers.Main) {
+                                showFlash = true
+                                scope.launch { delay(200); showFlash = false }
+                            }
+                            viewModel.handleLocalCapture(activeStudent!!, base64, activeChannel)
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                captureError = if (bitmap == null) "Preview belum siap (USB capture card tidak merespon). Coba lagi." else "Proyek tidak ditemukan."
+                            }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { captureError = "Gagal: ${e.message}" }
+                    } finally {
+                        withContext(Dispatchers.Main) { isCapturing = false }
+                    }
+                }
             }
             if (timerDuration > 0) {
                 timerCountdown = timerDuration
@@ -379,6 +435,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // detector detects brightness dip + pixel change spike → triggerCapture().
     // Only runs when dslrShutterTrigger is ON + UVC camera is connected +
     // there's an active student (same conditions as hot shoe).
+    //
+    // ISSUE 2 FIX: skip polling when isCapturing=true. Previously the polling
+    // continued during capture → the capture's own flash/brightness change
+    // could be misdetected as a shutter → false trigger → race condition →
+    // ijazah capture sometimes failed. Now the detector pauses during capture
+    // + resumes after isCapturing goes back to false.
+    val isCapturingRef = remember { mutableStateOf(false) }
+    isCapturingRef.value = isCapturing
     DisposableEffect(dslrShutterTrigger, uvcConnected, activeStudent) {
         if (!dslrShutterTrigger || !uvcConnected || activeStudent == null) {
             onDispose { }
@@ -388,13 +452,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             val pollingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
             val pollingJob = pollingScope.launch {
                 while (dslrShutterTrigger && uvcConnected && activeStudent != null) {
-                    try {
-                        val bitmap = textureView.bitmap
-                        if (bitmap != null && !bitmap.isRecycled) {
-                            dslrShutterDetector.processFrame(bitmap)
+                    // Skip polling during capture — the capture's own flash/
+                    // brightness change would be misdetected as a shutter.
+                    if (!isCapturingRef.value) {
+                        try {
+                            val bitmap = textureView.bitmap
+                            if (bitmap != null && !bitmap.isRecycled) {
+                                dslrShutterDetector.processFrame(bitmap)
+                            }
+                        } catch (e: Exception) {
+                            // Expected — keep polling
                         }
-                    } catch (e: Exception) {
-                        // Expected — keep polling
                     }
                     kotlinx.coroutines.delay(200)  // 5fps polling (matches ARAY)
                 }
