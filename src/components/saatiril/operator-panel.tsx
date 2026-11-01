@@ -68,6 +68,7 @@ import { emitLocal, onLocal, offLocal, getSocket } from '@/lib/socket'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { useAIDetection, type AIMomentEvent } from '@/hooks/use-ai-detection'
 import { usePalmDetection } from '@/hooks/use-palm-detection'
+import { useHardwareShutter } from '@/hooks/use-hardware-shutter'
 import { useToast } from '@/hooks/use-toast'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 
@@ -653,6 +654,10 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // selected shutter mode (manual → instant photo, timer → starts countdown).
   // This is a hands-free trigger, NOT a shutter mode itself.
   const [palmTriggerEnabled, setPalmTriggerEnabled] = useState(false)
+  // ── DSLR Hardware Shutter Detection (visual — adapted from ARAY) ──
+  // Detects DSLR shutter press via USB capture card by analyzing brightness +
+  // pixel change between consecutive video frames. No audio cable needed.
+  const [dslrShutterEnabled, setDslrShutterEnabled] = useState(false)
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1898,6 +1903,18 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   useEffect(() => { handleCaptureRef.current = handleCapture }, [handleCapture])
   const handleCaptureClickRef = useRef<() => void>(() => {})
 
+  // ── DSLR Hardware Shutter Detection hook ──
+  // Polls the <video> element at 5fps + detects DSLR shutter via brightness
+  // dip + pixel change spike. When detected → handleCaptureRef.current().
+  const { isReady: dslrShutterReady } = useHardwareShutter({
+    videoRef,
+    enabled: dslrShutterEnabled,
+    isCapturing: sending,
+    hasActiveTarget: hasActiveTarget,
+    onShutter: () => { handleCaptureRef.current() },
+    sensitivity: 'auto',
+  })
+
   const cancelTimer = useCallback(() => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current)
@@ -2262,6 +2279,33 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             )}
           </button>
         )}
+
+        {/* Row 2b: DSLR Hardware Shutter toggle (visual detection — adapted from ARAY) */}
+        <button
+          onClick={() => setDslrShutterEnabled((v) => !v)}
+          className={`flex items-center gap-1 rounded-md font-semibold transition-all duration-200 cursor-pointer w-full min-w-0 ${
+            compact ? 'px-1 py-0.5 text-[8px]' : 'px-2 py-1.5 text-[10px]'
+          } ${dslrShutterEnabled ? 'scale-[1.02]' : 'hover:bg-white/5'}`}
+          style={{
+            backgroundColor: dslrShutterEnabled ? `${THEME.gold}22` : THEME.panel,
+            color: dslrShutterEnabled ? THEME.gold : THEME.muted,
+            border: `1px solid ${dslrShutterEnabled ? THEME.gold : THEME.border}`,
+            boxShadow: dslrShutterEnabled ? `0 0 8px ${THEME.gold}22` : 'none',
+          }}
+          title={`DSLR Shutter — deteksi shutter DSLR via USB capture card. Saat shutter ditekan, app otomatis capture. Tidak perlu kabel audio.`}
+        >
+          <Aperture className="size-3" />
+          <span className="font-bold">DSLR Shutter</span>
+          {dslrShutterEnabled && (
+            <>
+              <span style={{ color: THEME.muted }}>•</span>
+              <span className={`text-[8px] ${compact ? '' : 'text-[9px]'}`} style={{ color: THEME.gold }}>
+                {dslrShutterReady ? 'Siap ✓' : '...'}
+              </span>
+            </>
+          )}
+        </button>
+
         {/* Row 3: Camera mirror toggle (flip horizontal) — mirrors the live
             preview via transform: scaleX(-1). Does NOT affect the captured
             photo (the canvas draw uses the un-mirrored frame). */}
