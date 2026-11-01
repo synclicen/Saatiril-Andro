@@ -69,7 +69,7 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
   const PIXEL_CHANGE_SIZE = 5
   const PIXEL_CHANGE_SPIKE_MULTIPLIER = 3.0
   const PIXEL_CHANGE_MIN_ABSOLUTE = 30
-  const BRIGHTNESS_DIP_RATIO = 0.80  // 20% drop
+  const BRIGHTNESS_DIP_RATIO = 0.65  // 35% drop (raised to reject AF lock)
   const BLACKOUT_THRESHOLD = sensitivity === 'high' ? 0.70 : sensitivity === 'low' ? 0.40 : 0.60
 
   // Reusable canvas for brightness sampling (32x32, matches ARAY)
@@ -183,10 +183,18 @@ export function useHardwareShutter(opts: HardwareShutterOptions): HardwareShutte
           // ── SIMPLE BRIGHTNESS DIP FALLBACK (no history needed) ──
           // Catches shutters even when history is empty (right after
           // resetCooldown — e.g. toga→ijazah fast succession).
+          // CRITICAL: require BOTH brightness dip (>50%) AND pixel change (>40)
+          // to avoid false triggers from Sony A7 AF lock. AF lock causes ~30-40%
+          // brightness dip but minimal pixel change (same scene, just blurred).
+          // Real shutter = mirror flip = massive pixel change + massive dip.
           if (lastBrightnessRef.current > MIN_AVG_BRIGHTNESS &&
-              brightness < lastBrightnessRef.current * 0.60) {
-            console.log(`[HW Shutter] simple dip fallback! ${lastBrightnessRef.current.toFixed(0)} → ${brightness.toFixed(0)}`)
-            triggered = true
+              brightness < lastBrightnessRef.current * 0.50) {
+            if (pixelChange > 40) {
+              console.log(`[HW Shutter] simple dip+pixel! ${lastBrightnessRef.current.toFixed(0)} → ${brightness.toFixed(0)}, pixelChange=${pixelChange.toFixed(0)}`)
+              triggered = true
+            } else {
+              console.log(`[HW Shutter] brightness dip but low pixel change (${pixelChange.toFixed(0)}) — likely AF lock, not shutter`)
+            }
           }
 
           // ── AUTO mode: pixel change spike + brightness dip ──

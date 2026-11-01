@@ -151,7 +151,18 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // 2. Viewfinder briefly goes dark → brightness drops
     // This is a VISUAL approach (no audio cable needed) — works with any
     // USB capture card + DSLR combo.
-    var dslrShutterTrigger by rememberSaveable { mutableStateOf(false) }
+    //
+    // ISSUE 2 FIX: persist in SharedPreferences so the toggle survives
+    // Admin↔Operator tab switches. rememberSaveable alone wasn't enough
+    // because the Composable is fully disposed when switching tabs.
+    val dslrShutterPrefs = remember { context.getSharedPreferences("saatiril_operator", android.content.Context.MODE_PRIVATE) }
+    var dslrShutterTrigger by remember {
+        mutableStateOf(dslrShutterPrefs.getBoolean("dslr_shutter_enabled", false))
+    }
+    // Persist whenever the toggle changes
+    LaunchedEffect(dslrShutterTrigger) {
+        dslrShutterPrefs.edit().putBoolean("dslr_shutter_enabled", dslrShutterTrigger).apply()
+    }
     val dslrShutterDetector = remember { com.saatiril.andro.camera.HardwareShutterDetector(sensitivity = "auto") }
     var hotShoePulseCount by remember { mutableStateOf(0) }
 

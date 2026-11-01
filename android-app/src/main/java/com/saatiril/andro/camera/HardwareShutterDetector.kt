@@ -48,7 +48,7 @@ class HardwareShutterDetector(
         private const val PIXEL_CHANGE_SIZE = 5
         private const val PIXEL_CHANGE_SPIKE_MULTIPLIER = 3.0f
         private const val PIXEL_CHANGE_MIN_ABSOLUTE = 30f
-        private const val BRIGHTNESS_DIP_RATIO = 0.80f  // 20% drop
+        private const val BRIGHTNESS_DIP_RATIO = 0.65f  // 35% drop (raised from 0.80/20% to reject AF lock)
     }
 
     // Sensitivity-based threshold (matches ARAY's BLACKOUT_THRESHOLD).
@@ -143,15 +143,30 @@ class HardwareShutterDetector(
         // ── SIMPLE BRIGHTNESS DIP FALLBACK (no history needed) ──
         // This catches shutters even when history is empty (right after
         // resetCooldown — e.g. toga→ijazah fast succession). If brightness
-        // drops >40% from the LAST frame (tracked even without history),
-        // trigger immediately. This is a safety net that doesn't need 3+
-        // frames of pixel change history.
-        if (lastBrightness > MIN_AVG_BRIGHTNESS && brightness < lastBrightness * 0.60f) {
-            Log.i(TAG, "Hardware shutter (simple dip fallback)! ${lastBrightness.toInt()} → ${brightness.toInt()}")
-            lastTriggerTime = now
-            resetState()
-            onShutterDetected?.invoke()
-            return true
+        // drops >50% from the LAST frame AND pixel change is significant,
+        // trigger immediately.
+        //
+        // CRITICAL: require BOTH brightness dip (>50%) AND pixel change (>40)
+        // to avoid false triggers from Sony A7 AF lock. AF lock causes ~30-40%
+        // brightness dip (focus search) but minimal pixel change (same scene,
+        // just slightly blurred). Real shutter = mirror flip = massive pixel
+        // change + massive brightness dip.
+        //
+        // Threshold 50% (was 40%) — AF lock rarely exceeds 40%, real shutter
+        // almost always exceeds 50% (viewfinder goes near-black during mirror flip).
+        if (lastBrightness > MIN_AVG_BRIGHTNESS && brightness < lastBrightness * 0.50f) {
+            // Require pixel change too — AF lock has low pixel change (same scene)
+            if (pixelChange > 40f) {
+                Log.i(TAG, "Hardware shutter (simple dip+pixel)! ${lastBrightness.toInt()} → ${brightness.toInt()}, pixelChange=${pixelChange.toInt()}")
+                lastTriggerTime = now
+                resetState()
+                onShutterDetected?.invoke()
+                return true
+            } else {
+                // Brightness dip but low pixel change — likely AF lock, not shutter.
+                // Log for debugging but don't trigger.
+                Log.d(TAG, "Brightness dip but low pixel change (${pixelChange.toInt()}) — likely AF lock, not shutter")
+            }
         }
 
         // ── AUTO mode: smart detection (pixel change spike + brightness dip) ──
