@@ -141,6 +141,16 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // Bluetooth) → no conflict with BLE MC remote. Simultaneous with USB video
     // capture (different input paths).
     var hotShoeTrigger by remember { mutableStateOf(false) }
+
+    // ── DSLR Hardware Shutter Detection (visual — adapted from ARAY) ──
+    // Detects DSLR shutter press via USB capture card by analyzing brightness +
+    // pixel change between consecutive frames. When the DSLR shutter fires:
+    // 1. Mirror flips → entire frame changes (massive pixel change)
+    // 2. Viewfinder briefly goes dark → brightness drops
+    // This is a VISUAL approach (no audio cable needed) — works with any
+    // USB capture card + DSLR combo.
+    var dslrShutterTrigger by remember { mutableStateOf(false) }
+    val dslrShutterDetector = remember { com.saatiril.andro.camera.HardwareShutterDetector(sensitivity = "auto") }
     var hotShoePulseCount by remember { mutableStateOf(0) }
 
     // ── Hot shoe: RECORD_AUDIO runtime permission ──
@@ -360,6 +370,39 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     LaunchedEffect(hotShoePulseCount) {
         if (hotShoePulseCount > 0) {
             triggerCapture()
+        }
+    }
+
+    // ── DSLR Hardware Shutter Detection: polling loop ──
+    // Polls TextureView.getBitmap() every ~200ms (5fps, matches ARAY) + feeds
+    // each frame to HardwareShutterDetector. When the DSLR shutter fires →
+    // detector detects brightness dip + pixel change spike → triggerCapture().
+    // Only runs when dslrShutterTrigger is ON + UVC camera is connected +
+    // there's an active student (same conditions as hot shoe).
+    DisposableEffect(dslrShutterTrigger, uvcConnected, activeStudent) {
+        if (!dslrShutterTrigger || !uvcConnected || activeStudent == null) {
+            onDispose { }
+        } else {
+            dslrShutterDetector.onShutterDetected = { triggerCapture() }
+            dslrShutterDetector.start()
+            val pollingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+            val pollingJob = pollingScope.launch {
+                while (dslrShutterTrigger && uvcConnected && activeStudent != null) {
+                    try {
+                        val bitmap = textureView.bitmap
+                        if (bitmap != null && !bitmap.isRecycled) {
+                            dslrShutterDetector.processFrame(bitmap)
+                        }
+                    } catch (e: Exception) {
+                        // Expected — keep polling
+                    }
+                    kotlinx.coroutines.delay(200)  // 5fps polling (matches ARAY)
+                }
+            }
+            onDispose {
+                pollingJob.cancel()
+                dslrShutterDetector.stop()
+            }
         }
     }
 
@@ -1011,6 +1054,22 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     style = TextStyle(color = RED, fontSize = 8.sp),
                     modifier = Modifier.padding(horizontal = 6.dp)
                 )
+            }
+            // ── DSLR Hardware Shutter toggle (visual detection — adapted from ARAY) ──
+            // Detects DSLR shutter via USB capture card by analyzing brightness +
+            // pixel change. No audio cable needed — purely visual. Works with
+            // any USB capture card + DSLR combo.
+            Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable {
+                    dslrShutterTrigger = !dslrShutterTrigger
+                }
+                .border(1.dp, if (dslrShutterTrigger) GOLD else BORDER, RoundedCornerShape(4.dp)),
+                colors = CardDefaults.cardColors(containerColor = if (dslrShutterTrigger) CARD else PANEL), shape = RoundedCornerShape(4.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("📷", style = TextStyle(color = if (dslrShutterTrigger) GOLD else MUTED, fontSize = 11.sp, fontWeight = FontWeight.Bold))
+                    Text("DSLR Shutter", style = TextStyle(color = if (dslrShutterTrigger) GOLD else MUTED, fontSize = 9.sp, fontWeight = FontWeight.Bold))
+                    if (dslrShutterTrigger) { Spacer(Modifier.weight(1f)); Text("Aktif ✓", style = TextStyle(color = GOLD, fontSize = 8.sp)) }
+                    else { Spacer(Modifier.weight(1f)); Text("Visual trigger", style = TextStyle(color = MUTED.copy(alpha = 0.5f), fontSize = 7.sp)) }
+                }
             }
             // Row 2: Shutter button + Queue toggle + Settings toggle
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
