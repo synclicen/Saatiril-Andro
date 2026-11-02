@@ -873,12 +873,23 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     factory = { textureView },
                     modifier = Modifier
                         .fillMaxSize()
-                        // Track the TextureView's pixel size in Compose state so
-                        // the FILL matrix in the `update` block is re-applied
-                        // whenever the view is laid out (not just when
-                        // uvcNegotiatedSize changes). Without this, the matrix
-                        // would be applied with 0×0 on initial composition and
-                        // never re-applied when the view gets its real dimensions.
+                        // Mirror via graphicsLayer (replaces the old Matrix-based
+                        // mirror). Using graphicsLayer means the TextureView's
+                        // setTransform stays at IDENTITY → the TextureView natively
+                        // stretches the SurfaceTexture buffer to fill the view.
+                        // This is the SAME behavior as before the FILL matrix was
+                        // introduced (which the user confirmed had NO black bars).
+                        //
+                        // The INNER box is 4:3 (from aspectRatio modifier) and
+                        // the buffer is 4:3 (from chooseCaptureSize), so the
+                        // native stretch is UNIFORM → no distortion, no black bars.
+                        // If the camera only supports 16:9, the buffer is 16:9 and
+                        // the stretch is non-uniform (slight vertical stretch) but
+                        // STILL fills the view with no black bars — the user
+                        // accepted this before the FILL matrix was introduced.
+                        .graphicsLayer(scaleX = if (mirror) -1f else 1f)
+                        // Track the TextureView's pixel size (kept for future use
+                        // + potential debugging — the native stretch doesn't need it).
                         .onSizeChanged { textureSize = it }
                         // Crop OSD: if enabled, crop 8% from top + bottom by
                         // scaling the TextureView UP + offsetting so the OSD
@@ -891,55 +902,38 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             else Modifier
                         ),
                     update = { tv ->
-                        // FILL the container with the video (CROP overflow, NO
-                        // letterbox/pillarbox bars). This matches Electron's
-                        // `object-cover` behavior so the camera image always
-                        // fills the entire PNG frame's transparent center —
-                        // no black bars show through the frame overlay.
+                        // NATIVE STRETCH — no Matrix transform.
                         //
-                        // The captured photo is still center-cropped to the
-                        // project ratio via CameraCapture.processFrame, so the
-                        // saved JPEG matches what the operator sees.
+                        // Previous approach used a FILL (crop) Matrix to match
+                        // Electron's `object-cover`. But the FILL matrix scales
+                        // the ENTIRE SurfaceTexture buffer — including any black
+                        // bars embedded by the camera HAL (e.g. when a 16:9 HAL
+                        // places 16:9 frames at the top-left of a 4:3 buffer,
+                        // leaving black at bottom+right). The FILL matrix can't
+                        // remove these embedded black bars — it just scales them
+                        // along with the content.
                         //
-                        // `negotiatedSize` is selected based on the active
-                        // engine (UVC vs Camera2) so the matrix is always
-                        // calculated with the correct video dimensions.
-                        // `textureSize` is tracked via onSizeChanged so the
-                        // matrix is re-applied when the TextureView is laid out.
-                        val videoW = negotiatedSize.first
-                        val videoH = negotiatedSize.second
-                        // Prefer the Compose-tracked textureSize (updates on
-                        // layout changes); fall back to tv.width/height for
-                        // edge cases where onSizeChanged hasn't fired yet but
-                        // the view already has dimensions.
-                        val containerW = if (textureSize.width > 0) textureSize.width.toFloat() else tv.width.toFloat()
-                        val containerH = if (textureSize.height > 0) textureSize.height.toFloat() else tv.height.toFloat()
-                        if (videoW > 0 && videoH > 0 && containerW > 0 && containerH > 0) {
-                            val videoRatio = videoW.toFloat() / videoH.toFloat()
-                            val containerRatio = containerW / containerH
-                            val matrix = android.graphics.Matrix()
-                            if (videoRatio > containerRatio) {
-                                // Video is WIDER than container → fit HEIGHT, crop left/right
-                                val scale = containerH / videoH
-                                val scaledW = videoW * scale
-                                val offsetX = (containerW - scaledW) / 2f
-                                matrix.setScale(scale, scale)
-                                matrix.postTranslate(offsetX, 0f)
-                            } else {
-                                // Video is TALLER than container → fit WIDTH, crop top/bottom
-                                val scale = containerW / videoW
-                                val scaledH = videoH * scale
-                                val offsetY = (containerH - scaledH) / 2f
-                                matrix.setScale(scale, scale)
-                                matrix.postTranslate(0f, offsetY)
-                            }
-                            // Apply mirror if needed (same as the CSS scale above,
-                            // but Matrix-based so it works with the fill transform)
-                            if (mirror) {
-                                matrix.postScale(-1f, 1f, containerW / 2f, containerH / 2f)
-                            }
-                            tv.setTransform(matrix)
-                        }
+                        // By setting the transform to IDENTITY (the TextureView's
+                        // default), the SurfaceTexture buffer is natively
+                        // stretched to fill the view. Combined with:
+                        //   - INNER box = 4:3 (aspectRatio modifier) → frame fully visible
+                        //   - Buffer = 4:3 (chooseCaptureSize picks a supported 4:3 size)
+                        // the stretch is uniform → no distortion, no black bars.
+                        //
+                        // If the camera doesn't support 4:3 and the buffer is
+                        // 16:9, the stretch is non-uniform (slight vertical
+                        // stretch) but STILL fills the view with no black bars —
+                        // the user confirmed this was acceptable before the FILL
+                        // matrix was introduced.
+                        //
+                        // Mirror is handled by graphicsLayer(scaleX) on the
+                        // AndroidView modifier (not by the matrix).
+                        //
+                        // Reset to identity on every update (in case a previous
+                        // composition left a non-identity transform from the old
+                        // FILL matrix code — the TextureView is remembered and
+                        // reused across recompositions).
+                        tv.setTransform(android.graphics.Matrix())
                     }
                 )
 
