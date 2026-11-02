@@ -1201,6 +1201,8 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 Text("Reconnect Camera", style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold))
                             }
                         }
+                        // Close settings button
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             Card(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).clickable { showSettingsPanel = false },
                                 colors = CardDefaults.cardColors(containerColor = BORDER)) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
