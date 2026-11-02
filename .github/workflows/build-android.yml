@@ -104,10 +104,12 @@ jobs:
           fi
           ls -lh artifacts/
 
-      # ── Verify the release APK is actually signed ────────────────
-      # An unsigned APK is rejected by Android's installer (the bug we fixed
-      # in this build). Fail the build loudly if there's no v2 signing block.
-      - name: Verify release APK signature
+      # ── Verify BOTH APKs are actually signed ────────────────────
+      # An unsigned APK is rejected by Android's installer with
+      # "app not installed as package appears to be invalid".
+      # Also verify debug + release use the SAME signing certificate
+      # (so users can switch between debug/release without uninstalling).
+      - name: Verify APK signatures
         run: |
           if ! command -v apksigner >/dev/null 2>&1; then
             APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
@@ -115,11 +117,30 @@ jobs:
             APKSIGNER="apksigner"
           fi
           echo "Using apksigner: $APKSIGNER"
+
+          echo "=== Verifying RELEASE APK ==="
           "$APKSIGNER" verify --print-certs artifacts/saatiril-andro.apk || {
             echo "::error::Release APK signature verification FAILED — the APK is unsigned and Android will refuse to install it."
             exit 1
           }
-          echo "✅ Release APK is signed and installable."
+          echo "✅ Release APK is signed."
+
+          echo "=== Verifying DEBUG APK ==="
+          "$APKSIGNER" verify --print-certs artifacts/saatiril-andro-debug.apk || {
+            echo "::warning::Debug APK signature verification FAILED — debug APK may be unsigned (will still be uploadable but may not install over release builds)."
+          }
+
+          # Compare the signing certificates — they MUST match so users can
+          # switch between debug and release builds without uninstalling.
+          REL_CERT=$("$APKSIGNER" verify --print-certs artifacts/saatiril-andro.apk 2>/dev/null | grep "SHA-256" | head -1)
+          DBG_CERT=$("$APKSIGNER" verify --print-certs artifacts/saatiril-andro-debug.apk 2>/dev/null | grep "SHA-256" | head -1)
+          echo "Release cert: $REL_CERT"
+          echo "Debug cert:   $DBG_CERT"
+          if [ -n "$REL_CERT" ] && [ -n "$DBG_CERT" ] && [ "$REL_CERT" = "$DBG_CERT" ]; then
+            echo "✅ Debug and Release APKs use the SAME signing certificate — users can switch without uninstalling."
+          else
+            echo "::warning::Debug and Release APKs have DIFFERENT signing certificates — users must uninstall before switching."
+          fi
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4

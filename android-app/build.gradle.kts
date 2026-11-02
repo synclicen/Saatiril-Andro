@@ -78,6 +78,16 @@ android {
         debug {
             // Debug also benefits from ABI filter (same ndk config applies)
             isMinifyEnabled = false
+            // ── Sign debug APKs with the SAME release keystore ──
+            // This ensures debug and release APKs have IDENTICAL signatures,
+            // so users can switch between them (or update from debug to
+            // release) WITHOUT uninstalling first. Without this, debug builds
+            // are signed with the auto-generated debug keystore (random per
+            // machine/CI run) → "app not installed as package appears to be
+            // invalid" when updating from a debug build to a release build.
+            if (keystoreProperties.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         release {
             // R8 minification DISABLED — ktor CIO engine throws "Array is empty"
