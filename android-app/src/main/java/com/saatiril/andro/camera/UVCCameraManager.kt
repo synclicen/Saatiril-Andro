@@ -865,6 +865,16 @@ class UVCCameraManager(private val context: Context) {
     /**
      * Set up the preview surface and start streaming.
      * MUST be called on the MAIN thread (UI thread).
+     *
+     * This method is called:
+     * - After the camera first opens (initial setup)
+     * - After the TextureView is re-created (screen re-entry / tab switch)
+     * - After the surface is destroyed and re-created (app background/foreground)
+     *
+     * It calls stopPreview() BEFORE setPreviewDisplay() to ensure a clean
+     * restart — without this, a stale surface reference from the previous
+     * session can cause setPreviewDisplay/startPreview to fail silently,
+     * leaving the preview black.
      */
     private fun setupPreviewSurface(camera: UVCCamera, tv: TextureView) {
         try {
@@ -873,6 +883,21 @@ class UVCCameraManager(private val context: Context) {
                 Log.e(TAG, "SurfaceTexture is null even though TextureView is available!")
                 return
             }
+
+            // Stop any existing preview FIRST — ensures a clean restart.
+            // Without this, setPreviewDisplay/startPreview may fail silently
+            // when called on a camera that was previously previewing to a
+            // now-destroyed surface (happens on screen re-entry / tab switch).
+            try {
+                camera.stopPreview()
+                Log.i(TAG, "stopPreview() called before re-setup (clean restart)")
+            } catch (e: Exception) {
+                Log.w(TAG, "stopPreview() before re-setup failed (non-fatal): ${e.message}")
+            }
+
+            // Release any old surface reference
+            previewSurface?.release()
+            previewSurface = null
 
             // Create Surface from SurfaceTexture
             val surface = Surface(surfaceTexture)
@@ -906,12 +931,20 @@ class UVCCameraManager(private val context: Context) {
 
     /**
      * Called by TextureView.SurfaceTextureListener when surface becomes available.
+     *
+     * ALWAYS re-setup the preview surface if the camera is connected — not just
+     * when `pendingSurfaceSetup` is true. This handles the screen re-entry case
+     * where the old TextureView was destroyed (pendingSurfaceSetup=true) AND
+     * the case where `setTextureView` was called with a new TextureView but
+     * the camera was already connected (pendingSurfaceSetup may have been
+     * reset). Defense in depth: the preview surface is always reconnected to
+     * the current TextureView's surface.
      */
     fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         Log.i(TAG, "onSurfaceTextureAvailable: ${width}x${height}")
         val camera = uvcCamera
         val tv = textureView
-        if (camera != null && tv != null && pendingSurfaceSetup) {
+        if (camera != null && tv != null) {
             pendingSurfaceSetup = false
             // BUG #4 FIX: Run on main thread
             mainHandler.post {
@@ -1253,6 +1286,36 @@ class UVCCameraManager(private val context: Context) {
 
     fun showPreview() { Log.i(TAG, "showPreview — preview always visible via TextureView") }
     fun hidePreview() { Log.i(TAG, "hidePreview — TextureView stays active for streaming") }
+
+    /**
+     * Close the UVC camera entirely on screen exit so that on re-entry, the
+     * auto-reconnect (500ms) + watchdog (5s) will re-open a FRESH camera.
+     *
+     * Called from AdminOperatorScreen.onDispose when the user navigates away
+     * from the operator tab. Without this, the camera stays "connected" with
+     * a stale surface reference → on re-entry, the new TextureView's surface
+     * can't connect to the old camera → permanent black screen.
+     *
+     * Why close entirely (not just stop preview): the serenegiant UVCCamera
+     * library doesn't reliably accept a new surface after the old one is
+     * destroyed — setPreviewDisplay/startPreview can fail silently, leaving
+     * the preview black. Closing + re-opening guarantees a clean state.
+     *
+     * The auto-reconnect on screen re-entry calls forceReconnect() which
+     * re-initializes the USB monitor and re-opens the camera (1-2s).
+     */
+    fun releaseForScreenExit() {
+        Log.i(TAG, "releaseForScreenExit: closing camera for clean re-entry")
+        try {
+            closeUVCCamera()
+        } catch (e: Exception) {
+            Log.w(TAG, "releaseForScreenExit: closeUVCCamera error: ${e.message}")
+        }
+        // closeUVCCamera already resets _isConnected, _negotiatedSize, etc.
+        // but set these explicitly for clarity + defense in depth.
+        pendingSurfaceSetup = true
+    }
+
     fun switchToCamera(cameraId: String) = switchCamera(cameraId)
     fun hasCameraPermission(): Boolean = true
     fun refreshCameraList() = forceRescan()

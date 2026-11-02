@@ -27,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -689,7 +691,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             timerJob?.cancel()
             timerJob = null
             try { viewModel.camera2Manager.closeCamera() } catch (_: Exception) {}
-            try { viewModel.cameraUVCManager.hidePreview() } catch (_: Exception) {}
+            // Release the UVC camera's preview surface on screen exit so that
+            // on re-entry, the camera is properly re-connected to the NEW
+            // TextureView. Without this, the camera stays "connected" with a
+            // stale surface reference → black screen on reload.
+            // The auto-reconnect (500ms) + watchdog (5s) on re-entry will
+            // re-open the camera via forceReconnect() if needed.
+            try { viewModel.cameraUVCManager.releaseForScreenExit() } catch (_: Exception) {}
         }
     }
 
@@ -839,6 +847,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             // that maintains the ratio within the outer's constraints — so a
             // 4:3 inner in a 16:9 outer becomes 533×400 (centered, with black
             // bars left/right OUTSIDE the PNG frame), never 720×400 (broken).
+            //
+            // textureSize tracks the TextureView's pixel dimensions via
+            // onSizeChanged. This is CRITICAL for the FILL matrix: the `update`
+            // block reads tv.width/tv.height, which are 0 before the first
+            // layout pass. Without onSizeChanged, the matrix would be applied
+            // with 0×0 → skipped → never re-applied when the view is actually
+            // laid out (no recomposition is triggered by a layout pass alone).
+            // Tracking size in state ensures the `update` block re-runs with
+            // the correct dimensions as soon as the TextureView is laid out.
+            var textureSize by remember { mutableStateOf(IntSize.Zero) }
+
             Box(
                 modifier = Modifier
                     .aspectRatio(aspectRatio)
@@ -849,6 +868,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     factory = { textureView },
                     modifier = Modifier
                         .fillMaxSize()
+                        // Track the TextureView's pixel size in Compose state so
+                        // the FILL matrix in the `update` block is re-applied
+                        // whenever the view is laid out (not just when
+                        // uvcNegotiatedSize changes). Without this, the matrix
+                        // would be applied with 0×0 on initial composition and
+                        // never re-applied when the view gets its real dimensions.
+                        .onSizeChanged { textureSize = it }
                         // Crop OSD: if enabled, crop 8% from top + bottom by
                         // scaling the TextureView UP + offsetting so the OSD
                         // bars are outside the visible area. The capture also
@@ -873,41 +899,44 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         // We read the observed `uvcNegotiatedSize` state (not
                         // the raw @Volatile var) so the matrix is re-applied
                         // automatically when the camera connects and the real
-                        // preview size is negotiated. Without this, the update
-                        // block would only run on initial composition (when
-                        // the size is still the default) → stale matrix →
-                        // black bars inside the PNG frame.
+                        // preview size is negotiated. We also read `textureSize`
+                        // (tracked via onSizeChanged) so the matrix is re-applied
+                        // when the TextureView is laid out — without this, the
+                        // matrix would be applied with 0×0 on initial composition
+                        // and never re-applied when the view gets its real size.
                         val videoW = uvcNegotiatedSize.first
                         val videoH = uvcNegotiatedSize.second
-                        if (videoW > 0 && videoH > 0) {
-                            val containerW = tv.width.toFloat()
-                            val containerH = tv.height.toFloat()
-                            if (containerW > 0 && containerH > 0) {
-                                val videoRatio = videoW.toFloat() / videoH.toFloat()
-                                val containerRatio = containerW / containerH
-                                val matrix = android.graphics.Matrix()
-                                if (videoRatio > containerRatio) {
-                                    // Video is WIDER than container → fit HEIGHT, crop left/right
-                                    val scale = containerH / videoH
-                                    val scaledW = videoW * scale
-                                    val offsetX = (containerW - scaledW) / 2f
-                                    matrix.setScale(scale, scale)
-                                    matrix.postTranslate(offsetX, 0f)
-                                } else {
-                                    // Video is TALLER than container → fit WIDTH, crop top/bottom
-                                    val scale = containerW / videoW
-                                    val scaledH = videoH * scale
-                                    val offsetY = (containerH - scaledH) / 2f
-                                    matrix.setScale(scale, scale)
-                                    matrix.postTranslate(0f, offsetY)
-                                }
-                                // Apply mirror if needed (same as the CSS scale above,
-                                // but Matrix-based so it works with the fill transform)
-                                if (mirror) {
-                                    matrix.postScale(-1f, 1f, containerW / 2f, containerH / 2f)
-                                }
-                                tv.setTransform(matrix)
+                        // Prefer the Compose-tracked textureSize (updates on
+                        // layout changes); fall back to tv.width/height for
+                        // edge cases where onSizeChanged hasn't fired yet but
+                        // the view already has dimensions.
+                        val containerW = if (textureSize.width > 0) textureSize.width.toFloat() else tv.width.toFloat()
+                        val containerH = if (textureSize.height > 0) textureSize.height.toFloat() else tv.height.toFloat()
+                        if (videoW > 0 && videoH > 0 && containerW > 0 && containerH > 0) {
+                            val videoRatio = videoW.toFloat() / videoH.toFloat()
+                            val containerRatio = containerW / containerH
+                            val matrix = android.graphics.Matrix()
+                            if (videoRatio > containerRatio) {
+                                // Video is WIDER than container → fit HEIGHT, crop left/right
+                                val scale = containerH / videoH
+                                val scaledW = videoW * scale
+                                val offsetX = (containerW - scaledW) / 2f
+                                matrix.setScale(scale, scale)
+                                matrix.postTranslate(offsetX, 0f)
+                            } else {
+                                // Video is TALLER than container → fit WIDTH, crop top/bottom
+                                val scale = containerW / videoW
+                                val scaledH = videoH * scale
+                                val offsetY = (containerH - scaledH) / 2f
+                                matrix.setScale(scale, scale)
+                                matrix.postTranslate(0f, offsetY)
                             }
+                            // Apply mirror if needed (same as the CSS scale above,
+                            // but Matrix-based so it works with the fill transform)
+                            if (mirror) {
+                                matrix.postScale(-1f, 1f, containerW / 2f, containerH / 2f)
+                            }
+                            tv.setTransform(matrix)
                         }
                     }
                 )
