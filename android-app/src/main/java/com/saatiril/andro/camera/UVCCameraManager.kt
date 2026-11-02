@@ -1185,4 +1185,74 @@ class UVCCameraManager(private val context: Context) {
         textureView = null
         previewSurface = null
     }
-}
+
+    /**
+     * Force reconnect camera — nuclear recovery option for when the camera
+     * disconnects mid-ceremony (battery dead, cable unplugged, USB hang).
+     *
+     * This method:
+     * 1. Closes any existing UVC camera connection.
+     * 2. Resets isInitialized so initCamera() will re-register USBMonitor.
+     * 3. Re-registers USBMonitor + re-scans for USB devices.
+     * 4. If a UVC device is found + has permission, opens it immediately.
+     *
+     * Call this when:
+     * - User clicks "Reconnect Camera" button.
+     * - AdminOperatorScreen re-enters (returning from Admin tab).
+     * - USB device detach is detected (camera unplugged / battery dead).
+     */
+    fun forceReconnect() {
+        Log.i(TAG, "forceReconnect: nuclear camera recovery initiated")
+
+        // Step 1: Close existing connection cleanly
+        try { closeUVCCamera() } catch (e: Exception) {
+            Log.w(TAG, "forceReconnect: closeUVCCamera error: ${e.message}")
+        }
+
+        // Step 2: Reset state so initCamera will re-register everything
+        isInitialized = false
+        isDestroying = false
+
+        // Step 3: Unregister old USBMonitor (if any)
+        try { unregisterUsbMonitor() } catch (_: Exception) {}
+        try { unregisterUsbPermissionReceiver() } catch (_: Exception) {}
+
+        // Step 4: Stop + restart background thread
+        try { stopBackgroundThread() } catch (_: Exception) {}
+        discoveredDevices.clear()
+
+        // Step 5: Re-initialize (registers USBMonitor + starts scanning)
+        initCamera()
+
+        // Step 6: Check for already-connected USB devices + try to open directly
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+        if (usbManager != null) {
+            val deviceList = usbManager.deviceList
+            for ((_, device) in deviceList) {
+                Log.i(TAG, "forceReconnect: found USB device: ${device.deviceName} (vid=${device.vendorId}, pid=${device.productId})")
+                // Check if it looks like a UVC device (video class 14)
+                var isUvc = false
+                for (i in 0 until device.interfaceCount) {
+                    if (device.getInterface(i).interfaceClass == 14) { isUvc = true; break }
+                }
+                // Also check known capture card vendor IDs
+                val knownVids = setOf(0x534D, 0x1D6C, 0x0C45, 0x046D)
+                if (!isUvc && device.vendorId in knownVids) isUvc = true
+                // Fallback: try anyway (better to try than not)
+                isUvc = true  // Always try — the USBMonitor will filter non-UVC
+
+                if (isUvc) {
+                    Log.i(TAG, "forceReconnect: attempting to open: ${device.deviceName}")
+                    if (usbManager.hasPermission(device)) {
+                        backgroundHandler?.post { tryOpenUVCCameraDirect(device) }
+                    } else {
+                        val monitor = usbMonitor
+                        if (monitor != null) {
+                            backgroundHandler?.post { monitor.requestPermission(device) }
+                        }
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "forceReconnect: recovery sequence complete")
+    }

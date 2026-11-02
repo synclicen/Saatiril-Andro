@@ -634,6 +634,43 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             viewModel.cameraUVCManager.initCamera()
             viewModel.refreshAvailableCameras()
             viewModel.camera2Manager.openCamera()
+
+            // AUTO-RECONNECT: if UVC was previously connected (user returned
+            // from Admin tab), force reconnect to recover the camera. Without
+            // this, initCamera() is skipped (isInitialized=true) → camera
+            // stays disconnected → black preview.
+            if (activeEngine == "uvc") {
+                scope.launch(Dispatchers.IO) {
+                    delay(500)  // Give USBMonitor time to register
+                    if (!viewModel.cameraUVCManager.isConnected.value) {
+                        Log.i("OperatorScreen", "Auto-reconnect: UVC not connected after screen re-enter → forceReconnect()")
+                        viewModel.cameraUVCManager.forceReconnect()
+                    }
+                }
+            }
+
+            // WATCHDOG: auto-retry every 5s if UVC is disconnected but a USB
+            // device is physically present (camera battery replaced, cable
+            // re-plugged, USB hang). This handles the "ganti baterai" scenario
+            // — operator replaces battery, camera turns back on, watchdog
+            // detects it + auto-reconnects within 5 seconds. No manual button
+            // press needed.
+            if (activeEngine == "uvc") {
+                scope.launch(Dispatchers.IO) {
+                    while (true) {
+                        delay(5000)
+                        if (!viewModel.cameraUVCManager.isConnected.value) {
+                            // Check if any USB device is present
+                            val usbManager = context.getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                            val hasUsbDevice = usbManager?.deviceList?.isNotEmpty() == true
+                            if (hasUsbDevice) {
+                                Log.i("OperatorScreen", "Watchdog: UVC disconnected + USB device present → forceReconnect()")
+                                viewModel.cameraUVCManager.forceReconnect()
+                            }
+                        }
+                    }
+                }
+            }
         }
         onDispose {
             // Cancel any in-flight countdown timer (was never cancelled on dispose)
@@ -1146,6 +1183,24 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                             Icon(Icons.Default.Tune, contentDescription = null, tint = GOLD, modifier = Modifier.size(10.dp))
                             Text("Pengaturan", style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                        }
+                        // ── Reconnect Camera button (nuclear recovery) ──
+                        // When camera disconnects mid-ceremony (battery dead,
+                        // cable unplugged, USB hang), this button forces a full
+                        // UVC camera re-initialization: close → unregister →
+                        // re-register USBMonitor → re-scan → re-open.
+                        Card(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).clickable {
+                                scope.launch(Dispatchers.IO) {
+                                    viewModel.cameraUVCManager.forceReconnect()
+                                }
+                            }
+                            .border(1.dp, BORDER, RoundedCornerShape(4.dp)),
+                            colors = CardDefaults.cardColors(containerColor = PANEL), shape = RoundedCornerShape(4.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("🔄", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                                Text("Reconnect Camera", style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+                            }
+                        }
                             Card(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).clickable { showSettingsPanel = false },
                                 colors = CardDefaults.cardColors(containerColor = BORDER)) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
