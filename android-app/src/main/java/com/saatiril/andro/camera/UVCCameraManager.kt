@@ -1256,3 +1256,5 @@ class UVCCameraManager(private val context: Context) {
         }
         Log.i(TAG, "forceReconnect: recovery sequence complete")
     }
+
+}
