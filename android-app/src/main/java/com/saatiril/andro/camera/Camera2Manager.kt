@@ -123,6 +123,13 @@ class Camera2Manager(private val context: Context) {
     private var previewWidth = CAPTURE_WIDTH
     private var previewHeight = CAPTURE_HEIGHT
 
+    /** Observable preview size — the Compose UI observes this so the FILL
+     *  Matrix is re-applied when the camera opens and the real preview size
+     *  is known. Without this, the Matrix `update` block would use stale
+     *  default dimensions and the preview would show black bars. */
+    private val _negotiatedSize = MutableStateFlow(CAPTURE_WIDTH to CAPTURE_HEIGHT)
+    val negotiatedSizeFlow: StateFlow<Pair<Int, Int>> = _negotiatedSize.asStateFlow()
+
     /** Project aspect ratio (w/h) — set by AdminOperatorScreen so the preview
      *  buffer matches the selected ratio (e.g. 9:16 = portrait, 4:3 = landscape). */
     private var projectAspectRatio: Float = 16f / 9f  // default landscape
@@ -140,6 +147,7 @@ class Camera2Manager(private val context: Context) {
             previewHeight = CAPTURE_WIDTH  // use max as the longer dimension
             previewWidth = (CAPTURE_WIDTH * ratio).toInt()
         }
+        _negotiatedSize.value = previewWidth to previewHeight
         Log.i(TAG, "Project aspect ratio set: $ratio → preview ${previewWidth}x${previewHeight}")
     }
 
@@ -432,7 +440,22 @@ class Camera2Manager(private val context: Context) {
 
     /**
      * Choose appropriate capture size based on camera characteristics.
-     * Tries to match 16:9 aspect ratio at a reasonable resolution.
+     * Tries to match the project's aspect ratio at a reasonable resolution.
+     *
+     * CRITICAL: This method now ALSO queries the supported PREVIEW sizes
+     * (SurfaceTexture.class output sizes) — not just JPEG sizes — and picks
+     * the largest one matching the project ratio. The previewWidth/Height
+     * are then set to this ACTUAL supported size.
+     *
+     * Why this matters: before this fix, previewWidth/Height were set to
+     * 1920×1440 (for 4:3) regardless of what the camera sensor actually
+     * supports. If the sensor only supports 1920×1080 (16:9) for preview,
+     * the camera would produce 16:9 frames into a buffer declared as 4:3.
+     * On many devices, the frames are placed at the top-left WITHOUT
+     * scaling → black bars on the bottom+right inside the PNG frame.
+     * By setting the buffer to a size the camera actually supports at the
+     * correct aspect ratio, the frames fill the buffer completely → no
+     * black bars.
      */
     private fun chooseCaptureSize(cameraId: String) {
         try {
@@ -440,31 +463,63 @@ class Camera2Manager(private val context: Context) {
             val configMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
 
             if (configMap != null) {
+                // ── Query supported PREVIEW sizes (for SurfaceTexture) ──
+                // These are the sizes the camera HAL can actually produce for
+                // the preview surface. Setting the SurfaceTexture buffer to one
+                // of these sizes guarantees the camera fills the buffer with no
+                // black bars.
+                val previewSizes = configMap.getOutputSizes(SurfaceTexture::class.java)
+                if (previewSizes != null && previewSizes.isNotEmpty()) {
+                    val targetRatio = projectAspectRatio
+                    Log.i(TAG, "Supported preview sizes: ${previewSizes.map { "${it.width}x${it.height}" }.joinToString(", ")}")
+                    Log.i(TAG, "Target ratio: $targetRatio (project)")
+
+                    // Find the largest preview size matching the project ratio
+                    // (within 2% tolerance — some sensors report 1.31 instead of 1.333)
+                    val matchingSizes = previewSizes.filter { size ->
+                        val sizeRatio = size.width.toFloat() / size.height.toFloat()
+                        Math.abs(sizeRatio - targetRatio) < 0.02f
+                    }.sortedByDescending { it.width * it.height }
+
+                    if (matchingSizes.isNotEmpty()) {
+                        val best = matchingSizes[0]
+                        previewWidth = best.width
+                        previewHeight = best.height
+                        _negotiatedSize.value = previewWidth to previewHeight
+                        Log.i(TAG, "★ Preview size set to SUPPORTED ${previewWidth}x${previewHeight} (matches project ratio $targetRatio)")
+                    } else {
+                        // No exact ratio match — find the closest and apply FILL matrix
+                        val closest = previewSizes.minByOrNull { size ->
+                            val sizeRatio = size.width.toFloat() / size.height.toFloat()
+                            Math.abs(sizeRatio - targetRatio)
+                        }
+                        if (closest != null) {
+                            previewWidth = closest.width
+                            previewHeight = closest.height
+                            _negotiatedSize.value = previewWidth to previewHeight
+                            Log.w(TAG, "No exact ratio match — using closest: ${previewWidth}x${previewHeight} (ratio ${previewWidth.toFloat()/previewHeight.toFloat()}, target $targetRatio). FILL matrix will crop to project ratio.")
+                        }
+                    }
+                }
+
+                // ── Also log JPEG sizes (for capture) ──
                 val jpegSizes = configMap.getOutputSizes(ImageFormat.JPEG)
                 if (jpegSizes != null && jpegSizes.isNotEmpty()) {
-                    // DON'T override previewWidth/previewHeight here — they were set
-                    // by setProjectAspectRatio() to match the project's selected ratio.
-                    // Just find the best capture size that's CLOSEST to our target ratio.
                     val targetW = previewWidth
                     val targetH = previewHeight
                     val targetRatio = targetW.toFloat() / targetH.toFloat()
-
-                    // Find the JPEG size closest to our target dimensions
                     val best = jpegSizes.minByOrNull { size ->
                         val sizeRatio = size.width.toFloat() / size.height.toFloat()
-                        Math.abs(sizeRatio - targetRatio) * 1000 +  // ratio match priority
-                        Math.abs(size.width - targetW) + Math.abs(size.height - targetH)  // then size match
+                        Math.abs(sizeRatio - targetRatio) * 1000 +
+                        Math.abs(size.width - targetW) + Math.abs(size.height - targetH)
                     }
                     if (best != null) {
-                        // Keep preview dimensions as set by setProjectAspectRatio()
-                        // but log the actual capture size for debugging
-                        Log.i(TAG, "Capture size available: ${best.width}x${best.height} (preview stays ${previewWidth}x${previewHeight} @ ratio $targetRatio)")
+                        Log.i(TAG, "JPEG capture size: ${best.width}x${best.height} (preview ${previewWidth}x${previewHeight})")
                     }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not determine capture size, using project ratio defaults: ${e.message}")
-            // Don't override — keep previewWidth/previewHeight as set by setProjectAspectRatio()
         }
     }
 
@@ -797,6 +852,17 @@ class Camera2Manager(private val context: Context) {
         imageReader = null
 
         _isConnected.value = false
+        // Reset negotiated size to project-ratio defaults so the FILL matrix
+        // is re-calculated when the camera reopens. chooseCaptureSize() will
+        // update this with the actual supported size on next open.
+        if (projectAspectRatio >= 1f) {
+            previewWidth = CAPTURE_WIDTH
+            previewHeight = (CAPTURE_WIDTH / projectAspectRatio).toInt()
+        } else {
+            previewHeight = CAPTURE_WIDTH
+            previewWidth = (CAPTURE_WIDTH * projectAspectRatio).toInt()
+        }
+        _negotiatedSize.value = previewWidth to previewHeight
     }
 
     /**

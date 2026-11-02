@@ -121,12 +121,17 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     val frameBitmap by viewModel.frameBitmap.collectAsState()
     // Observe the UVC's negotiated preview size as state so the FILL Matrix
     // is re-applied automatically when the camera connects and the real
-    // preview size is known. Without this, the Matrix `update` block would
-    // only run on initial composition (when negotiatedWidth/Height are still
-    // the defaults) and never re-run when the camera actually negotiates a
-    // (possibly different) size → letterbox/pillarbox black bars would appear
-    // inside the PNG frame.
+    // preview size is known.
     val uvcNegotiatedSize by viewModel.cameraUVCManager.negotiatedSizeFlow.collectAsState()
+    // Observe the Camera2's negotiated preview size as state — same reason.
+    // The Camera2 manager now queries the camera's supported preview sizes and
+    // picks one matching the project ratio, so the FILL matrix uses the ACTUAL
+    // frame size (not the stale default 1920×1080).
+    val c2NegotiatedSize by viewModel.camera2Manager.negotiatedSizeFlow.collectAsState()
+    // Select the negotiated size based on which camera engine is active.
+    // This ensures the FILL matrix is calculated with the correct video
+    // dimensions for whichever camera is currently in use.
+    val negotiatedSize = if (activeEngine == "uvc") uvcNegotiatedSize else c2NegotiatedSize
     var showCameraPicker by remember { mutableStateOf(false) }
 
     val cameraConnected = if (activeEngine == "uvc") uvcConnected else c2Connected
@@ -896,16 +901,13 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         // project ratio via CameraCapture.processFrame, so the
                         // saved JPEG matches what the operator sees.
                         //
-                        // We read the observed `uvcNegotiatedSize` state (not
-                        // the raw @Volatile var) so the matrix is re-applied
-                        // automatically when the camera connects and the real
-                        // preview size is negotiated. We also read `textureSize`
-                        // (tracked via onSizeChanged) so the matrix is re-applied
-                        // when the TextureView is laid out — without this, the
-                        // matrix would be applied with 0×0 on initial composition
-                        // and never re-applied when the view gets its real size.
-                        val videoW = uvcNegotiatedSize.first
-                        val videoH = uvcNegotiatedSize.second
+                        // `negotiatedSize` is selected based on the active
+                        // engine (UVC vs Camera2) so the matrix is always
+                        // calculated with the correct video dimensions.
+                        // `textureSize` is tracked via onSizeChanged so the
+                        // matrix is re-applied when the TextureView is laid out.
+                        val videoW = negotiatedSize.first
+                        val videoH = negotiatedSize.second
                         // Prefer the Compose-tracked textureSize (updates on
                         // layout changes); fall back to tv.width/height for
                         // edge cases where onSizeChanged hasn't fired yet but
