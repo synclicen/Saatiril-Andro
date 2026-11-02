@@ -824,8 +824,51 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 .fillMaxHeight(1.16f)  // 16% taller = 8% crop top + 8% crop bottom
                                 .offset(y = (-8).dp)   // shift up so crop is centered
                             else Modifier
-                        )
-                        .then(if (mirror) Modifier.scale(scaleX = -1f, scaleY = 1f) else Modifier)
+                        ),
+                    update = { tv ->
+                        // FIT video into the 4:3 (or other ratio) container.
+                        // The UVC capture card typically outputs 16:9 (1280x720),
+                        // but the container Box is locked to the project ratio
+                        // (e.g. 4:3). Without this Matrix, fillMaxSize() stretches
+                        // the video → parts of the frame are cropped/hidden.
+                        //
+                        // The Matrix scales the video to FIT inside the container
+                        // (letterbox if needed) so the FULL frame is always visible.
+                        // The captured photo is still cropped to the project ratio
+                        // via CameraCapture.processFrame — this is preview-only.
+                        val videoW = viewModel.cameraUVCManager.negotiatedWidth
+                        val videoH = viewModel.cameraUVCManager.negotiatedHeight
+                        if (videoW > 0 && videoH > 0) {
+                            val containerW = tv.width.toFloat()
+                            val containerH = tv.height.toFloat()
+                            if (containerW > 0 && containerH > 0) {
+                                val videoRatio = videoW.toFloat() / videoH.toFloat()
+                                val containerRatio = containerW / containerH
+                                val matrix = android.graphics.Matrix()
+                                if (videoRatio > containerRatio) {
+                                    // Video is WIDER than container → fit width, letterbox top/bottom
+                                    val scale = containerW / videoW
+                                    val scaledH = videoH * scale
+                                    val offsetY = (containerH - scaledH) / 2f
+                                    matrix.setScale(scale, scale)
+                                    matrix.postTranslate(0f, offsetY)
+                                } else {
+                                    // Video is TALLER than container → fit height, letterbox left/right
+                                    val scale = containerH / videoH
+                                    val scaledW = videoW * scale
+                                    val offsetX = (containerW - scaledW) / 2f
+                                    matrix.setScale(scale, scale)
+                                    matrix.postTranslate(offsetX, 0f)
+                                }
+                                // Apply mirror if needed (same as the CSS scale above,
+                                // but Matrix-based so it works with the fit transform)
+                                if (mirror) {
+                                    matrix.postScale(-1f, 1f, containerW / 2f, containerH / 2f)
+                                }
+                                tv.setTransform(matrix)
+                            }
+                        }
+                    }
                 )
 
                 // Gridline overlay (inside ratio box so it matches the preview)

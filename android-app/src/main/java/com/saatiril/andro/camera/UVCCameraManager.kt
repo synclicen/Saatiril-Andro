@@ -126,8 +126,8 @@ class UVCCameraManager(private val context: Context) {
     /** Actual negotiated preview size — may differ from PREVIEW_WIDTH/HEIGHT
      *  when the 640x480 fallback was used. IFrameCallback NV21 frames MUST be
      *  decoded with these dimensions (using the constants corrupted captures). */
-    private var negotiatedWidth = PREVIEW_WIDTH
-    private var negotiatedHeight = PREVIEW_HEIGHT
+    @Volatile var negotiatedWidth = PREVIEW_WIDTH  // public for Matrix fit calc
+    @Volatile var negotiatedHeight = PREVIEW_HEIGHT  // public for Matrix fit calc
 
     // ─── USB Permission ─────────────────────────────────────────
     private var usbPermissionReceiver: BroadcastReceiver? = null
