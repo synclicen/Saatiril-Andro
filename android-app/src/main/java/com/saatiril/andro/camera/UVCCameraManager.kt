@@ -104,6 +104,31 @@ class UVCCameraManager(private val context: Context) {
     private val _isUSBCamera = MutableStateFlow(false)
     val isUSBCamera: StateFlow<Boolean> = _isUSBCamera.asStateFlow()
 
+    // ─── Negotiated preview size (observable for Matrix re-application) ───
+    // The Compose UI observes this StateFlow so the FILL Matrix is re-applied
+    // automatically when the camera connects and the real preview size is known.
+    // Without this, the Matrix `update` block would only run on initial composition
+    // (when negotiatedWidth/Height are still the defaults) and never re-run when
+    // the camera actually negotiates a (possibly different) size → letterbox/pillarbox
+    // black bars appear inside the PNG frame.
+    private val _negotiatedSize = MutableStateFlow(PREVIEW_WIDTH to PREVIEW_HEIGHT)
+    val negotiatedSizeFlow: StateFlow<Pair<Int, Int>> = _negotiatedSize.asStateFlow()
+
+    // ─── Project aspect ratio (w/h) ─────────────────────────────
+    // Set by AdminOperatorScreen so the UVC negotiation can prefer resolutions
+    // matching the project's selected ratio (e.g. 4:3 → try 1280x960, 640x480).
+    // This avoids the DSLR/capture-card embedding black bars (e.g. a 4:3 sensor
+    // output stretched into a 16:9 HDMI frame with pillarbox bars) which would
+    // otherwise show through the PNG frame's transparent center.
+    @Volatile private var projectAspectRatio: Float = 4f / 3f
+
+    /** Set the project's aspect ratio so UVC preview negotiation can prefer
+     *  matching resolutions. Call this before the camera opens. */
+    fun setProjectAspectRatio(ratio: Float) {
+        projectAspectRatio = ratio
+        Log.i(TAG, "UVC project aspect ratio set: $ratio")
+    }
+
     // ─── UVC Internals ──────────────────────────────────────────
     private var usbMonitor: USBMonitor? = null
     private var uvcCamera: UVCCamera? = null
@@ -686,46 +711,59 @@ class UVCCameraManager(private val context: Context) {
             // This is the ONLY way to set bandwidth in org.uvccamera:lib!
             // setBandwidthFactor() DOES NOT EXIST in this library.
             //
-            // MacroSilicon: MJPEG forced, 720p, max 30fps, bandwidth 1.0f
+            // ASPECT-RATIO-AWARE NEGOTIATION (ritual-resilience fix):
+            // The DSLR/capture-card often outputs a 4:3 sensor image embedded
+            // in a 16:9 HDMI frame (with black pillarbox bars on left/right).
+            // If we force 1280x720 (16:9) for a 4:3 project, those embedded
+            // black bars show through the PNG frame's transparent center.
+            // Instead, we now PREFER resolutions matching the project's aspect
+            // ratio (4:3 → 1280x960 / 1024x768 / 640x480; 16:9 → 1280x720 /
+            // 1920x1080), then fall back to the original 1280x720 → 640x480
+            // chain. The FILL Matrix in AdminOperatorScreen also crops any
+            // residual black bars as a defense-in-depth.
             // ═════════════════════════════════════════════════════
-            try {
-                Log.i(TAG, "★ Trying setPreviewSize(${PREVIEW_WIDTH}x${PREVIEW_HEIGHT}, ${PREVIEW_MIN_FPS}-${PREVIEW_MAX_FPS}fps, MJPEG, bw=${BANDWIDTH_FACTOR})")
-                camera.setPreviewSize(
-                    PREVIEW_WIDTH, PREVIEW_HEIGHT,
-                    PREVIEW_MIN_FPS, PREVIEW_MAX_FPS,
-                    PREVIEW_FORMAT, BANDWIDTH_FACTOR
-                )
-                negotiatedWidth = PREVIEW_WIDTH
-                negotiatedHeight = PREVIEW_HEIGHT
-                Log.i(TAG, "★ Preview size set: ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT} MJPEG bw=${BANDWIDTH_FACTOR}")
-            } catch (e1: Exception) {
-                Log.w(TAG, "1280x720 MJPEG bw=1.0 failed: ${e1.message}, trying without bw param...")
+            val candidateSizes = buildCandidateSizes(projectAspectRatio)
+            var previewSet = false
+            for ((w, h, label) in candidateSizes) {
                 try {
-                    // Fallback: simpler overload without bandwidth
-                    camera.setPreviewSize(PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_FORMAT)
-                    negotiatedWidth = PREVIEW_WIDTH
-                    negotiatedHeight = PREVIEW_HEIGHT
-                    Log.i(TAG, "★ Preview size set: ${PREVIEW_WIDTH}x${PREVIEW_HEIGHT} MJPEG (no bw)")
-                } catch (e2: Exception) {
-                    Log.w(TAG, "1280x720 MJPEG failed: ${e2.message}, trying 640x480 MJPEG...")
+                    Log.i(TAG, "★ Trying setPreviewSize(${w}x${h}, ${PREVIEW_MIN_FPS}-${PREVIEW_MAX_FPS}fps, MJPEG, bw=${BANDWIDTH_FACTOR}) [$label]")
+                    camera.setPreviewSize(w, h, PREVIEW_MIN_FPS, PREVIEW_MAX_FPS, PREVIEW_FORMAT, BANDWIDTH_FACTOR)
+                    negotiatedWidth = w
+                    negotiatedHeight = h
+                    _negotiatedSize.value = w to h
+                    Log.i(TAG, "★ Preview size set: ${w}x${h} MJPEG bw=${BANDWIDTH_FACTOR} [$label]")
+                    previewSet = true
+                    break
+                } catch (e1: Exception) {
+                    Log.w(TAG, "${w}x${h} MJPEG bw failed: ${e1.message}, trying without bw param...")
                     try {
-                        camera.setPreviewSize(640, 480, PREVIEW_MIN_FPS, PREVIEW_MAX_FPS, UVCCamera.FRAME_FORMAT_MJPEG, BANDWIDTH_FACTOR)
-                        negotiatedWidth = 640
-                        negotiatedHeight = 480
-                        Log.i(TAG, "★ Preview size set: 640x480 MJPEG bw=${BANDWIDTH_FACTOR}")
-                    } catch (e3: Exception) {
-                        Log.w(TAG, "640x480 MJPEG bw failed: ${e3.message}, trying 640x480 simple...")
-                        try {
-                            camera.setPreviewSize(640, 480, UVCCamera.FRAME_FORMAT_MJPEG)
-                            negotiatedWidth = 640
-                            negotiatedHeight = 480
-                            Log.i(TAG, "★ Preview size set: 640x480 MJPEG (no bw)")
-                        } catch (e4: Exception) {
-                            Log.e(TAG, "ALL preview size attempts failed! ${e4.message}")
-                            closeUVCCamera()
-                            return
-                        }
+                        camera.setPreviewSize(w, h, PREVIEW_FORMAT)
+                        negotiatedWidth = w
+                        negotiatedHeight = h
+                        _negotiatedSize.value = w to h
+                        Log.i(TAG, "★ Preview size set: ${w}x${h} MJPEG (no bw) [$label]")
+                        previewSet = true
+                        break
+                    } catch (e2: Exception) {
+                        Log.w(TAG, "${w}x${h} MJPEG failed: ${e2.message}, trying next candidate...")
+                        // continue to next candidate size
                     }
+                }
+            }
+            if (!previewSet) {
+                // Last-resort fallback: simple 640x480 (the most universally
+                // supported UVC resolution — every capture card accepts it).
+                try {
+                    Log.w(TAG, "All project-ratio candidates failed — falling back to 640x480 simple")
+                    camera.setPreviewSize(640, 480, UVCCamera.FRAME_FORMAT_MJPEG)
+                    negotiatedWidth = 640
+                    negotiatedHeight = 480
+                    _negotiatedSize.value = 640 to 480
+                    Log.i(TAG, "★ Preview size set: 640x480 MJPEG (last-resort fallback)")
+                } catch (e4: Exception) {
+                    Log.e(TAG, "ALL preview size attempts failed! ${e4.message}")
+                    closeUVCCamera()
+                    return
                 }
             }
 
@@ -759,6 +797,69 @@ class UVCCameraManager(private val context: Context) {
             Log.e(TAG, "Failed to open UVCCamera: ${e.message}", e)
             closeUVCCamera()
         }
+    }
+
+    /**
+     * Build the list of candidate preview sizes to try, ordered by:
+     *   1. Resolutions matching the project's aspect ratio (largest first)
+     *   2. The legacy 1280x720 default (for backwards compat with capture cards
+     *      that only support 16:9)
+     *
+     * Each entry is (width, height, label) where label is used for logging.
+     *
+     * Why this matters: a 4:3 DSLR sensor output is often embedded in a 16:9
+     * HDMI frame by the camera (with black pillarbox bars on left/right).
+     * If we negotiate 16:9 for a 4:3 project, those embedded black bars show
+     * through the PNG frame's transparent center. By preferring 4:3 resolutions
+     * (1280x960, 1024x768, 640x480) for 4:3 projects, we get a clean 4:3 frame
+     * with no embedded black bars. The FILL Matrix in AdminOperatorScreen
+     * provides defense-in-depth by cropping any residual bars.
+     */
+    private fun buildCandidateSizes(targetRatio: Float): List<Triple<Int, Int, String>> {
+        val candidates = mutableListOf<Triple<Int, Int, String>>()
+
+        // Resolutions matching the project's aspect ratio (largest first).
+        // We include several alternatives because capture cards vary in what
+        // they support — if 1280x960 fails, 1024x768 may succeed, etc.
+        if (targetRatio >= 1.3f && targetRatio <= 1.4f) {
+            // 4:3 landscape (1.333)
+            candidates.add(Triple(1280, 960, "4:3 1280x960"))
+            candidates.add(Triple(1024, 768, "4:3 1024x768"))
+            candidates.add(Triple(800, 600, "4:3 800x600"))
+            candidates.add(Triple(640, 480, "4:3 640x480"))
+        } else if (targetRatio >= 1.7f) {
+            // 16:9 landscape (1.777)
+            candidates.add(Triple(1920, 1080, "16:9 1920x1080"))
+            candidates.add(Triple(1280, 720, "16:9 1280x720"))
+        } else if (targetRatio <= 0.8f && targetRatio >= 0.7f) {
+            // 3:4 portrait (0.75)
+            candidates.add(Triple(960, 1280, "3:4 960x1280"))
+            candidates.add(Triple(768, 1024, "3:4 768x1024"))
+            candidates.add(Triple(600, 800, "3:4 600x800"))
+            candidates.add(Triple(480, 640, "3:4 480x640"))
+        } else if (targetRatio < 0.7f) {
+            // 9:16 portrait (0.5625) or taller
+            candidates.add(Triple(720, 1280, "9:16 720x1280"))
+            candidates.add(Triple(1080, 1920, "9:16 1080x1920"))
+        } else if (targetRatio >= 0.9f && targetRatio <= 1.1f) {
+            // 1:1 square
+            candidates.add(Triple(1080, 1080, "1:1 1080x1080"))
+            candidates.add(Triple(720, 720, "1:1 720x720"))
+        } else if (targetRatio >= 0.6f && targetRatio < 0.7f) {
+            // 2:3 portrait (0.667)
+            candidates.add(Triple(800, 1200, "2:3 800x1200"))
+            candidates.add(Triple(720, 1080, "2:3 720x1080"))
+        }
+
+        // Always include the legacy 1280x720 (16:9) as a fallback — most
+        // capture cards support it, and the FILL Matrix will crop any
+        // embedded black bars. This is also the original behavior, so
+        // backwards compatibility is preserved.
+        if (candidates.none { it.first == 1280 && it.second == 720 }) {
+            candidates.add(Triple(1280, 720, "16:9 1280x720 (legacy)"))
+        }
+
+        return candidates
     }
 
     /**
@@ -858,6 +959,7 @@ class UVCCameraManager(private val context: Context) {
         // Reset the negotiated size — the next open may negotiate differently
         negotiatedWidth = PREVIEW_WIDTH
         negotiatedHeight = PREVIEW_HEIGHT
+        _negotiatedSize.value = PREVIEW_WIDTH to PREVIEW_HEIGHT
     }
 
     private fun handleDeviceDisconnect(device: UsbDevice) {

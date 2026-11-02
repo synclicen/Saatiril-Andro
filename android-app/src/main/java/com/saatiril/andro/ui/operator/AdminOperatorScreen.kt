@@ -117,6 +117,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     val uvcConnected by viewModel.cameraUVCManager.isConnected.collectAsState()
     val c2Connected by viewModel.camera2Manager.isConnected.collectAsState()
     val frameBitmap by viewModel.frameBitmap.collectAsState()
+    // Observe the UVC's negotiated preview size as state so the FILL Matrix
+    // is re-applied automatically when the camera connects and the real
+    // preview size is known. Without this, the Matrix `update` block would
+    // only run on initial composition (when negotiatedWidth/Height are still
+    // the defaults) and never re-run when the camera actually negotiates a
+    // (possibly different) size → letterbox/pillarbox black bars would appear
+    // inside the PNG frame.
+    val uvcNegotiatedSize by viewModel.cameraUVCManager.negotiatedSizeFlow.collectAsState()
     var showCameraPicker by remember { mutableStateOf(false) }
 
     val cameraConnected = if (activeEngine == "uvc") uvcConnected else c2Connected
@@ -598,6 +606,10 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             val parts = projRatio.split(":")
             val ar = if (parts.size == 2) (parts[0].toFloatOrNull() ?: 4f) / (parts[1].toFloatOrNull() ?: 3f) else 4f / 3f
             viewModel.camera2Manager.setProjectAspectRatio(ar)
+            // Also set on UVC so preview-size negotiation prefers resolutions
+            // matching the project ratio (4:3 → 1280x960/640x480, avoiding
+            // the 16:9-with-embedded-black-bars problem).
+            viewModel.cameraUVCManager.setProjectAspectRatio(ar)
 
             // Bind TextureView to both managers + enumerate + open default (back camera)
             viewModel.camera2Manager.setTextureView(textureView)
@@ -679,6 +691,20 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             try { viewModel.camera2Manager.closeCamera() } catch (_: Exception) {}
             try { viewModel.cameraUVCManager.hidePreview() } catch (_: Exception) {}
         }
+    }
+
+    // Keep the UVC + Camera2 project-aspect-ratio in sync with the loaded
+    // project. DisposableEffect (above) only fires once on first entry, so
+    // if the user switches project (or the project's ratio is edited), this
+    // LaunchedEffect re-applies the new ratio → next camera re-open negotiates
+    // a matching resolution (4:3 → 1280x960/640x480, avoiding embedded black
+    // bars from 16:9 HDMI capture cards).
+    LaunchedEffect(project?.config?.ratio) {
+        val projRatio = project?.config?.ratio ?: "4:3"
+        val parts = projRatio.split(":")
+        val ar = if (parts.size == 2) (parts[0].toFloatOrNull() ?: 4f) / (parts[1].toFloatOrNull() ?: 3f) else 4f / 3f
+        viewModel.camera2Manager.setProjectAspectRatio(ar)
+        viewModel.cameraUVCManager.setProjectAspectRatio(ar)
     }
 
     // If no camera permission, show a request screen
@@ -773,10 +799,20 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
 
         // ─── Camera preview — aspect-ratio-locked to project ratio ───
-        // Camera preview — aspect-ratio-locked to project ratio.
-        // For portrait ratios (3:4, 9:16, 2:3, 4:6): use fillMaxHeight so the
-        // preview is constrained by HEIGHT (not width) → portrait orientation.
-        // For landscape/square ratios (4:3, 16:9, 1:1): use fillMaxWidth.
+        // The OUTER box fills the available space (fillMaxWidth + weight(1f)).
+        // The INNER box is sized to EXACTLY the project's aspect ratio using
+        // `Modifier.aspectRatio()` alone (NOT fillMaxWidth/fillMaxHeight first).
+        //
+        // WHY aspectRatio() ALONE (not fillMaxWidth().aspectRatio()):
+        // When the OUTER container is WIDER than the project ratio (e.g. a 16:9
+        // outer with a 4:3 project), `fillMaxWidth().aspectRatio(1.333)` would
+        // set width=full, height=full/1.333 — but if that height exceeds the
+        // outer's height, Compose clamps height to the outer's height WITHOUT
+        // recomputing width → the inner becomes the outer's full size (broken
+        // aspect). Using `aspectRatio()` alone lets Compose pick the LARGEST
+        // size that maintains the ratio within the outer's constraints → the
+        // inner is always exactly 4:3 (or whatever ratio), centered in the
+        // outer, with black bars ONLY outside the PNG frame (never inside it).
         val ratio = project?.config?.ratio ?: "4:3"
         val aspectRatio = when (ratio) {
             "4:3" -> 4f / 3f
@@ -788,7 +824,6 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             "1:1" -> 1f
             else -> 4f / 3f
         }
-        val isPortrait = aspectRatio < 1f  // height > width
 
         Box(
             modifier = Modifier
@@ -799,15 +834,14 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 .border(1.dp, BORDER, RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
-            // Inner Box: aspect-ratio-locked container for camera + overlays
-            // Portrait: fillMaxHeight + aspectRatio → constrains width
-            // Landscape: fillMaxWidth + aspectRatio → constrains height
+            // Inner Box: EXACTLY the project's aspect ratio, centered in the
+            // outer box. aspectRatio() alone sizes the box to the largest size
+            // that maintains the ratio within the outer's constraints — so a
+            // 4:3 inner in a 16:9 outer becomes 533×400 (centered, with black
+            // bars left/right OUTSIDE the PNG frame), never 720×400 (broken).
             Box(
                 modifier = Modifier
-                    .then(
-                        if (isPortrait) Modifier.fillMaxHeight().aspectRatio(aspectRatio)
-                        else Modifier.fillMaxWidth().aspectRatio(aspectRatio)
-                    )
+                    .aspectRatio(aspectRatio)
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color.Black)
             ) {
@@ -826,18 +860,25 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             else Modifier
                         ),
                     update = { tv ->
-                        // FIT video into the 4:3 (or other ratio) container.
-                        // The UVC capture card typically outputs 16:9 (1280x720),
-                        // but the container Box is locked to the project ratio
-                        // (e.g. 4:3). Without this Matrix, fillMaxSize() stretches
-                        // the video → parts of the frame are cropped/hidden.
+                        // FILL the container with the video (CROP overflow, NO
+                        // letterbox/pillarbox bars). This matches Electron's
+                        // `object-cover` behavior so the camera image always
+                        // fills the entire PNG frame's transparent center —
+                        // no black bars show through the frame overlay.
                         //
-                        // The Matrix scales the video to FIT inside the container
-                        // (letterbox if needed) so the FULL frame is always visible.
-                        // The captured photo is still cropped to the project ratio
-                        // via CameraCapture.processFrame — this is preview-only.
-                        val videoW = viewModel.cameraUVCManager.negotiatedWidth
-                        val videoH = viewModel.cameraUVCManager.negotiatedHeight
+                        // The captured photo is still center-cropped to the
+                        // project ratio via CameraCapture.processFrame, so the
+                        // saved JPEG matches what the operator sees.
+                        //
+                        // We read the observed `uvcNegotiatedSize` state (not
+                        // the raw @Volatile var) so the matrix is re-applied
+                        // automatically when the camera connects and the real
+                        // preview size is negotiated. Without this, the update
+                        // block would only run on initial composition (when
+                        // the size is still the default) → stale matrix →
+                        // black bars inside the PNG frame.
+                        val videoW = uvcNegotiatedSize.first
+                        val videoH = uvcNegotiatedSize.second
                         if (videoW > 0 && videoH > 0) {
                             val containerW = tv.width.toFloat()
                             val containerH = tv.height.toFloat()
@@ -846,22 +887,22 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 val containerRatio = containerW / containerH
                                 val matrix = android.graphics.Matrix()
                                 if (videoRatio > containerRatio) {
-                                    // Video is WIDER than container → fit width, letterbox top/bottom
-                                    val scale = containerW / videoW
-                                    val scaledH = videoH * scale
-                                    val offsetY = (containerH - scaledH) / 2f
-                                    matrix.setScale(scale, scale)
-                                    matrix.postTranslate(0f, offsetY)
-                                } else {
-                                    // Video is TALLER than container → fit height, letterbox left/right
+                                    // Video is WIDER than container → fit HEIGHT, crop left/right
                                     val scale = containerH / videoH
                                     val scaledW = videoW * scale
                                     val offsetX = (containerW - scaledW) / 2f
                                     matrix.setScale(scale, scale)
                                     matrix.postTranslate(offsetX, 0f)
+                                } else {
+                                    // Video is TALLER than container → fit WIDTH, crop top/bottom
+                                    val scale = containerW / videoW
+                                    val scaledH = videoH * scale
+                                    val offsetY = (containerH - scaledH) / 2f
+                                    matrix.setScale(scale, scale)
+                                    matrix.postTranslate(0f, offsetY)
                                 }
                                 // Apply mirror if needed (same as the CSS scale above,
-                                // but Matrix-based so it works with the fit transform)
+                                // but Matrix-based so it works with the fill transform)
                                 if (mirror) {
                                     matrix.postScale(-1f, 1f, containerW / 2f, containerH / 2f)
                                 }
