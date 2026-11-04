@@ -54,6 +54,10 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
     var busy by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
+    // ─── Device-alias dialog state ───
+    var showAliasDialog by remember { mutableStateOf(false) }
+    var showRawId by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -88,34 +92,114 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
                 )
             }
 
-            // Machine ID card (copyable)
+            // ─── Machine ID card: shows alias prominently (if set), raw ID collapsible ───
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = PANEL),
                 shape = RoundedCornerShape(12.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, BORDER)
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Icon(Icons.Default.Fingerprint, contentDescription = null, tint = GOLD, modifier = Modifier.size(18.dp))
-                        Text("Machine ID", style = TextStyle(color = GOLD, fontWeight = FontWeight.Bold, fontSize = 13.sp))
+                        Text("Identitas Perangkat", style = TextStyle(color = GOLD, fontWeight = FontWeight.Bold, fontSize = 13.sp))
                     }
-                    Text(
-                        status.machineId,
-                        style = TextStyle(color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+
+                    // ─── Big friendly alias (or prompt to set one) ───
+                    val alias = status.deviceAlias
+                    if (alias != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.Label, contentDescription = null, tint = GREEN, modifier = Modifier.size(16.dp))
+                            Text(
+                                alias,
+                                style = TextStyle(
+                                    color = Color.White, fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace
+                                )
+                            )
+                        }
+                        Text(
+                            "Inilah nama perangkat ini — kirimkan nama ini ke developer untuk minta perpanjangan lisensi.",
+                            style = TextStyle(color = MUTED.copy(alpha = 0.7f), fontSize = 10.sp, lineHeight = 13.sp)
+                        )
+                    } else {
+                        Text(
+                            "Belum ada nama perangkat. Beri nama yang mudah diingat (mis. \"fajribowo2026\") supaya tidak perlu menghafal ID panjang di bawah.",
+                            style = TextStyle(color = MUTED.copy(alpha = 0.8f), fontSize = 11.sp, lineHeight = 14.sp)
+                        )
+                    }
+
+                    // ─── Collapsible raw Machine ID (always available, needed for first registration) ───
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { showRawId = !showRawId }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            if (showRawId) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = null,
+                            tint = MUTED.copy(alpha = 0.7f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            if (showRawId) "Sembunyikan ID Asli" else "Lihat ID Asli (64 karakter)",
+                            style = TextStyle(color = MUTED.copy(alpha = 0.8f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        )
+                    }
+                    if (showRawId) {
+                        Text(
+                            status.machineId,
+                            style = TextStyle(color = MUTED, fontSize = 10.sp, fontFamily = FontFamily.Monospace),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    // ─── Action buttons ───
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedButton(
-                            onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(status.machineId)) },
+                            onClick = { showAliasDialog = true },
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = GOLD),
                             border = androidx.compose.foundation.BorderStroke(1.dp, GOLD),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (alias != null) "Ubah Nama" else "Beri Nama Perangkat", fontSize = 11.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                // Copy alias if set (preferred for renewals), else raw ID (for first registration)
+                                val toCopy = alias ?: status.machineId
+                                clipboard.setText(androidx.compose.ui.text.AnnotatedString(toCopy))
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = GREEN),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, GREEN),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Salin", fontSize = 11.sp)
+                            Text(if (alias != null) "Salin Nama" else "Salin ID", fontSize = 11.sp)
+                        }
+                        if (alias != null && showRawId) {
+                            OutlinedButton(
+                                onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(status.machineId)) },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MUTED),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MUTED.copy(alpha = 0.5f)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Salin ID Asli", fontSize = 11.sp)
+                            }
                         }
                     }
                 }
@@ -225,4 +309,117 @@ fun LicenseGateScreen(viewModel: AdminViewModel) {
             }
         }
     }
+
+    // ─── Alias dialog ───
+    if (showAliasDialog) {
+        AliasDialog(
+            currentAlias = status.deviceAlias,
+            onDismiss = { showAliasDialog = false },
+            onSave = { newAlias ->
+                val err = viewModel.setDeviceAlias(newAlias)
+                if (err != null) {
+                    error = err
+                } else {
+                    showAliasDialog = false
+                }
+            },
+            onClear = {
+                viewModel.setDeviceAlias(null)
+                showAliasDialog = false
+            }
+        )
+    }
+}
+
+/**
+ * Dialog to set / edit / clear the device alias. Validates input via
+ * [AdminViewModel.setDeviceAlias] (which delegates to [LicenseManager.validateAlias]).
+ */
+@Composable
+private fun AliasDialog(
+    currentAlias: String?,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    var input by remember { mutableStateOf(currentAlias ?: "") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PANEL,
+        titleContentColor = GOLD,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Label, contentDescription = null, tint = GOLD, modifier = Modifier.size(20.dp))
+                Text("Nama Perangkat", color = GOLD, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Beri nama mudah diingat untuk perangkat ini (mis. \"fajribowo2026\"). " +
+                        "Nama ini hanya untuk Anda — developer tetap memerlukan ID asli " +
+                        "sekali untuk pendaftaran pertama, lalu nama ini untuk perpanjangan berikutnya.",
+                    color = MUTED, fontSize = 11.sp, lineHeight = 15.sp
+                )
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it.filter { c -> c.isLetterOrDigit() || c == '_' || c == '-' }; localError = null },
+                    placeholder = { Text("fajribowo2026", color = MUTED.copy(alpha = 0.4f), fontSize = 13.sp, fontFamily = FontFamily.Monospace) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                        focusedBorderColor = GOLD, unfocusedBorderColor = BORDER, cursorColor = GOLD,
+                        focusedContainerColor = BG, unfocusedContainerColor = BG
+                    ),
+                    textStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace),
+                    leadingIcon = { Icon(Icons.Default.Label, contentDescription = null, tint = GOLD, modifier = Modifier.size(16.dp)) }
+                )
+                Text(
+                    "Aturan: 3–32 karakter, huruf/angka/underscore/tanda hubung. Tanpa spasi.",
+                    color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp
+                )
+                localError?.let { Text(it, color = RED, fontSize = 11.sp) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val trimmed = input.trim()
+                    if (trimmed.isEmpty()) {
+                        localError = "Nama tidak boleh kosong. Untuk menghapus, gunakan tombol Hapus."
+                        return@Button
+                    }
+                    onSave(trimmed)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = GOLD),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("Simpan", color = BG, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (currentAlias != null) {
+                    OutlinedButton(
+                        onClick = onClear,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RED),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RED.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Hapus", fontSize = 12.sp)
+                    }
+                }
+                OutlinedButton(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MUTED),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Batal", fontSize = 12.sp)
+                }
+            }
+        }
+    )
 }

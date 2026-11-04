@@ -61,6 +61,29 @@ class LicenseManager(private val context: Context) {
 
         private const val PREFS_NAME = "saatiril_license"
         private const val KEY_LICENSE_DATA = "license_data"
+
+        /** Friendly device name chosen by the user (e.g. "fajribowo2026"). */
+        private const val KEY_DEVICE_ALIAS = "device_alias"
+
+        /** JSON array of {alias, machineId, addedAt} entries — the admin's
+         *  "address book" for resolving alias → real machine ID at code-gen time. */
+        private const val KEY_ADDRESS_BOOK = "address_book_v1"
+
+        /** Min/max length for a device alias. */
+        const val ALIAS_MIN_LEN = 3
+        const val ALIAS_MAX_LEN = 32
+
+        /**
+         * Static helper to format a 64-char hex Machine ID into the short
+         * XXXX-XXXX-XXXX display form. Mirrors the instance
+         * [getDisplayMachineId] but callable without a LicenseManager
+         * instance (used by the generator screen's live-resolve UI).
+         */
+        fun getDisplayMachineIdStatic(machineId: String): String {
+            if (machineId.length < 12) return machineId.uppercase(Locale.ROOT)
+            val short = machineId.substring(0, 12).uppercase(Locale.ROOT)
+            return "${short.substring(0, 4)}-${short.substring(4, 8)}-${short.substring(8, 12)}"
+        }
     }
 
     // ── SHA-256 helpers ────────────────────────────────────────────────────
@@ -312,7 +335,8 @@ class LicenseManager(private val context: Context) {
             activatedAt = stored.activatedAt,
             expiry = stored.expiry,
             daysLeft = daysLeft,
-            machineId = machineId
+            machineId = machineId,
+            deviceAlias = getDeviceAlias()
         )
     }
 
@@ -522,8 +546,174 @@ class LicenseManager(private val context: Context) {
         activatedAt = 0L,
         expiry = 0L,
         daysLeft = 0,
-        machineId = machineId
+        machineId = machineId,
+        deviceAlias = getDeviceAlias()
     )
+
+    // ── Device Alias (user-side friendly name) ────────────────────────────
+
+    /**
+     * Validate a device alias. Rules:
+     *  - Length: [ALIAS_MIN_LEN]..[ALIAS_MAX_LEN] chars
+     *  - Allowed chars: letters, digits, underscore, hyphen (no spaces,
+     *    no symbols — keeps it clipboard/URL/WhatsApp safe)
+     *  - Comparison is case-insensitive; we store the lowercase form
+     *
+     * Returns null if valid, or an error message describing the violation.
+     */
+    fun validateAlias(alias: String): String? {
+        val trimmed = alias.trim()
+        if (trimmed.length < ALIAS_MIN_LEN) {
+            return "Nama minimal $ALIAS_MIN_LEN karakter."
+        }
+        if (trimmed.length > ALIAS_MAX_LEN) {
+            return "Nama maksimal $ALIAS_MAX_LEN karakter."
+        }
+        if (!trimmed.matches(Regex("^[A-Za-z0-9_-]+$"))) {
+            return "Hanya boleh huruf, angka, underscore (_), dan tanda hubung (-)."
+        }
+        return null
+    }
+
+    /**
+     * Persist the user-chosen friendly name for THIS device. Stored locally
+     * in SharedPreferences — does NOT affect the underlying hardware-bound
+     * machine ID or any stored license. Pass null/empty to clear.
+     *
+     * Returns true on success, false if the alias failed validation.
+     */
+    fun setDeviceAlias(alias: String?): Boolean {
+        if (alias.isNullOrBlank()) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().remove(KEY_DEVICE_ALIAS).apply()
+            return true
+        }
+        val normalized = alias.trim()
+        validateAlias(normalized)?.let { return false }
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_DEVICE_ALIAS, normalized).apply()
+        return true
+    }
+
+    /** Current friendly name for this device, or null if not set. */
+    fun getDeviceAlias(): String? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_DEVICE_ALIAS, null)
+    }
+
+    /**
+     * Display-friendly identifier for THIS device: alias if set, otherwise
+     * the short Display Machine ID (XXXX-XXXX-XXXX). Never returns the
+     * full 64-char hex — use [getMachineId] for that.
+     */
+    fun getDeviceAliasOrDisplayId(): String {
+        return getDeviceAlias() ?: getDisplayMachineId()
+    }
+
+    // ── Address Book (admin-side alias → machineId resolver) ──────────────
+
+    /**
+     * Address-book entry: a (alias → machineId) pair registered by the
+     * admin so they can type "fajribowo2026" instead of pasting 64 hex
+     * chars when generating a license code.
+     */
+    data class AddressBookEntry(
+        val alias: String,        // stored lowercase, unique
+        val machineId: String,    // 64-char hex SHA-256
+        val displayMachineId: String, // short XXXX-XXXX-XXXX form
+        val addedAt: Long         // epoch millis
+    )
+
+    /** Read the admin's address book. Empty list if never populated. */
+    fun listAddressBook(): List<AddressBookEntry> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json = prefs.getString(KEY_ADDRESS_BOOK, null) ?: return emptyList()
+        return try {
+            val arr = JsonParser.parseString(json).asJsonArray
+            arr.mapNotNull { el ->
+                val obj = el.asJsonObject
+                val alias = obj.get("alias")?.asString ?: return@mapNotNull null
+                val mid = obj.get("machineId")?.asString ?: return@mapNotNull null
+                val addedAt = obj.get("addedAt")?.asLong ?: System.currentTimeMillis()
+                AddressBookEntry(
+                    alias = alias,
+                    machineId = mid,
+                    displayMachineId = getDisplayMachineId(mid),
+                    addedAt = addedAt
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Add (or update) an address-book entry. If the alias already exists,
+     * its machineId is updated (allows correcting a wrong ID). Validates
+     * both the alias and the machine ID format.
+     *
+     * Returns null on success, or an error message on validation failure.
+     */
+    fun upsertAddressBookEntry(alias: String, machineId: String): String? {
+        val normalizedAlias = alias.trim().lowercase(Locale.ROOT)
+        validateAlias(normalizedAlias)?.let { return it }
+        if (!machineId.matches(Regex("^[a-fA-F0-9]{64}$"))) {
+            return "Machine ID harus 64 karakter hex (SHA-256)."
+        }
+        val normalizedMid = machineId.lowercase(Locale.ROOT)
+
+        val current = listAddressBook().filterNot { it.alias == normalizedAlias }
+        val updated = current + AddressBookEntry(
+            alias = normalizedAlias,
+            machineId = normalizedMid,
+            displayMachineId = getDisplayMachineId(normalizedMid),
+            addedAt = System.currentTimeMillis()
+        )
+        writeAddressBook(updated)
+        return null
+    }
+
+    /** Remove an entry by alias (case-insensitive). Returns true if removed. */
+    fun removeAddressBookEntry(alias: String): Boolean {
+        val normalized = alias.trim().lowercase(Locale.ROOT)
+        val current = listAddressBook()
+        val updated = current.filterNot { it.alias == normalized }
+        if (updated.size == current.size) return false
+        writeAddressBook(updated)
+        return true
+    }
+
+    /**
+     * Resolve an admin-entered input string to a real 64-char machine ID.
+     *
+     * Resolution order:
+     *  1. If input is already a 64-char hex string → return as-is (lowercase).
+     *  2. Else if input matches an alias in the address book (case-insensitive)
+     *     → return the stored machineId.
+     *  3. Else → return null (caller should show "alias not found" error).
+     *
+     * This is the function the generator screen calls before passing the
+     * machineId to [generateLicenseFull].
+     */
+    fun resolveMachineIdInput(input: String): String? {
+        val trimmed = input.trim()
+        if (trimmed.matches(Regex("^[a-fA-F0-9]{64}$"))) {
+            return trimmed.lowercase(Locale.ROOT)
+        }
+        val normalized = trimmed.lowercase(Locale.ROOT)
+        return listAddressBook().firstOrNull { it.alias == normalized }?.machineId
+    }
+
+    private fun writeAddressBook(entries: List<AddressBookEntry>) {
+        val sb = StringBuilder("[")
+        entries.forEachIndexed { i, e ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"alias\":\"${e.alias}\",\"machineId\":\"${e.machineId}\",\"addedAt\":${e.addedAt}}")
+        }
+        sb.append(']')
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_ADDRESS_BOOK, sb.toString()).apply()
+    }
 }
 
 /**
@@ -548,5 +738,12 @@ data class LicenseStatus(
     val activatedAt: Long,     // epoch millis, 0 if not active
     val expiry: Long,          // epoch millis, 0 if not active
     val daysLeft: Int,         // days remaining, 0 if expired/inactive
-    val machineId: String
+    val machineId: String,
+    /**
+     * User-chosen friendly name for this device (e.g. "fajribowo2026"),
+     * or null if the user hasn't set one. Purely a display convenience —
+     * the underlying [machineId] is still the cryptographic hardware
+     * fingerprint used for license verification.
+     */
+    val deviceAlias: String? = null
 )
