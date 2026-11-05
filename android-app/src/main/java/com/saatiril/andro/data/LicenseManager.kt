@@ -690,7 +690,11 @@ class LicenseManager(private val context: Context) {
      *  1. If input is already a 64-char hex string → return as-is (lowercase).
      *  2. Else if input matches an alias in the address book (case-insensitive)
      *     → return the stored machineId.
-     *  3. Else → return null (caller should show "alias not found" error).
+     *  3. Else if input matches THIS device's own alias (case-insensitive)
+     *     → return this device's machineId. This makes it possible to type
+     *       the alias on the same device that set it (single-device setup
+     *       where the admin generates codes for the device they're holding).
+     *  4. Else → return null (caller should show "alias not found" error).
      *
      * This is the function the generator screen calls before passing the
      * machineId to [generateLicenseFull].
@@ -701,7 +705,14 @@ class LicenseManager(private val context: Context) {
             return trimmed.lowercase(Locale.ROOT)
         }
         val normalized = trimmed.lowercase(Locale.ROOT)
-        return listAddressBook().firstOrNull { it.alias == normalized }?.machineId
+        // (2) Address book (other devices the admin has registered)
+        listAddressBook().firstOrNull { it.alias == normalized }?.let { return it.machineId }
+        // (3) This device's own alias (single-device / self-test scenario)
+        val localAlias = getDeviceAlias()?.lowercase(Locale.ROOT)
+        if (localAlias != null && normalized == localAlias) {
+            return getMachineId()
+        }
+        return null
     }
 
     private fun writeAddressBook(entries: List<AddressBookEntry>) {

@@ -235,9 +235,10 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
                     }
                 }
                 Text(
-                    "Cara pakai: ketik NAMA perangkat (mis. fajribowo2026) yang sudah didaftarkan di Buku Alamat, " +
-                        "ATAU paste 64-char Machine ID asli. Pendaftaran pertama tetap perlu ID asli " +
-                        "(mintak user klik \"Lihat ID Asli\" di layar aktivasi).",
+                    "Cara pakai: ketik NAMA perangkat (mis. fajribowo2026) yang sudah diset di layar Aktivasi " +
+                        "perangkat ini ATAU yang terdaftar di Buku Alamat, ATAU paste 64-char Machine ID asli. " +
+                        "Jika nama belum dikenali, pastikan sudah diset via \"Beri Nama Perangkat\" di perangkat " +
+                        "yang sama, atau tambahkan ke Buku Alamat jika perangkat berbeda.",
                     style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp, lineHeight = 14.sp)
                 )
             }
