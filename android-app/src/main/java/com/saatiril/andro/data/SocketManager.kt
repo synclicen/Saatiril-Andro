@@ -76,7 +76,14 @@ class SocketManager {
             SocketEvents.STUDENT_DONE,
             SocketEvents.STUDENT_RESET
         )
-        private const val MAX_QUEUE_SIZE = 2000  // raised for 4000+ participant ceremonies (mirrors Electron socket.ts MAX_QUEUE_SIZE)
+        // Cap the in-memory queue of critical events buffered while the
+        // socket is disconnected. Each PHOTOS_SAVED entry holds 2 base64
+        // photos (~5.8 MB), so the old cap of 2000 = ~11.6 GB RAM → OOM.
+        // 50 entries × 5.8 MB = ~290 MB worst case, which a modern phone
+        // can absorb. When the queue is full, DROP OLDEST (the operator's
+        // persisted photoQueueDir is the durable backup — see
+        // OperatorViewModel.finalizeCapture).
+        private const val MAX_QUEUE_SIZE = 50
         private const val MAX_RETRIES = 5        // was 3, more retries for crowded WiFi
 
         // Reconnection (mirrors the io.socket options we previously passed:

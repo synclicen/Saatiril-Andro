@@ -538,7 +538,9 @@ object SaatirilServer {
         // leaves a closed channel behind — channels cannot be reopened).
         session.wsWriterJob?.cancel()
         val oldChannel = session.wsSendChannel
-        val channel = Channel<String>(Channel.UNLIMITED)
+        // 5000p: cap at 50 with DROP_OLDEST (matches the channel declared
+        // in ClientSession). See the comment there for rationale.
+        val channel = Channel<String>(50, kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
         session.wsSendChannel = channel
         oldChannel.close()
         session.wsWriterJob = scope.launch {
@@ -838,10 +840,18 @@ internal class ClientSession(val sid: String) {
     @Volatile var wsSession: io.ktor.websocket.WebSocketSession? = null
     @Volatile var upgraded: Boolean = false
     @Volatile var activePoll: Boolean = false
-    val outgoingQueue = Channel<String>(Channel.UNLIMITED)
+    // 5000p stability: cap per-session channels at 50 entries with
+    // DROP_OLDEST. The previous Channel.UNLIMITED meant a slow client
+    // (flaky WiFi, TCP back-pressure) could grow its queue unbounded on
+    // the ADMIN phone — at ~5.8 MB per PHOTOS_SAVED packet, 1 hour of
+    // dead link = ~3.6 GB → admin OOM. 50 × 5.8 MB = ~290 MB worst case,
+    // which a modern phone absorbs. Dropped packets are PHOTOS_SAVED
+    // events from OTHER operators/MCs — the sending operator's own
+    // SocketManager queue + persisted photoQueueDir is the durable backup.
+    val outgoingQueue = Channel<String>(50, kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
     // #11: dedicated serialized send path for the websocket transport — one
     // writer coroutine per session drains this channel (see startWsWriter).
-    @Volatile var wsSendChannel: Channel<String> = Channel(Channel.UNLIMITED)
+    @Volatile var wsSendChannel: Channel<String> = Channel(50, kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
     @Volatile var wsWriterJob: Job? = null
 
     fun close() {
