@@ -161,7 +161,11 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val pure = if (dataUrl.contains(",")) dataUrl.substringAfter(",") else dataUrl
                 val bytes = Base64.decode(pure, Base64.DEFAULT)
+                // Recycle the previous frame bitmap to avoid the small leak
+                // that compounds when the admin swaps frames mid-ceremony.
+                val old = _frameBitmap.value
                 _frameBitmap.value = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                old?.recycle()
                 Log.i(TAG, "Frame bitmap decoded: ${_frameBitmap.value?.width}x${_frameBitmap.value?.height}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to decode frame bitmap: ${e.message}", e)

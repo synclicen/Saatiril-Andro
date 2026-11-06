@@ -1208,6 +1208,19 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
             // target.
             val queueFile = withContext(Dispatchers.IO) {
                 try {
+                    // 5000p stability: cap the operator's on-disk photo queue.
+                    // Each file holds 2 base64 photos (~5.8 MB). Without a cap,
+                    // a sustained admin outage (1h+ WiFi down) fills internal
+                    // storage → f.writeText() throws IOException → operator
+                    // stalls. Cap at 200 files (~1.2 GB) — beyond that,
+                    // surface a hard error so the operator knows to fix the
+                    // admin link before continuing. Existing files are NOT
+                    // silently overwritten (photos are irreplaceable).
+                    val existing = try { photoQueueDir.listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
+                    if (existing >= 200) {
+                        Log.e(TAG, "BUG#4: photo queue full ($existing files ≥ 200 cap) — cannot persist")
+                        return@withContext null
+                    }
                     val json = JSONObject().apply {
                         put("studentId", student.id)
                         put("studentNim", student.nim)
@@ -1220,7 +1233,7 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
                     }
                     val f = File(photoQueueDir, "${student.id}_${_myChannel.value}_${newVersion}_${System.currentTimeMillis()}.json")
                     f.writeText(json.toString())
-                    Log.i(TAG, "BUG#4: persisted photo set to ${f.name} (${photos.size} photos)")
+                    Log.i(TAG, "BUG#4: persisted photo set to ${f.name} (${photos.size} photos, queue size=${existing + 1}/200)")
                     f
                 } catch (e: Exception) {
                     Log.e(TAG, "BUG#4: FAILED to persist photo set: ${e.message}", e)
@@ -1233,7 +1246,12 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
                 // so the operator can retry the shutter.
                 _capturePhase.value = if (CameraModes.photosPerSession(mode) == 2) CapturePhase.READY_2 else CapturePhase.READY_1
                 _isSending.value = false
-                _captureError.value = "Gagal menyimpan foto ke antrian lokal — coba lagi"
+                val queueSize = try { photoQueueDir.listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
+                _captureError.value = if (queueSize >= 200) {
+                    "Antrian lokal penuh ($queueSize file). Hubungkan ke admin / periksa WiFi, lalu coba lagi."
+                } else {
+                    "Gagal menyimpan foto ke antrian lokal — coba lagi"
+                }
                 return
             }
 
@@ -1439,6 +1457,7 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
 
     private fun decodeFrameBitmap(frameBase64: String?) {
         if (frameBase64 == null || frameBase64 == "__FRAME_SAVED__" || frameBase64.isEmpty()) {
+            _frameBitmap.value?.recycle()
             _frameBitmap.value = null
             return
         }
@@ -1451,7 +1470,11 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
             }
             val bytes = Base64.decode(pureBase64, Base64.DEFAULT)
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            // Recycle the previous frame bitmap to avoid the small leak
+            // that compounds if the admin re-sends a different frame mid-ceremony.
+            val old = _frameBitmap.value
             _frameBitmap.value = bitmap
+            old?.recycle()
             Log.i(TAG, "Frame bitmap decoded: ${bitmap?.width}x${bitmap?.height}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to decode frame bitmap: ${e.message}")
