@@ -165,6 +165,33 @@ class UVCCameraManager(private val context: Context) {
     private var isInitialized = false
     private var isDestroying = false
 
+    // ─── Open/close serialization ───────────────────────────────
+    // CRITICAL (hot-plug ANR fix): when the APK is already running and the
+    // user plugs in the USB capture card, TWO independent paths can trigger
+    // openUVCCamera for the same device at nearly the same time:
+    //   (a) USBMonitor.onConnect (fired by the library's BroadcastReceiver
+    //       after permission is granted)
+    //   (b) tryOpenUVCCameraDirect (called by the USB polling fallback AND
+    //       by requestUsbPermission when permission is already held) — which
+    //       calls monitor.requestPermission() → processConnect() → onConnect
+    //       → a SECOND openUVCCamera post.
+    // Both posts land on the single background handler thread, so they're
+    // serialized — BUT openUVCCamera hands surface setup to mainHandler
+    // (async). So the 2nd open's closeUVCCamera() runs BEFORE the 1st open's
+    // setupPreviewSurface lands on the main thread. The 2nd open's
+    // camera.open(ctrlBlock) then contends with the 1st open's not-yet-
+    // released USB endpoint → camera.open() BLOCKS in native code → the
+    // background thread hangs → the queued setupPreviewSurface then calls
+    // startPreview() on a half-open camera from the MAIN thread → main
+    // thread blocks → ANR → sustained CPU spin → phone watchdog reboots.
+    //
+    // Fix: serialize open/close with `cameraLock` + an `isOpening` re-entry
+    // guard. The 2nd open sees isOpening=true and bails out; the 1st open
+    // completes cleanly and sets _isConnected=true, so subsequent onConnect
+    // / tryOpenUVCCameraDirect calls hit the "already connected" guard.
+    private val cameraLock = Any()
+    @Volatile private var isOpening = false
+
     // ── Android 14+ USB polling fallback ──
     // On Android 14 (API 34), the USBMonitor library's internal registerReceiver()
     // may fail with SecurityException (missing RECEIVER_EXPORTED flag).
@@ -254,6 +281,21 @@ class UVCCameraManager(private val context: Context) {
                         Log.i(TAG, "USB CONNECTED (permission granted): ${device.deviceName}")
                         Log.i(TAG, "  createNew=$createNew")
                         Log.i(TAG, "═══════════════════════════════════════════════════")
+
+                        // Hot-plug ANR guard: skip if an open is already in
+                        // progress OR we're already connected to this device.
+                        // Both USBMonitor.onConnect and tryOpenUVCCameraDirect
+                        // can fire for the same device when the APK is already
+                        // running and the user plugs in the capture card —
+                        // without this guard, two openUVCCamera calls race.
+                        if (isOpening) {
+                            Log.w(TAG, "onConnect: open already in progress — skipping (isOpening=true)")
+                            return
+                        }
+                        if (currentUsbDevice?.deviceName == device.deviceName && _isConnected.value) {
+                            Log.i(TAG, "onConnect: already connected to ${device.deviceName} — skipping")
+                            return
+                        }
 
                         currentUsbDevice = device
                         currentCtrlBlock = ctrlBlock
@@ -368,19 +410,24 @@ class UVCCameraManager(private val context: Context) {
                 } catch (e: Exception) {
                     Log.e(TAG, "USB polling error: ${e.message}")
                 }
-                // Schedule next poll
+                // Schedule next poll on the BACKGROUND thread (not mainHandler).
+                // pollUsbDevices() iterates usbManager.deviceList (IPC to the USB
+                // service) and may call requestUsbPermission / tryOpenUVCCameraDirect
+                // — none of that belongs on the main thread. Running it on mainHandler
+                // contributed to ANR when the USB service was slow to respond during
+                // hot-plug.
                 usbPollingRunnable?.let {
-                    mainHandler.postDelayed(it, USB_POLLING_INTERVAL_MS)
+                    backgroundHandler?.postDelayed(it, USB_POLLING_INTERVAL_MS)
                 }
             }
         }
-        // Start polling after a short delay
-        usbPollingRunnable?.let { mainHandler.postDelayed(it, USB_POLLING_INTERVAL_MS) }
-        Log.i(TAG, "USB polling fallback started (every ${USB_POLLING_INTERVAL_MS}ms)")
+        // Start polling after a short delay on the background thread.
+        usbPollingRunnable?.let { backgroundHandler?.postDelayed(it, USB_POLLING_INTERVAL_MS) }
+        Log.i(TAG, "USB polling fallback started (every ${USB_POLLING_INTERVAL_MS}ms, on background thread)")
     }
 
     private fun stopUsbPolling() {
-        usbPollingRunnable?.let { mainHandler.removeCallbacks(it) }
+        usbPollingRunnable?.let { backgroundHandler?.removeCallbacks(it); mainHandler.removeCallbacks(it) }
         usbPollingRunnable = null
     }
 
@@ -465,6 +512,16 @@ class UVCCameraManager(private val context: Context) {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
             if (!usbManager.hasPermission(device)) return
 
+            // Hot-plug ANR guard: skip if an open is already in progress.
+            // tryOpenUVCCameraDirect is called by polling, enumerateConnectedDevices,
+            // AND requestUsbPermission (when permission already held) — any of these
+            // can race with USBMonitor.onConnect for the same device. Without this
+            // guard, two openUVCCamera calls would race and the 2nd's closeUVCCamera
+            // would kill the 1st's camera mid-setup → ANR.
+            if (isOpening) {
+                Log.i(TAG, "tryOpenUVCCameraDirect: open already in progress — skipping ${device.deviceName}")
+                return
+            }
             // Don't open if already connected to this device
             if (currentUsbDevice?.deviceName == device.deviceName && _isConnected.value) {
                 Log.i(TAG, "tryOpenUVCCameraDirect: already connected to ${device.deviceName}")
@@ -688,16 +745,40 @@ class UVCCameraManager(private val context: Context) {
             return
         }
 
-        closeUVCCamera()
-
-        Log.i(TAG, "═══════════════════════════════════════════════════")
-        Log.i(TAG, "openUVCCamera: ${device.deviceName}")
-        Log.i(TAG, "  VID=0x${Integer.toHexString(device.vendorId)} PID=0x${Integer.toHexString(device.productId)}")
-        Log.i(TAG, "═══════════════════════════════════════════════════")
+        // Hot-plug ANR fix: serialize open/close so two concurrent opens
+        // (USBMonitor.onConnect + tryOpenUVCCameraDirect) can't both reach
+        // camera.open() on the same USB endpoint. The isOpening flag is the
+        // fast-path re-entry guard; the synchronized block is the hard
+        // guarantee that open and close never interleave.
+        synchronized(cameraLock) {
+            if (isOpening) {
+                Log.w(TAG, "openUVCCamera: another open is already in progress — skipping ${device.deviceName}")
+                return
+            }
+            if (_isConnected.value && currentUsbDevice?.deviceName == device.deviceName) {
+                Log.i(TAG, "openUVCCamera: already connected to ${device.deviceName} — skipping")
+                return
+            }
+            isOpening = true
+        }
 
         try {
+            // Close any existing camera BEFORE opening the new one. Done under
+            // the lock so a concurrent closeUVCCamera() can't null uvcCamera
+            // between closeUVCCamera() returning and the new UVCCamera() below.
+            synchronized(cameraLock) {
+                closeUVCCamera()
+            }
+
+            Log.i(TAG, "═══════════════════════════════════════════════════")
+            Log.i(TAG, "openUVCCamera: ${device.deviceName}")
+            Log.i(TAG, "  VID=0x${Integer.toHexString(device.vendorId)} PID=0x${Integer.toHexString(device.productId)}")
+            Log.i(TAG, "═══════════════════════════════════════════════════")
+
             val camera = UVCCamera()
-            uvcCamera = camera
+            synchronized(cameraLock) {
+                uvcCamera = camera
+            }
 
             // ═════════════════════════════════════════════════════
             // STEP 1: Open the camera device
@@ -762,7 +843,7 @@ class UVCCameraManager(private val context: Context) {
                     Log.i(TAG, "★ Preview size set: 640x480 MJPEG (last-resort fallback)")
                 } catch (e4: Exception) {
                     Log.e(TAG, "ALL preview size attempts failed! ${e4.message}")
-                    closeUVCCamera()
+                    synchronized(cameraLock) { closeUVCCamera() }
                     return
                 }
             }
@@ -783,11 +864,16 @@ class UVCCameraManager(private val context: Context) {
                 pendingSurfaceSetup = true
             }
 
-            // Update state
-            _isConnected.value = true
-            _currentCameraId.value = device.deviceName
-            _isUSBCamera.value = true
-            _cameraType.value = "external"
+            // Update state — set _isConnected BEFORE releasing isOpening so
+            // that a concurrent onConnect/tryOpenUVCCameraDirect sees either
+            // isOpening=true (still opening) OR _isConnected=true (done) and
+            // bails out.
+            synchronized(cameraLock) {
+                _isConnected.value = true
+                _currentCameraId.value = device.deviceName
+                _isUSBCamera.value = true
+                _cameraType.value = "external"
+            }
 
             Log.i(TAG, "═══════════════════════════════════════════════════")
             Log.i(TAG, "★ UVC CAMERA READY — waiting for surface to start preview")
@@ -795,7 +881,11 @@ class UVCCameraManager(private val context: Context) {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open UVCCamera: ${e.message}", e)
-            closeUVCCamera()
+            synchronized(cameraLock) { closeUVCCamera() }
+        } finally {
+            // Release the re-entry guard so a future open (e.g. after a
+            // disconnect) can proceed.
+            isOpening = false
         }
     }
 
@@ -976,23 +1066,32 @@ class UVCCameraManager(private val context: Context) {
     }
 
     private fun closeUVCCamera() {
-        try {
-            uvcCamera?.let { cam ->
-                try { cam.stopPreview() } catch (_: Exception) {}
-                try { cam.close() } catch (_: Exception) {}
-                try { cam.destroy() } catch (_: Exception) {}
-            }
-        } catch (_: Exception) {}
-        uvcCamera = null
-        previewSurface?.release()
-        previewSurface = null
-        _isConnected.value = false
-        _cameraType.value = "none"
-        pendingSurfaceSetup = false
-        // Reset the negotiated size — the next open may negotiate differently
-        negotiatedWidth = PREVIEW_WIDTH
-        negotiatedHeight = PREVIEW_HEIGHT
-        _negotiatedSize.value = PREVIEW_WIDTH to PREVIEW_HEIGHT
+        // Hot-plug ANR fix: serialize with openUVCCamera so a close can't
+        // null uvcCamera while openUVCCamera is mid-flight between
+        // closeUVCCamera() and `uvcCamera = camera`. Note: this function is
+        // re-entrant from openUVCCamera which already holds the lock in some
+        // call paths — those callers wrap it in their own synchronized block.
+        // To avoid deadlock from double-locking the same monitor (Kotlin/Java
+        // monitors are reentrant, so this is safe), we synchronize here too.
+        synchronized(cameraLock) {
+            try {
+                uvcCamera?.let { cam ->
+                    try { cam.stopPreview() } catch (_: Exception) {}
+                    try { cam.close() } catch (_: Exception) {}
+                    try { cam.destroy() } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+            uvcCamera = null
+            previewSurface?.release()
+            previewSurface = null
+            _isConnected.value = false
+            _cameraType.value = "none"
+            pendingSurfaceSetup = false
+            // Reset the negotiated size — the next open may negotiate differently
+            negotiatedWidth = PREVIEW_WIDTH
+            negotiatedHeight = PREVIEW_HEIGHT
+            _negotiatedSize.value = PREVIEW_WIDTH to PREVIEW_HEIGHT
+        }
     }
 
     private fun handleDeviceDisconnect(device: UsbDevice) {
@@ -1338,6 +1437,7 @@ class UVCCameraManager(private val context: Context) {
         Log.i(TAG, "destroy: Cleaning up UVCCamera")
         isDestroying = true
         isInitialized = false
+        isOpening = false
         stopUsbPolling()
         closeUVCCamera()
         unregisterUsbMonitor()
@@ -1374,9 +1474,13 @@ class UVCCameraManager(private val context: Context) {
             Log.w(TAG, "forceReconnect: closeUVCCamera error: ${e.message}")
         }
 
-        // Step 2: Reset state so initCamera will re-register everything
+        // Step 2: Reset state so initCamera will re-register everything.
+        // Also reset isOpening — if a previous openUVCCamera was stuck in
+        // camera.open() and the user pressed Reconnect to recover, the flag
+        // would still be true and block all subsequent opens.
         isInitialized = false
         isDestroying = false
+        isOpening = false
 
         // Step 3: Unregister old USBMonitor (if any)
         try { unregisterUsbMonitor() } catch (_: Exception) {}
