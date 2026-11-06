@@ -1032,6 +1032,7 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         val proj = _project.value ?: return
         val mode = proj.config.mode
         val isPhotoshoot = CameraModes.isPhotoshootMode(mode)
+        val isDualPhotoshoot = mode == CameraModes.DUAL_PHOTOSHOOT
         val photosPerSession = CameraModes.photosPerSession(mode)  // 1 or 2
 
         // Accumulate the captured photo
@@ -1126,14 +1127,29 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
             // handleMcCall / handleStudentReset / handlePhotosSaved may run
             // concurrently on the lan-message handler thread; without the
             // mutex a concurrent update would be silently lost.
+            //
+            // CRITICAL: the shouldMarkDone check is computed INSIDE the mutex
+            // using the FRESH `cur` state — same fix as handlePhotosSaved. In
+            // dual-photoshoot the admin's local camera is one of the two
+            // channels; marking done unconditionally here would prematurely
+            // finalize the student before the OTHER channel (remote operator)
+            // captures its photo. By checking cur.captureVersions for the
+            // other channel inside the mutex, we only mark done once BOTH
+            // channels have captured.
             val rmwOk = projectMutex.withLock {
                 val cur = _project.value ?: return@withLock false
+                val shouldMarkDone = if (isDualPhotoshoot) {
+                    val otherChannel = if (channel == 1) 2 else 1
+                    val otherVersionKey = "${student.id}_$otherChannel"
+                    cur.captureVersions.containsKey(otherVersionKey)
+                } else {
+                    true
+                }
+                Log.i(TAG, "handleLocalCapture: student=${student.nama}, channel=$channel, " +
+                    "isDualPhotoshoot=$isDualPhotoshoot, shouldMarkDone=$shouldMarkDone, " +
+                    "captureVersions=${cur.captureVersions.keys}")
                 val updatedDb = cur.database.map { s ->
-                    if (s.id == student.id) {
-                        // Dual-photoshoot: done if EITHER channel has photographed.
-                        // Other modes: done after this capture session.
-                        s.copy(status = "done")
-                    } else s
+                    if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
                 }
                 val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
                 // CRITICAL (5000p stability): photos are saved to disk by
@@ -1548,23 +1564,37 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val shouldMarkDone = if (isDualPhotoshoot) {
-                // Dual-photoshoot: done if EITHER channel has photographed.
-                // NOTE: we used to check `photoHistory.any { ... it.photos.isNotEmpty() }`
-                // but photos are now stripped from RAM after save (5000p OOM fix).
-                // Use the database status instead: if the OTHER channel's
-                // capture for this student is already recorded in
-                // captureVersions, the student is done.
-                val otherChannel = if (channel == 1) 2 else 1
-                val otherVersionKey = "${student.id}_$otherChannel"
-                proj.captureVersions.containsKey(otherVersionKey)
-            } else {
-                true
-            }
-
             // BUG #2 fix: serialize the read-modify-write on _project.value.
+            // CRITICAL: the shouldMarkDone check MUST be computed INSIDE the
+            // mutex using the FRESH `cur` state — NOT the stale `proj` captured
+            // at handler entry. In dual-photoshoot, ch1 (Toga) and ch2 (Ijazah)
+            // PHOTOS_SAVED events arrive near-simultaneously; both launch save
+            // coroutines that race. If shouldMarkDone used the stale `proj`,
+            // neither coroutine would see the OTHER channel's captureVersions
+            // update → the student would NEVER be marked "done" → the MC panel
+            // would stay stuck on "TUNGGU OPERATOR" and could not proceed to
+            // the next participant. By checking inside the mutex, the second
+            // channel's coroutine sees the first channel's update (the mutex
+            // serializes them) and correctly marks the student done.
             projectMutex.withLock {
                 val cur = _project.value ?: return@withLock
+                val shouldMarkDone = if (isDualPhotoshoot) {
+                    // Dual-photoshoot: done once BOTH channels have captured.
+                    // Check the FRESH captureVersions for the OTHER channel's
+                    // entry (the mutex guarantees this reflects any prior
+                    // channel's completed save).
+                    val otherChannel = if (channel == 1) 2 else 1
+                    val otherVersionKey = "${student.id}_$otherChannel"
+                    cur.captureVersions.containsKey(otherVersionKey)
+                } else {
+                    // single / dual / single-photoshoot: done after this
+                    // capture session (1 or 2 photos per session, already
+                    // validated above).
+                    true
+                }
+                Log.i(TAG, "handlePhotosSaved: student=${student.nama}, channel=$channel, " +
+                    "isDualPhotoshoot=$isDualPhotoshoot, shouldMarkDone=$shouldMarkDone, " +
+                    "captureVersions=${cur.captureVersions.keys}")
                 val updatedDb = cur.database.map { s ->
                     if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
                 }
