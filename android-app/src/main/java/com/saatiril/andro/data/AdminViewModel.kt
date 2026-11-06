@@ -1140,33 +1140,33 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         // surface an error and DO NOT mark done (the operator can retry the
         // shutter).
         viewModelScope.launch {
-            val savedOk = withContext(Dispatchers.IO) {
+            val savedUris = withContext(Dispatchers.IO) {
                 val folderUri = photoSaver.getOutputFolder()
                 if (folderUri == null) {
                     Log.e(TAG, "=== SAVE FAILED: No output folder set! ===")
-                    return@withContext emptyList()
+                    return@withContext emptyList<String>()
                 }
                 Log.i(TAG, "=== Saving ${photos.size} photo(s) to folder: $folderUri ===")
-                val savedUris = mutableListOf<String>()
+                val uris = mutableListOf<String>()
                 for ((i, photo) in photos.withIndex()) {
                     try {
                         Log.i(TAG, "Saving photo ${i+1}/${photos.size}: ${filenames[i]}")
                         val savedUri = photoSaver.savePhoto(photo, filenames[i])
                         if (savedUri != null) {
                             Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
-                            savedUris.add(savedUri.toString())
+                            uris.add(savedUri.toString())
                             driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder, _project.value?.name)
                         } else {
                             Log.e(TAG, "❌ Photo save returned null: ${filenames[i]}")
-                            return@withContext emptyList()
+                            return@withContext emptyList<String>()
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Failed to save ${filenames[i]}: ${e.message}", e)
-                        return@withContext emptyList()
+                        return@withContext emptyList<String>()
                     }
                 }
                 Log.i(TAG, "=== Save complete: ${photos.size} photo(s) processed ===")
-                savedUris
+                uris
             }
 
             if (savedUris.isEmpty()) {
