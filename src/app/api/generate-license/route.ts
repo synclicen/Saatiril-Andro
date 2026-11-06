@@ -62,16 +62,10 @@ export async function POST(request: NextRequest) {
     const { machineId, adminKey } = body
 
     // ── Admin key check (simple protection for the API) ───────────────────
-    // The admin key is derived from the LICENSE_SECRET itself
-    // so only someone with access to the source code can use this API
-    const expectedAdminKey = crypto
-      .createHash('sha256')
-      .update(`${LICENSE_SECRET}:admin-api-key`)
-      .digest('hex')
-      .substring(0, 16)
-      .toUpperCase()
-
-    if (adminKey !== expectedAdminKey) {
+    // Fixed, user-friendly developer key (case-insensitive). Matches the
+    // Android LicenseManager, electron/license.ts, and tools/get-admin-key.ts.
+    const ADMIN_KEY = 'fajribowo2026'
+    if (adminKey.trim().toLowerCase() !== ADMIN_KEY) {
       return NextResponse.json(
         { success: false, error: 'Admin key tidak valid. Akses ditolak.' },
         { status: 403 }

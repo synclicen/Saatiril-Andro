@@ -412,14 +412,10 @@ export function generateLicenseCode(
   }
 } {
   // ── Validate admin key ──────────────────────────────────────────────────
-  const expectedAdminKey = crypto
-    .createHash('sha256')
-    .update(`${LICENSE_SECRET}:admin-api-key`)
-    .digest('hex')
-    .substring(0, 16)
-    .toUpperCase()
-
-  if (adminKey !== expectedAdminKey) {
+  // Fixed, user-friendly developer key (case-insensitive). Matches the
+  // Android LicenseManager, route.ts, and tools/get-admin-key.ts.
+  const ADMIN_KEY = 'fajribowo2026'
+  if (adminKey.trim().toLowerCase() !== ADMIN_KEY) {
     return { success: false, error: 'Admin key tidak valid. Akses ditolak.' }
   }
 

@@ -39,7 +39,6 @@ private val GOLD = Color(0xFFd4af37)
 private val MUTED = Color(0xFFc4b5fd)
 private val CYAN = Color(0xFF06b6d4)
 private val EMERALD = Color(0xFF22c55e)
-private val GREEN = Color(0xFF4ade80)
 private val RED = Color(0xFFef4444)
 
 /**
@@ -53,28 +52,18 @@ private val RED = Color(0xFFef4444)
  * and from the ProjectHubScreen (key icon in the header). Returns to whichever
  * screen makes sense based on the current license state.
  *
- * SECURITY: This screen requires the developer Admin Key
- * (`SHA-256(LICENSE_SECRET + ":admin-api-key")[:16].upper()`) to generate a
- * code. Without it, no code is produced — the same gate as the Electron
- * `/api/generate-license` route.
+ * SECURITY: This screen requires the developer Admin Key (`fajribowo2026`,
+ * case-insensitive) to generate a code. Without it, no code is produced —
+ * the same gate as the Electron `/api/generate-license` route.
  */
 @Composable
 fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
-    var machineIdInput by remember { mutableStateOf("") }   // accepts alias OR 64-char hex
+    var machineId by remember { mutableStateOf("") }
     var adminKey by remember { mutableStateOf("") }
     var result by remember { mutableStateOf<LicenseManager.GenerateResult?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var copiedCode by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-
-    // Address-book dialog state
-    var showAddressBook by remember { mutableStateOf(false) }
-
-    // Live resolution feedback as the admin types
-    val resolvedId = remember(machineIdInput) {
-        if (machineIdInput.isBlank()) null
-        else viewModel.resolveMachineIdInput(machineIdInput)
-    }
 
     Box(
         modifier = Modifier
@@ -152,7 +141,7 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
                 )
             }
 
-            // ─── Machine ID / Alias card ───
+            // ─── Machine ID card ───
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -162,83 +151,20 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("NAMA PERANGKAT ATAU MACHINE ID", style = TextStyle(color = MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
-                    // Address-book button
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { showAddressBook = true }
-                            .background(GOLD.copy(alpha = 0.08f))
-                            .border(1.dp, GOLD.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(Icons.Default.Contacts, contentDescription = null, tint = GOLD, modifier = Modifier.size(12.dp))
-                        Text("Buku Alamat", style = TextStyle(color = GOLD, fontSize = 10.sp, fontWeight = FontWeight.Bold))
-                    }
-                }
+                Text("MACHINE ID USER", style = TextStyle(color = MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                 OutlinedTextField(
-                    value = machineIdInput,
-                    onValueChange = { machineIdInput = it; error = null },
-                    placeholder = { Text("mis. fajribowo2026  atau  64-char hex...", color = MUTED.copy(alpha = 0.4f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                    value = machineId,
+                    onValueChange = { machineId = it; error = null },
+                    placeholder = { Text("Paste 64 karakter Machine ID dari user...", color = MUTED.copy(alpha = 0.4f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = tfColors(),
-                    textStyle = TextStyle(color = GOLD, fontSize = 12.sp, fontFamily = FontFamily.Monospace),
+                    textStyle = TextStyle(color = GOLD, fontSize = 11.sp, fontFamily = FontFamily.Monospace),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                     leadingIcon = { Icon(Icons.Default.Fingerprint, contentDescription = null, tint = MUTED, modifier = Modifier.size(16.dp)) }
                 )
-                // ── Live resolution feedback ──
-                if (machineIdInput.isNotBlank()) {
-                    if (resolvedId != null) {
-                        val isAliasInput = !machineIdInput.trim().matches(Regex("^[a-fA-F0-9]{64}$"))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(EMERALD.copy(alpha = 0.08f))
-                                .border(1.dp, EMERALD.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EMERALD, modifier = Modifier.size(12.dp))
-                            Text(
-                                if (isAliasInput) "Alias ditemukan → ${LicenseManager.getDisplayMachineIdStatic(resolvedId)}"
-                                else "Machine ID valid → ${LicenseManager.getDisplayMachineIdStatic(resolvedId)}",
-                                style = TextStyle(color = EMERALD, fontSize = 10.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace)
-                            )
-                        }
-                    } else {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(RED.copy(alpha = 0.06f))
-                                .border(1.dp, RED.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = RED, modifier = Modifier.size(12.dp))
-                            Text(
-                                "Bukan hex 64-char dan tidak ditemukan di Buku Alamat. Tambahkan dulu lewat tombol Buku Alamat.",
-                                style = TextStyle(color = RED, fontSize = 10.sp, fontWeight = FontWeight.Medium)
-                            )
-                        }
-                    }
-                }
                 Text(
-                    "Cara pakai: ketik NAMA perangkat (mis. fajribowo2026) yang sudah diset di layar Aktivasi " +
-                        "perangkat ini ATAU yang terdaftar di Buku Alamat, ATAU paste 64-char Machine ID asli. " +
-                        "Jika nama belum dikenali, pastikan sudah diset via \"Beri Nama Perangkat\" di perangkat " +
-                        "yang sama, atau tambahkan ke Buku Alamat jika perangkat berbeda.",
+                    "Minta user untuk klik \"Salin\" di layar aktivasi SAATIRIL, lalu kirimkan ID tersebut kepada Anda. Paste ID tersebut di sini.",
                     style = TextStyle(color = MUTED.copy(alpha = 0.6f), fontSize = 10.sp, lineHeight = 14.sp)
                 )
             }
@@ -248,16 +174,11 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
                 onClick = {
                     error = null
                     result = null
-                    if (machineIdInput.trim().isEmpty()) { error = "Masukkan Nama Perangkat atau Machine ID terlebih dahulu."; return@Button }
+                    if (machineId.trim().isEmpty()) { error = "Masukkan Machine ID terlebih dahulu."; return@Button }
                     if (adminKey.trim().isEmpty()) { error = "Masukkan Admin Key terlebih dahulu."; return@Button }
-                    if (resolvedId == null) {
-                        error = "Input tidak dikenali. Bukan hex 64-char dan tidak ada di Buku Alamat. " +
-                            "Tambahkan dulu lewat tombol Buku Alamat."
-                        return@Button
-                    }
-                    val r = viewModel.generateLicenseCode(machineIdInput, adminKey)
+                    val r = viewModel.generateLicenseCode(machineId, adminKey)
                     if (r == null) {
-                        error = "Gagal membuat kode aktivasi. Periksa Admin Key dan input identifier."
+                        error = "Gagal membuat kode aktivasi. Periksa Admin Key dan Machine ID."
                     } else {
                         result = r
                     }
@@ -265,7 +186,7 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = GOLD),
                 shape = RoundedCornerShape(10.dp),
-                enabled = machineIdInput.trim().isNotEmpty() && adminKey.trim().isNotEmpty() && resolvedId != null
+                enabled = machineId.trim().isNotEmpty() && adminKey.trim().isNotEmpty()
             ) {
                 Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp), tint = BG)
                 Spacer(Modifier.width(6.dp))
@@ -422,176 +343,6 @@ fun LicenseGeneratorScreen(viewModel: AdminViewModel) {
             )
         }
     }
-
-    // ─── Address Book dialog ───
-    if (showAddressBook) {
-        AddressBookDialog(
-            viewModel = viewModel,
-            onDismiss = { showAddressBook = false },
-            onPickAlias = { alias ->
-                machineIdInput = alias
-                showAddressBook = false
-            }
-        )
-    }
-}
-
-/**
- * Address Book dialog — manages (alias → machineId) entries. The admin can:
- *  - See all registered devices
- *  - Add a new entry (alias + 64-char machine ID)
- *  - Remove an entry
- *  - Tap an entry to insert its alias into the generator input
- */
-@Composable
-private fun AddressBookDialog(
-    viewModel: AdminViewModel,
-    onDismiss: () -> Unit,
-    onPickAlias: (String) -> Unit
-) {
-    val entries by viewModel.addressBook.collectAsState()
-    var newAlias by remember { mutableStateOf("") }
-    var newMid by remember { mutableStateOf("") }
-    var localError by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PANEL,
-        titleContentColor = GOLD,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.Contacts, contentDescription = null, tint = GOLD, modifier = Modifier.size(20.dp))
-                Text("Buku Alamat Perangkat", color = GOLD, fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // ─── Add new entry ───
-                Text("Tambah Perangkat Baru", color = CYAN, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = newAlias,
-                    onValueChange = { newAlias = it.filter { c -> c.isLetterOrDigit() || c == '_' || c == '-' }; localError = null },
-                    placeholder = { Text("mis. fajribowo2026", color = MUTED.copy(alpha = 0.4f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                    label = { Text("Nama Perangkat", color = MUTED, fontSize = 10.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = tfColors(),
-                    textStyle = TextStyle(color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace),
-                    leadingIcon = { Icon(Icons.Default.Label, contentDescription = null, tint = GOLD, modifier = Modifier.size(14.dp)) }
-                )
-                OutlinedTextField(
-                    value = newMid,
-                    onValueChange = { newMid = it.filter { c -> c.isLetterOrDigit() }; localError = null },
-                    placeholder = { Text("64-char hex dari user...", color = MUTED.copy(alpha = 0.4f), fontSize = 10.sp, fontFamily = FontFamily.Monospace) },
-                    label = { Text("Machine ID Asli", color = MUTED, fontSize = 10.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = tfColors(),
-                    textStyle = TextStyle(color = GOLD, fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                    leadingIcon = { Icon(Icons.Default.Fingerprint, contentDescription = null, tint = MUTED, modifier = Modifier.size(14.dp)) }
-                )
-                localError?.let { Text(it, color = RED, fontSize = 11.sp) }
-                Button(
-                    onClick = {
-                        val err = viewModel.addAddressBookEntry(newAlias, newMid)
-                        if (err != null) {
-                            localError = err
-                        } else {
-                            newAlias = ""
-                            newMid = ""
-                            localError = null
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(38.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = GOLD),
-                    shape = RoundedCornerShape(8.dp),
-                    enabled = newAlias.isNotBlank() && newMid.isNotBlank()
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp), tint = BG)
-                    Spacer(Modifier.width(4.dp))
-                    Text("Tambah / Update", color = BG, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-
-                HorizontalDivider(color = BORDER, thickness = 1.dp)
-
-                // ─── List existing entries ───
-                Text("Tersimpan (${entries.size})", color = CYAN, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                if (entries.isEmpty()) {
-                    Text(
-                        "Belum ada perangkat terdaftar. Tambahkan sekali untuk setiap perangkat pelanggan — setelah itu, ketik namanya saja di Generator untuk membuat kode aktivasi.",
-                        color = MUTED.copy(alpha = 0.7f), fontSize = 10.sp, lineHeight = 13.sp
-                    )
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 240.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        entries.forEach { e ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(BG)
-                                    .border(1.dp, BORDER.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Icon(Icons.Default.Label, contentDescription = null, tint = GREEN, modifier = Modifier.size(11.dp))
-                                        Text(e.alias, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                    }
-                                    Text(
-                                        "ID: ${e.displayMachineId}",
-                                        color = MUTED.copy(alpha = 0.7f), fontSize = 9.sp, fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                // Pick
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable { onPickAlias(e.alias) }
-                                        .background(GOLD.copy(alpha = 0.1f))
-                                        .padding(horizontal = 6.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Icon(Icons.Default.Input, contentDescription = "Pilih", tint = GOLD, modifier = Modifier.size(10.dp))
-                                    Text("Pilih", color = GOLD, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                }
-                                // Delete
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable { viewModel.removeAddressBookEntry(e.alias) }
-                                        .background(RED.copy(alpha = 0.1f))
-                                        .padding(horizontal = 6.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = RED, modifier = Modifier.size(10.dp))
-                                    Text("Hapus", color = RED, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            OutlinedButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MUTED),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Tutup", fontSize = 12.sp)
-            }
-        }
-    )
 }
 
 @Composable

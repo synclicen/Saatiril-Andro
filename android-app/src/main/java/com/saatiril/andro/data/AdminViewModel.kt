@@ -255,68 +255,10 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      * Generate a 30-day license code for a customer's Machine ID, authorized
      * by the developer Admin Key. Returns the full [LicenseManager.GenerateResult]
      * (code + expiry + display fields) or null on invalid input / wrong admin key.
-     *
-     * The [machineIdInput] accepts EITHER:
-     *  - a 64-char hex Machine ID (legacy / first-time registration), OR
-     *  - a device alias (e.g. "fajribowo2026") previously registered in the
-     *    admin's address book. The alias is resolved to the real machine ID
-     *    before code generation.
      */
-    fun generateLicenseCode(machineIdInput: String, adminKey: String): LicenseManager.GenerateResult? {
-        val resolved = licenseManager.resolveMachineIdInput(machineIdInput) ?: return null
-        return licenseManager.generateLicenseFull(resolved, adminKey.trim())
+    fun generateLicenseCode(machineId: String, adminKey: String): LicenseManager.GenerateResult? {
+        return licenseManager.generateLicenseFull(machineId.trim(), adminKey.trim())
     }
-
-    // ─── Device Alias (user-side friendly name) ─────────────────
-
-    /**
-     * Set or clear THIS device's friendly name. Returns null on success,
-     * or an error message string if validation fails (caller shows it).
-     */
-    fun setDeviceAlias(alias: String?): String? {
-        val ok = licenseManager.setDeviceAlias(alias)
-        if (!ok) {
-            return licenseManager.validateAlias(alias ?: "") ?: "Nama tidak valid."
-        }
-        // Refresh status so the UI picks up the new alias
-        _licenseStatus.value = licenseManager.getStatus()
-        return null
-    }
-
-    /** Current friendly name for this device, or null. */
-    fun getDeviceAlias(): String? = licenseManager.getDeviceAlias()
-
-    // ─── Address Book (admin-side alias → machineId resolver) ────
-
-    private val _addressBook = MutableStateFlow(licenseManager.listAddressBook())
-    val addressBook: StateFlow<List<LicenseManager.AddressBookEntry>> = _addressBook.asStateFlow()
-
-    /**
-     * Register a (alias → machineId) entry. Returns null on success, or an
-     * error message string on validation failure.
-     */
-    fun addAddressBookEntry(alias: String, machineId: String): String? {
-        val err = licenseManager.upsertAddressBookEntry(alias, machineId)
-        if (err != null) return err
-        _addressBook.value = licenseManager.listAddressBook()
-        return null
-    }
-
-    /** Remove an entry by alias. Returns true if removed. */
-    fun removeAddressBookEntry(alias: String): Boolean {
-        val removed = licenseManager.removeAddressBookEntry(alias)
-        if (removed) _addressBook.value = licenseManager.listAddressBook()
-        return removed
-    }
-
-    /**
-     * Resolve an admin-entered input to a real machine ID. Returns the
-     * 64-char hex string if the input is either a raw machine ID or a
-     * registered alias; null otherwise. Used by the generator screen to
-     * give the user live "alias found / not found" feedback.
-     */
-    fun resolveMachineIdInput(input: String): String? =
-        licenseManager.resolveMachineIdInput(input)
 
     // ─── Saved projects (Hub) ───────────────────────────────────
     private val _savedProjects = MutableStateFlow<List<Project>>(emptyList())

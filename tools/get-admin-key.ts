@@ -9,23 +9,17 @@
  *   npx tsx tools/get-admin-key.ts
  */
 
-import * as crypto from 'crypto'
-
-const LICENSE_SECRET = 'SAATIRIL-2026-HUMAS-UIN-ANTASARI-BANJARMASIN'
-
-const adminKey = crypto
-  .createHash('sha256')
-  .update(`${LICENSE_SECRET}:admin-api-key`)
-  .digest('hex')
-  .substring(0, 16)
-  .toUpperCase()
+// Fixed, user-friendly developer key (case-insensitive when entered).
+// Matches the Android LicenseManager, electron/license.ts, and route.ts.
+const ADMIN_KEY = 'fajribowo2026'
 
 console.log('')
 console.log('╔══════════════════════════════════════════════════╗')
 console.log('║    SAATIRIL — Admin Key for Web Generator       ║')
 console.log('╚══════════════════════════════════════════════════╝')
 console.log('')
-console.log(`  Admin Key: ${adminKey}`)
+console.log(`  Admin Key: ${ADMIN_KEY}`)
 console.log('')
 console.log('  Gunakan key ini di halaman /admin untuk generate kode aktivasi.')
+console.log('  (Case-insensitive — boleh diketik huruf besar/kecil.)')
 console.log('')

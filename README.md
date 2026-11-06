@@ -127,7 +127,7 @@ them to the `latest` GitHub Release. See
 ## License algorithm (interchangeable with the Electron app)
 
 - `LICENSE_SECRET = "SAATIRIL-2026-HUMAS-UIN-ANTASARI-BANJARMASIN"`
-- Admin key = `SHA-256(SECRET + ":admin-api-key")[:16].upper()`
+- Admin key = `fajribowo2026` (case-insensitive, fixed developer key)
 - Activation code = `SHA-256(machineId + ":monthly:" + expiryHex + ":" + SECRET)[:16]`
   formatted as `XXXX-XXXX-XXXX-XXXX`
 - Validity: 30 days, no grace period, machine-bound.
