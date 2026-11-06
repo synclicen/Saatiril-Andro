@@ -272,6 +272,8 @@ class MainActivity : ComponentActivity() {
                 Log.i(TAG, "enterLockTask: not Device Owner — startLockTask() will show system pin dialog")
             }
             startLockTask()
+            // Optimistic state update — onResume will confirm via isInLockTaskMode().
+            viewModel.syncLockTaskState(true)
             true
         } catch (e: SecurityException) {
             Log.e(TAG, "enterLockTask: SecurityException — ${e.message}", e)
@@ -291,6 +293,8 @@ class MainActivity : ComponentActivity() {
     fun exitLockTask(): Boolean {
         return try {
             stopLockTask()
+            // Optimistic state update — onResume will confirm via isInLockTaskMode().
+            viewModel.syncLockTaskState(false)
             Log.i(TAG, "exitLockTask: stopLockTask() called")
             true
         } catch (e: Exception) {
@@ -299,16 +303,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Called by the system when Lock Task Mode starts or stops. Updates
-     * the ViewModel so the UI can reflect the lock state (e.g., change
-     * the lock button icon, hide the BackHandler exit dialog).
-     */
-    override fun onLockTaskModeChanged(isActive: Boolean) {
-        super.onLockTaskModeChanged(isActive)
-        Log.i(TAG, "onLockTaskModeChanged: isActive=$isActive")
-        viewModel.syncLockTaskState(isActive)
-    }
+    // NOTE: We do NOT override Activity.onLockTaskModeChanged(boolean)
+    // because it is hidden from the Kotlin compiler's override resolution
+    // on some API levels (the method is protected in Activity but not
+    // exposed via the ComponentActivity inheritance chain in a way
+    // Kotlin reliably resolves). Instead, we sync the lock-task state
+    // in onResume() via isInLockTaskMode(), which is sufficient because:
+    //  - When the user pins via the system dialog, the activity stays
+    //    foregrounded → onResume fires → state syncs.
+    //  - When the user unpins via long-press Back+Recents, the activity
+    //    is briefly backgrounded then refocused → onResume fires →
+    //    state syncs.
+    //  - When the app calls stopLockTask() (via the Lock button), we
+    //    set the state optimistically in exitLockTask() above.
 
     /**
      * Post a high-priority notification that brings the user back to the app

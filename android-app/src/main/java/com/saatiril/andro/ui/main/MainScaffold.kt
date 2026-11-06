@@ -3,6 +3,7 @@ package com.saatiril.andro.ui.main
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -215,9 +216,10 @@ fun MainScaffold(viewModel: AdminViewModel) {
                                 .background(GOLD.copy(alpha = 0.08f))
                                 .border(1.dp, GOLD.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
                                 .padding(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalAlignment = Alignment.Top
                         ) {
                             Icon(Icons.Default.Info, contentDescription = null, tint = GOLD, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
                                     "Mode Pin Manual (tanpa ADB):",
