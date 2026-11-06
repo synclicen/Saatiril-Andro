@@ -27,6 +27,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * ═════════════════════════════════════════════════════════════════════════
@@ -166,31 +170,38 @@ class UVCCameraManager(private val context: Context) {
     private var isDestroying = false
 
     // ─── Open/close serialization ───────────────────────────────
-    // CRITICAL (hot-plug ANR fix): when the APK is already running and the
-    // user plugs in the USB capture card, TWO independent paths can trigger
-    // openUVCCamera for the same device at nearly the same time:
-    //   (a) USBMonitor.onConnect (fired by the library's BroadcastReceiver
-    //       after permission is granted)
-    //   (b) tryOpenUVCCameraDirect (called by the USB polling fallback AND
-    //       by requestUsbPermission when permission is already held) — which
-    //       calls monitor.requestPermission() → processConnect() → onConnect
-    //       → a SECOND openUVCCamera post.
-    // Both posts land on the single background handler thread, so they're
-    // serialized — BUT openUVCCamera hands surface setup to mainHandler
-    // (async). So the 2nd open's closeUVCCamera() runs BEFORE the 1st open's
-    // setupPreviewSurface lands on the main thread. The 2nd open's
-    // camera.open(ctrlBlock) then contends with the 1st open's not-yet-
-    // released USB endpoint → camera.open() BLOCKS in native code → the
-    // background thread hangs → the queued setupPreviewSurface then calls
-    // startPreview() on a half-open camera from the MAIN thread → main
-    // thread blocks → ANR → sustained CPU spin → phone watchdog reboots.
-    //
-    // Fix: serialize open/close with `cameraLock` + an `isOpening` re-entry
-    // guard. The 2nd open sees isOpening=true and bails out; the 1st open
-    // completes cleanly and sets _isConnected=true, so subsequent onConnect
-    // / tryOpenUVCCameraDirect calls hit the "already connected" guard.
+    // cameraLock guards the `uvcCamera` field so closeUVCCamera (which may
+    // run on any thread — disconnect callback, watchdog, forceReconnect)
+    // can't null uvcCamera while openUVCCamera is mid-flight between
+    // "uvcCamera = camera" and "post setupPreviewSurface". Java/Kotlin
+    // monitors are reentrant, so closeUVCCamera called from within
+    // openUVCCamera (which may hold the lock) is safe.
     private val cameraLock = Any()
-    @Volatile private var isOpening = false
+
+    // ─── camera.open() timeout ──────────────────────────────────
+    // CRITICAL (preview-not-showing fix): camera.open(ctrlBlock) is a NATIVE
+    // USB call that can block indefinitely when the USB endpoint is in a bad
+    // state (common after hot-plug races). Previously it ran on the
+    // backgroundHandler thread — when it blocked, the ENTIRE background
+    // thread was stuck (couldn't process close, reconnect, polling, etc.)
+    // → permanent "idle" state where the camera is detected/selected but
+    // the preview never appears.
+    //
+    // Fix: run camera.open() + setPreviewSize() on a FRESH daemon thread per
+    // open (via FutureTask), with a hard timeout. futureTask.get(TIMEOUT)
+    // bounds the block on the backgroundHandler to 8s max. On timeout, we
+    // abort the open, free the background thread, and let the watchdog/user
+    // retry. The stuck thread becomes an orphan daemon (cleaned up on process
+    // exit). Using a FRESH thread per open (not a shared single-thread
+    // executor) ensures a stuck native call doesn't block subsequent retry
+    // attempts — each open gets its own thread.
+    private val CAMERA_OPEN_TIMEOUT_MS = 8000L
+
+    // Guards forceReconnect against overlapping calls (the watchdog fires
+    // every 5s; without this, concurrent forceReconnect calls would each
+    // spawn a new background thread while the old one is stuck, piling up
+    // threads that all contend for the same USB endpoint).
+    @Volatile private var isReconnecting = false
 
     // ── Android 14+ USB polling fallback ──
     // On Android 14 (API 34), the USBMonitor library's internal registerReceiver()
@@ -282,16 +293,11 @@ class UVCCameraManager(private val context: Context) {
                         Log.i(TAG, "  createNew=$createNew")
                         Log.i(TAG, "═══════════════════════════════════════════════════")
 
-                        // Hot-plug ANR guard: skip if an open is already in
-                        // progress OR we're already connected to this device.
-                        // Both USBMonitor.onConnect and tryOpenUVCCameraDirect
-                        // can fire for the same device when the APK is already
-                        // running and the user plugs in the capture card —
-                        // without this guard, two openUVCCamera calls race.
-                        if (isOpening) {
-                            Log.w(TAG, "onConnect: open already in progress — skipping (isOpening=true)")
-                            return
-                        }
+                        // Already connected to this exact device? Skip the
+                        // open. (Both USBMonitor.onConnect and
+                        // tryOpenUVCCameraDirect can fire for the same device
+                        // — the "already connected" check deduplicates without
+                        // blocking legitimate retries after a failed open.)
                         if (currentUsbDevice?.deviceName == device.deviceName && _isConnected.value) {
                             Log.i(TAG, "onConnect: already connected to ${device.deviceName} — skipping")
                             return
@@ -300,7 +306,11 @@ class UVCCameraManager(private val context: Context) {
                         currentUsbDevice = device
                         currentCtrlBlock = ctrlBlock
 
-                        // Open UVC camera on background thread
+                        // Open UVC camera on background thread. openUVCCamera
+                        // is self-deduplicating (already-connected check +
+                        // identity check in setupPreviewSurface), so multiple
+                        // posts for the same device are safe — only the
+                        // winning open's preview setup takes effect.
                         backgroundHandler?.post {
                             openUVCCamera(device, ctrlBlock)
                         }
@@ -512,17 +522,12 @@ class UVCCameraManager(private val context: Context) {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
             if (!usbManager.hasPermission(device)) return
 
-            // Hot-plug ANR guard: skip if an open is already in progress.
-            // tryOpenUVCCameraDirect is called by polling, enumerateConnectedDevices,
-            // AND requestUsbPermission (when permission already held) — any of these
-            // can race with USBMonitor.onConnect for the same device. Without this
-            // guard, two openUVCCamera calls would race and the 2nd's closeUVCCamera
-            // would kill the 1st's camera mid-setup → ANR.
-            if (isOpening) {
-                Log.i(TAG, "tryOpenUVCCameraDirect: open already in progress — skipping ${device.deviceName}")
-                return
-            }
-            // Don't open if already connected to this device
+            // Don't open if already connected to this device. (Removed the
+            // isOpening hard-guard: it blocked legitimate retries when a
+            // previous camera.open() was stuck in native code — the guard
+            // stayed true forever and the camera never recovered. Now we
+            // allow the retry; openUVCCamera's already-connected check +
+            // setupPreviewSurface's identity check handle dedup.)
             if (currentUsbDevice?.deviceName == device.deviceName && _isConnected.value) {
                 Log.i(TAG, "tryOpenUVCCameraDirect: already connected to ${device.deviceName}")
                 return
@@ -745,64 +750,48 @@ class UVCCameraManager(private val context: Context) {
             return
         }
 
-        // Hot-plug ANR fix: serialize open/close so two concurrent opens
-        // (USBMonitor.onConnect + tryOpenUVCCameraDirect) can't both reach
-        // camera.open() on the same USB endpoint. The isOpening flag is the
-        // fast-path re-entry guard; the synchronized block is the hard
-        // guarantee that open and close never interleave.
-        synchronized(cameraLock) {
-            if (isOpening) {
-                Log.w(TAG, "openUVCCamera: another open is already in progress — skipping ${device.deviceName}")
-                return
-            }
-            if (_isConnected.value && currentUsbDevice?.deviceName == device.deviceName) {
-                Log.i(TAG, "openUVCCamera: already connected to ${device.deviceName} — skipping")
-                return
-            }
-            isOpening = true
+        // Already connected to this device? Skip. (This deduplicates the
+        // common double-fire: USBMonitor.onConnect + tryOpenUVCCameraDirect.)
+        if (_isConnected.value && currentUsbDevice?.deviceName == device.deviceName) {
+            Log.i(TAG, "openUVCCamera: already connected to ${device.deviceName} — skipping")
+            return
         }
 
-        try {
-            // Close any existing camera BEFORE opening the new one. Done under
-            // the lock so a concurrent closeUVCCamera() can't null uvcCamera
-            // between closeUVCCamera() returning and the new UVCCamera() below.
-            synchronized(cameraLock) {
-                closeUVCCamera()
-            }
+        // Close any existing camera before opening the new one.
+        closeUVCCamera()
 
-            Log.i(TAG, "═══════════════════════════════════════════════════")
-            Log.i(TAG, "openUVCCamera: ${device.deviceName}")
-            Log.i(TAG, "  VID=0x${Integer.toHexString(device.vendorId)} PID=0x${Integer.toHexString(device.productId)}")
-            Log.i(TAG, "═══════════════════════════════════════════════════")
+        Log.i(TAG, "═══════════════════════════════════════════════════")
+        Log.i(TAG, "openUVCCamera: ${device.deviceName}")
+        Log.i(TAG, "  VID=0x${Integer.toHexString(device.vendorId)} PID=0x${Integer.toHexString(device.productId)}")
+        Log.i(TAG, "═══════════════════════════════════════════════════")
 
-            val camera = UVCCamera()
-            synchronized(cameraLock) {
-                uvcCamera = camera
-            }
+        val camera = UVCCamera()
+        synchronized(cameraLock) {
+            uvcCamera = camera
+        }
 
-            // ═════════════════════════════════════════════════════
-            // STEP 1: Open the camera device
-            // ═════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════
+        // STEP 1 + 2: Open the camera device + negotiate preview size.
+        // Run on a FRESH daemon thread via FutureTask, with a hard timeout.
+        // camera.open() is a native USB control transfer that can block
+        // indefinitely when the USB endpoint is in a bad state (common after
+        // hot-plug). Running it directly on the backgroundHandler would
+        // freeze the handler forever → no close, no reconnect, no polling →
+        // permanent "idle" state. The FutureTask isolates the block;
+        // futureTask.get(TIMEOUT) bounds it to 8s. On timeout we abort +
+        // close, freeing the backgroundHandler for retry. Using a FRESH
+        // thread per open (not a shared executor) ensures a stuck native
+        // call doesn't queue-block subsequent retries.
+        // ═══════════════════════════════════════════════════════════════
+        val openTask = FutureTask<Boolean> {
+            // STEP 1: Open the camera device (native USB — may block)
             camera.open(ctrlBlock)
-            Log.i(TAG, "★ UVCCamera opened successfully")
+            Log.i(TAG, "★ UVCCamera opened successfully (native open returned)")
 
-            // ═════════════════════════════════════════════════════
-            // FIX #1 + FIX #2 COMBINED:
-            // Use setPreviewSize(w, h, minFps, maxFps, format, bandwidthFactor)
-            // This is the ONLY way to set bandwidth in org.uvccamera:lib!
-            // setBandwidthFactor() DOES NOT EXIST in this library.
-            //
-            // ASPECT-RATIO-AWARE NEGOTIATION (ritual-resilience fix):
-            // The DSLR/capture-card often outputs a 4:3 sensor image embedded
-            // in a 16:9 HDMI frame (with black pillarbox bars on left/right).
-            // If we force 1280x720 (16:9) for a 4:3 project, those embedded
-            // black bars show through the PNG frame's transparent center.
-            // Instead, we now PREFER resolutions matching the project's aspect
-            // ratio (4:3 → 1280x960 / 1024x768 / 640x480; 16:9 → 1280x720 /
-            // 1920x1080), then fall back to the original 1280x720 → 640x480
-            // chain. The FILL Matrix in AdminOperatorScreen also crops any
-            // residual black bars as a defense-in-depth.
-            // ═════════════════════════════════════════════════════
+            // STEP 2: Negotiate preview size (also native USB — may block)
+            // ASPECT-RATIO-AWARE: prefer resolutions matching the project's
+            // aspect ratio (4:3 → 1280x960 / 1024x768 / 640x480; 16:9 →
+            // 1280x720 / 1920x1080), then fall back to 640x480.
             val candidateSizes = buildCandidateSizes(projectAspectRatio)
             var previewSet = false
             for ((w, h, label) in candidateSizes) {
@@ -827,66 +816,76 @@ class UVCCameraManager(private val context: Context) {
                         break
                     } catch (e2: Exception) {
                         Log.w(TAG, "${w}x${h} MJPEG failed: ${e2.message}, trying next candidate...")
-                        // continue to next candidate size
                     }
                 }
             }
             if (!previewSet) {
-                // Last-resort fallback: simple 640x480 (the most universally
-                // supported UVC resolution — every capture card accepts it).
-                try {
-                    Log.w(TAG, "All project-ratio candidates failed — falling back to 640x480 simple")
-                    camera.setPreviewSize(640, 480, UVCCamera.FRAME_FORMAT_MJPEG)
-                    negotiatedWidth = 640
-                    negotiatedHeight = 480
-                    _negotiatedSize.value = 640 to 480
-                    Log.i(TAG, "★ Preview size set: 640x480 MJPEG (last-resort fallback)")
-                } catch (e4: Exception) {
-                    Log.e(TAG, "ALL preview size attempts failed! ${e4.message}")
-                    synchronized(cameraLock) { closeUVCCamera() }
-                    return
-                }
+                // Last-resort fallback: 640x480 (universally supported by UVC).
+                camera.setPreviewSize(640, 480, UVCCamera.FRAME_FORMAT_MJPEG)
+                negotiatedWidth = 640
+                negotiatedHeight = 480
+                _negotiatedSize.value = 640 to 480
+                Log.i(TAG, "★ Preview size set: 640x480 MJPEG (last-resort fallback)")
             }
-
-            // ═════════════════════════════════════════════════════
-            // FIX #3: Set the PREVIEW SURFACE before startPreview
-            // Use setPreviewDisplay(Surface) — NOT setPreviewTexture
-            // Surface is created from TextureView's SurfaceTexture
-            // ═════════════════════════════════════════════════════
-            val tv = textureView
-            if (tv != null && tv.isAvailable) {
-                // BUG #4 FIX: Must set up surface on MAIN thread
-                mainHandler.post {
-                    setupPreviewSurface(camera, tv)
-                }
-            } else {
-                Log.i(TAG, "TextureView not ready yet — will set up surface when available")
-                pendingSurfaceSetup = true
-            }
-
-            // Update state — set _isConnected BEFORE releasing isOpening so
-            // that a concurrent onConnect/tryOpenUVCCameraDirect sees either
-            // isOpening=true (still opening) OR _isConnected=true (done) and
-            // bails out.
-            synchronized(cameraLock) {
-                _isConnected.value = true
-                _currentCameraId.value = device.deviceName
-                _isUSBCamera.value = true
-                _cameraType.value = "external"
-            }
-
-            Log.i(TAG, "═══════════════════════════════════════════════════")
-            Log.i(TAG, "★ UVC CAMERA READY — waiting for surface to start preview")
-            Log.i(TAG, "═══════════════════════════════════════════════════")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open UVCCamera: ${e.message}", e)
-            synchronized(cameraLock) { closeUVCCamera() }
-        } finally {
-            // Release the re-entry guard so a future open (e.g. after a
-            // disconnect) can proceed.
-            isOpening = false
+            true
         }
+        // Start on a fresh daemon thread so a stuck native call doesn't
+        // block subsequent retries (each open gets its own thread).
+        Thread(openTask, "UVCameraOpen").apply { isDaemon = true }.start()
+
+        try {
+            openTask.get(CAMERA_OPEN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            // camera.open() or setPreviewSize() hung in native code.
+            // Abort the open — the backgroundHandler is now free to process
+            // the next message (watchdog reconnect, user retry, etc.).
+            // The stuck open thread continues as an orphan daemon; it holds
+            // the old ctrlBlock but we've nulled uvcCamera, so it can't
+            // interfere with a fresh open on a new ctrlBlock + new thread.
+            Log.e(TAG, "⚠ camera.open()/setPreviewSize() TIMED OUT after ${CAMERA_OPEN_TIMEOUT_MS}ms — " +
+                "USB endpoint stuck. Aborting open (background thread freed for retry).")
+            openTask.cancel(true) // best-effort interrupt (native may ignore)
+            closeUVCCamera()
+            return
+        } catch (e: ExecutionException) {
+            Log.e(TAG, "Failed to open UVCCamera: ${e.cause?.message ?: e.message}", e)
+            closeUVCCamera()
+            return
+        } catch (e: Exception) {
+            Log.e(TAG, "openUVCCamera unexpected error: ${e.message}", e)
+            closeUVCCamera()
+            return
+        }
+
+        // ═════════════════════════════════════════════════════
+        // STEP 3: Set the PREVIEW SURFACE + startPreview.
+        // Posted to the MAIN thread (surface ops must be on main). The
+        // identity check inside setupPreviewSurface ensures that if a 2nd
+        // open replaced uvcCamera between this post and execution, this
+        // (stale) preview setup bails instead of calling startPreview on
+        // a destroyed camera.
+        // ═════════════════════════════════════════════════════
+        val tv = textureView
+        if (tv != null && tv.isAvailable) {
+            mainHandler.post {
+                setupPreviewSurface(camera, tv)
+            }
+        } else {
+            Log.i(TAG, "TextureView not ready yet — will set up surface when available")
+            pendingSurfaceSetup = true
+        }
+
+        // Update state
+        synchronized(cameraLock) {
+            _isConnected.value = true
+            _currentCameraId.value = device.deviceName
+            _isUSBCamera.value = true
+            _cameraType.value = "external"
+        }
+
+        Log.i(TAG, "═══════════════════════════════════════════════════")
+        Log.i(TAG, "★ UVC CAMERA READY — waiting for surface to start preview")
+        Log.i(TAG, "═══════════════════════════════════════════════════")
     }
 
     /**
@@ -967,6 +966,21 @@ class UVCCameraManager(private val context: Context) {
      * leaving the preview black.
      */
     private fun setupPreviewSurface(camera: UVCCamera, tv: TextureView) {
+        // IDENTITY CHECK (preview-not-showing fix): only set up the preview
+        // if THIS camera is still the current one. A 2nd openUVCCamera (from
+        // onConnect + tryOpenUVCCameraDirect double-fire, or a watchdog
+        // retry) may have called closeUVCCamera() which destroyed this camera
+        // and replaced uvcCamera with a new instance. Without this check,
+        // this (stale) setup would call setPreviewDisplay/startPreview on a
+        // DESTROYED camera → silent fail → no preview. With the check, the
+        // stale setup bails and the winning open's setupPreviewSurface runs.
+        val currentCamera = uvcCamera
+        if (currentCamera !== camera) {
+            Log.w(TAG, "setupPreviewSurface: camera was replaced (uvcCamera !== camera) — " +
+                "stale preview setup bailing (a newer open will set up the preview)")
+            return
+        }
+
         try {
             val surfaceTexture = tv.surfaceTexture
             if (surfaceTexture == null) {
@@ -1437,12 +1451,15 @@ class UVCCameraManager(private val context: Context) {
         Log.i(TAG, "destroy: Cleaning up UVCCamera")
         isDestroying = true
         isInitialized = false
-        isOpening = false
+        isReconnecting = false
         stopUsbPolling()
         closeUVCCamera()
         unregisterUsbMonitor()
         unregisterUsbPermissionReceiver()
         stopBackgroundThread()
+        // Note: camera.open() runs on fresh daemon threads (FutureTask per
+        // open). Any stuck native open() calls are daemon threads that die
+        // automatically on process exit — nothing to shut down here.
         discoveredDevices.clear()
         _isConnected.value = false
         _cameraType.value = "none"
@@ -1467,20 +1484,28 @@ class UVCCameraManager(private val context: Context) {
      * - USB device detach is detected (camera unplugged / battery dead).
      */
     fun forceReconnect() {
+        // Guard against overlapping calls: the AdminOperatorScreen watchdog
+        // fires every 5s, and the user can also tap "Reconnect" manually.
+        // Without this guard, concurrent forceReconnect calls would each
+        // stop+restart the background thread (spawning orphans if the old
+        // thread is stuck in camera.open) and pile up USBMonitor
+        // re-registrations — making recovery impossible.
+        if (isReconnecting) {
+            Log.w(TAG, "forceReconnect: already in progress — skipping (isReconnecting=true)")
+            return
+        }
+        isReconnecting = true
         Log.i(TAG, "forceReconnect: nuclear camera recovery initiated")
 
+        try {
         // Step 1: Close existing connection cleanly
         try { closeUVCCamera() } catch (e: Exception) {
             Log.w(TAG, "forceReconnect: closeUVCCamera error: ${e.message}")
         }
 
         // Step 2: Reset state so initCamera will re-register everything.
-        // Also reset isOpening — if a previous openUVCCamera was stuck in
-        // camera.open() and the user pressed Reconnect to recover, the flag
-        // would still be true and block all subsequent opens.
         isInitialized = false
         isDestroying = false
-        isOpening = false
 
         // Step 3: Unregister old USBMonitor (if any)
         try { unregisterUsbMonitor() } catch (_: Exception) {}
@@ -1524,6 +1549,9 @@ class UVCCameraManager(private val context: Context) {
             }
         }
         Log.i(TAG, "forceReconnect: recovery sequence complete")
+        } finally {
+            isReconnecting = false
+        }
     }
 
 }
