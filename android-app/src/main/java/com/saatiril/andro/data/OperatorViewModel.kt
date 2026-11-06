@@ -1258,7 +1258,13 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
             }
             val updatedHistory = proj.photoHistory.toMutableList().apply {
                 removeAll { it.student.id == student.id && it.channel == _myChannel.value }
-                add(PhotoHistoryItem(student = student, photos = photos, channel = _myChannel.value))
+                // CRITICAL (5000p stability): strip photos from RAM.
+                // The 'photos' local val is used for socketManager.sendPhotosSaved
+                // below — we do NOT need to keep base64 in _project.value.photoHistory.
+                // The operator does NOT save photos to local disk (matching Electron
+                // browser mode); the admin is the source of truth. Keeping base64
+                // in RAM would OOM the operator phone at ~participant 150-300.
+                add(PhotoHistoryItem(student = student, photos = emptyList(), channel = _myChannel.value))
             }
             val updatedProject = proj.copy(
                 database = updatedDb,

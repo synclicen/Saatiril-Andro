@@ -1140,30 +1140,32 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 val folderUri = photoSaver.getOutputFolder()
                 if (folderUri == null) {
                     Log.e(TAG, "=== SAVE FAILED: No output folder set! ===")
-                    return@withContext false
+                    return@withContext emptyList()
                 }
                 Log.i(TAG, "=== Saving ${photos.size} photo(s) to folder: $folderUri ===")
+                val savedUris = mutableListOf<String>()
                 for ((i, photo) in photos.withIndex()) {
                     try {
                         Log.i(TAG, "Saving photo ${i+1}/${photos.size}: ${filenames[i]}")
                         val savedUri = photoSaver.savePhoto(photo, filenames[i])
                         if (savedUri != null) {
                             Log.i(TAG, "✅ Photo saved: ${filenames[i]} → $savedUri")
+                            savedUris.add(savedUri.toString())
                             driveBackupManager.uploadPhotoForProject(savedUri.toString(), filenames[i], _project.value?.config?.driveFolder, _project.value?.name)
                         } else {
                             Log.e(TAG, "❌ Photo save returned null: ${filenames[i]}")
-                            return@withContext false
+                            return@withContext emptyList()
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "❌ Failed to save ${filenames[i]}: ${e.message}", e)
-                        return@withContext false
+                        return@withContext emptyList()
                     }
                 }
                 Log.i(TAG, "=== Save complete: ${photos.size} photo(s) processed ===")
-                true
+                savedUris
             }
 
-            if (!savedOk) {
+            if (savedUris.isEmpty()) {
                 // BUG #1: save failed — DO NOT mark done. Reset phase so the
                 // operator can retry the shutter, and surface the error.
                 _capturePhase.value = if (photosPerSession == 2) CapturePhase.READY_2 else CapturePhase.READY_1
@@ -1188,7 +1190,22 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     } else s
                 }
                 val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
-                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
+                // CRITICAL (5000p stability): photos are saved to disk by
+                // photoSaver.savePhoto() above — the on-disk files ARE the
+                // source of truth. Keeping base64 photos in RAM here would
+                // accumulate ~5.8 MB per participant and OOM the app at
+                // ~participant 150-300. Store the saved file URIs (short
+                // strings, ~100 bytes each) instead of the base64 data URLs
+                // (~2.9 MB each). The gallery detects URI strings (starting
+                // with "content://" or "file://") and loads thumbnails
+                // on-demand from disk.
+                //
+                // The 'photos' list is still sent to remote operators/MCs
+                // via the PHOTOS_SAVED broadcast below (using the local
+                // 'photos' val, NOT historyItem.photos), so this strip
+                // does NOT affect the socket relay.
+                val ramHistoryItem = historyItem.copy(photos = savedUris)
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + ramHistoryItem
                 val updatedVersions = cur.captureVersions.toMutableMap().apply { put(versionKey, newVersion) }
                 val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
                 _project.value = updated
@@ -1501,35 +1518,41 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         // failed the photos were lost and the student was wrongly shown as
         // done. Now the save is awaited; on failure we DO NOT mark done.
         viewModelScope.launch {
-            val savedOk = withContext(Dispatchers.IO) {
-                var allOk = true
+            val savedUris = withContext(Dispatchers.IO) {
+                val uris = mutableListOf<String>()
                 for ((i, photo) in photos.withIndex()) {
                     val filename = deriveFilename(primaryFilename, student, channel, version, i, photos.size, isPhotoshoot)
                     try {
                         val savedUri = photoSaver.savePhoto(photo, filename)
                         if (savedUri != null) {
+                            uris.add(savedUri.toString())
                             driveBackupManager.uploadPhotoForProject(savedUri.toString(), filename, proj.config?.driveFolder, proj.name)
                         } else {
                             Log.e(TAG, "Failed to save photo $filename: savePhoto returned null")
-                            allOk = false
-                            break
+                            return@withContext emptyList<String>()
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to save photo $filename: ${e.message}")
-                        allOk = false
-                        break
+                        return@withContext emptyList<String>()
                     }
                 }
-                allOk
+                uris
             }
-            if (!savedOk) {
+            if (savedUris.isEmpty()) {
                 Log.e(TAG, "handlePhotosSaved: photo save failed — DB NOT marked done (operator may retry)")
                 return@launch
             }
 
             val shouldMarkDone = if (isDualPhotoshoot) {
+                // Dual-photoshoot: done if EITHER channel has photographed.
+                // NOTE: we used to check `photoHistory.any { ... it.photos.isNotEmpty() }`
+                // but photos are now stripped from RAM after save (5000p OOM fix).
+                // Use the database status instead: if the OTHER channel's
+                // capture for this student is already recorded in
+                // captureVersions, the student is done.
                 val otherChannel = if (channel == 1) 2 else 1
-                proj.photoHistory.any { it.student.id == student.id && it.channel == otherChannel && it.photos.isNotEmpty() }
+                val otherVersionKey = "${student.id}_$otherChannel"
+                proj.captureVersions.containsKey(otherVersionKey)
             } else {
                 true
             }
@@ -1540,7 +1563,20 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                 val updatedDb = cur.database.map { s ->
                     if (s.id == student.id && shouldMarkDone) s.copy(status = "done") else s
                 }
-                val historyItem = PhotoHistoryItem(student = student, photos = photos, channel = channel)
+                // CRITICAL (5000p stability): store the saved file URIs
+                // (short strings, ~100 bytes each) instead of the base64
+                // data URLs (~2.9 MB each). The on-disk files are the source
+                // of truth; the gallery loads thumbnails on-demand from
+                // the URIs. Keeping base64 in RAM would OOM the admin phone
+                // at ~participant 150-300 (29 GB RAM for 5000 participants
+                // × 2 photos × ~2.9 MB base64 each).
+                //
+                // The 'photos' list was already relayed to other clients
+                // via the PHOTOS_SAVED socket event BEFORE this handler
+                // ran (the operator's SocketManager emitted it; this
+                // handler RECEIVES it). So stripping here does NOT affect
+                // any socket relay.
+                val historyItem = PhotoHistoryItem(student = student, photos = savedUris, channel = channel)
                 val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id && it.channel == channel } + historyItem
                 val updatedVersions = cur.captureVersions.toMutableMap().apply {
                     put("${student.id}_$channel", version)

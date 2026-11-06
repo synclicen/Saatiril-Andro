@@ -608,10 +608,18 @@ private fun QrCodeWithLabel(url: String, label: String, modifier: Modifier = Mod
 /**
  * Photo thumbnail with version-aware filename overlay (Fix #19) and
  * a per-thumbnail retake button (Fix #20).
+ *
+ * Supports two photo-reference formats:
+ *  - base64 data URL (legacy, "data:image/jpeg;base64,...") — decoded in RAM.
+ *  - SAF/file URI ("content://..." or "file://...") — loaded on-demand from
+ *    disk via ContentResolver.openInputStream(). This is the 5000p-stable
+ *    format: the admin ViewModel now stores URIs instead of base64 to avoid
+ *    OOM at ~participant 150-300.
  */
 @Composable
 private fun PhotoThumb(item: PhotoHistoryItem, project: Project?, onReset: () -> Unit) {
     val firstPhoto = item.photos.firstOrNull() ?: return
+    val context = androidx.compose.ui.platform.LocalContext.current
     // ASYNC decode (off the main thread) — was synchronous in `remember`,
     // which blocked the UI 50-200ms per thumbnail (×18 = 1-3.6s jank when the
     // gallery first appears). produceState runs the decode on
@@ -619,9 +627,18 @@ private fun PhotoThumb(item: PhotoHistoryItem, project: Project?, onReset: () ->
     val bitmap by produceState<Bitmap?>(null, firstPhoto) {
         value = withContext(Dispatchers.Default) {
             try {
-                val pure = if (firstPhoto.contains(",")) firstPhoto.substringAfter(",") else firstPhoto
-                val bytes = Base64.decode(pure, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (firstPhoto.startsWith("content://") || firstPhoto.startsWith("file://")) {
+                    // URI form — load from disk via ContentResolver.
+                    val uri = android.net.Uri.parse(firstPhoto)
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        BitmapFactory.decodeStream(input)
+                    }
+                } else {
+                    // base64 form (legacy) — decode in RAM.
+                    val pure = if (firstPhoto.contains(",")) firstPhoto.substringAfter(",") else firstPhoto
+                    val bytes = Base64.decode(pure, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
             } catch (e: Exception) { null }
         }
     }
