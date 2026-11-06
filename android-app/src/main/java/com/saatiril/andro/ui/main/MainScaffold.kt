@@ -1,5 +1,6 @@
 package com.saatiril.andro.ui.main
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.saatiril.andro.data.AdminViewModel
@@ -107,6 +109,60 @@ fun MainScaffold(viewModel: AdminViewModel) {
                 controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
             }
         }
+    }
+
+    // ── Anti-minimize: intercept the hardware back button ──────────
+    // Without this, pressing Back from MainScaffold minimizes the app,
+    // which tears down the camera and forces a 5-second reconnect on
+    // return. Show a confirmation dialog instead — only stop the server
+    // (and return to the Hub) if the user explicitly confirms.
+    var showExitConfirm by remember { mutableStateOf(false) }
+    BackHandler(enabled = true) {
+        showExitConfirm = true
+    }
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            containerColor = PANEL,
+            titleContentColor = GOLD,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = GOLD, modifier = Modifier.size(22.dp))
+                    Text("Hentikan Prosesi?", color = GOLD, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Text(
+                    "Jika Anda keluar sekarang, server akan dihentikan dan koneksi ke " +
+                        "operator/MC akan terputus. Kamera juga akan dilepas dan perlu " +
+                        "dihubungkan kembali saat Anda masuk lagi.\n\n" +
+                        "Yakin hentikan prosesi?",
+                    color = MUTED, fontSize = 12.sp, lineHeight = 16.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExitConfirm = false
+                        viewModel.stopServer()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RED),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Ya, Hentikan", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showExitConfirm = false },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GREEN),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GREEN.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Lanjutkan Prosesi", fontSize = 12.sp)
+                }
+            }
+        )
     }
 
     Scaffold(

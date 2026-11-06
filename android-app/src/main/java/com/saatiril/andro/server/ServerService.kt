@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.saatiril.andro.MainActivity
@@ -64,6 +65,16 @@ class ServerService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var statsJob: Job? = null
 
+    // Partial wake-lock: keeps the CPU running so the ktor Socket.io server
+    // continues to accept connections from operators/MCs even if the screen
+    // is off or the device is in Doze mode. The foreground-service status
+    // alone is NOT enough on Android 6+ — Doze throttles network on
+    // backgrounded apps without a wake-lock.
+    //
+    // Acquired on START, released on STOP / onDestroy. The WAKE_LOCK
+    // permission is already declared in the manifest.
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,12 +88,14 @@ class ServerService : Service() {
                     try { SaatirilServer.stop() } catch (e: Exception) { Log.e(TAG, "stop error: ${e.message}", e) }
                 }
                 statsJob?.cancel()
+                releaseWakeLock()
                 try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
                 Log.i(TAG, "START — promoting to foreground")
+                acquireWakeLock()
                 try {
                     createNotificationChannel()
                     val notif = buildNotification("Saatiril server berjalan…", 0)
@@ -119,10 +132,33 @@ class ServerService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
         statsJob?.cancel()
+        releaseWakeLock()
         // #8: keep the (blocking) server stop off the main thread — the
         // service is going away regardless; cleanup runs on a worker thread.
         Thread { try { SaatirilServer.stop() } catch (_: Exception) {} }.start()
         super.onDestroy()
+    }
+
+    // ── Wake-lock management ──────────────────────────────────────
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Saatiril:ServerService").apply {
+                setReferenceCounted(false)
+                acquire(10 * 60 * 60 * 1000L /* 10 hours max — safety cap */)
+            }
+            Log.i(TAG, "Wake-lock acquired (PARTIAL_WAKE_LOCK)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire wake-lock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) { }
+        wakeLock = null
     }
 
     private fun createNotificationChannel() {

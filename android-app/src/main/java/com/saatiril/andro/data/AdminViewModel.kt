@@ -1233,6 +1233,38 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     val lanIp: StateFlow<String?> = SaatirilServer.lanIp
     val serverPort: StateFlow<Int> = SaatirilServer.port
 
+    /**
+     * True iff the LAN server is currently running. Used by MainActivity to
+     * decide whether to post a "return to SAATIRIL" notification when the
+     * user presses Home.
+     */
+    fun isServerRunning(): Boolean = SaatirilServer.running.value
+
+    // ─── App foreground / background events ──────────────────────
+    /**
+     * Fired by MainActivity.onResume() every time the app returns to the
+     * foreground. Triggers an immediate UVC + Camera2 reconnect attempt so
+     * the user doesn't see a 5-second black screen if Android tore down the
+     * camera during sleep / background.
+     *
+     * Safe to call when no ceremony is running — the camera managers no-op
+     * if they have no active surface.
+     */
+    fun onAppForegrounded() {
+        // Force both camera managers to attempt reconnection. These are
+        // idempotent: if the camera is already connected, they do nothing.
+        try {
+            cameraUVCManager.forceReconnect()
+        } catch (e: Exception) {
+            Log.w(TAG, "forceReconnect (UVC) on foreground failed: ${e.message}")
+        }
+        try {
+            camera2Manager.onAppForegrounded()
+        } catch (e: Exception) {
+            Log.w(TAG, "reconnect (Camera2) on foreground failed: ${e.message}")
+        }
+    }
+
     // ─── MC channel selection (for dual modes) ─────────────────
     private val _myChannel = MutableStateFlow(1)
     val myChannel: StateFlow<Int> = _myChannel.asStateFlow()

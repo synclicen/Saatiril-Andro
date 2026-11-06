@@ -827,6 +827,36 @@ class Camera2Manager(private val context: Context) {
         }
     }
 
+    /**
+     * Called by AdminViewModel.onAppForegrounded() when the app returns to
+     * the foreground. If a camera was active but got torn down by the OS
+     * during sleep / background (Android can do this to reclaim resources),
+     * re-open it immediately so the user doesn't see a black preview.
+     *
+     * Idempotent: if the camera is already connected, does nothing.
+     */
+    fun onAppForegrounded() {
+        val camId = _currentCameraId.value
+        if (camId.isEmpty()) {
+            Log.d(TAG, "onAppForegrounded: no camera was selected, skip")
+            return
+        }
+        if (_isConnected.value && cameraDevice != null) {
+            Log.d(TAG, "onAppForegrounded: camera $camId still connected, skip")
+            return
+        }
+        // Camera was selected but is now disconnected — reopen.
+        Log.i(TAG, "onAppForegrounded: camera $camId disconnected, reopening")
+        // If a surface is available, openCamera will start preview automatically
+        // via onSurfaceTextureAvailable. If not, the open will complete but
+        // preview starts when the surface comes back.
+        try {
+            openCamera(camId)
+        } catch (e: Exception) {
+            Log.w(TAG, "onAppForegrounded: reopen failed: ${e.message}")
+        }
+    }
+
     // ─── Camera Close / Destroy ──────────────────────────────────
 
     /**
