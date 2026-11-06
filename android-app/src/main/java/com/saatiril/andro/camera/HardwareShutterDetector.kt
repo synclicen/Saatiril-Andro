@@ -72,6 +72,16 @@ class HardwareShutterDetector(
     @Volatile private var dipBrightness = 0f
     @Volatile private var lastTriggerTime = 0L
 
+    /**
+     * Brightness of the most-recently-processed frame (0-255 luminance).
+     * The polling loop reads this to decide whether to save the current
+     * frame as the "last good (non-black) frame" for instant capture on
+     * shutter detection. A frame with brightness > 30 is considered "good"
+     * (not a blackout frame).
+     */
+    @Volatile var lastFrameBrightness: Float = -1f
+        private set
+
     // Rolling history (matches ARAY's brightnessHistory + pixelChangeHistory)
     private val brightnessHistory = ArrayDeque<Float>(5)
     private val pixelChangeHistory = ArrayDeque<Float>(5)
@@ -115,6 +125,7 @@ class HardwareShutterDetector(
             sum += 0.299f * r + 0.587f * g + 0.114f * b
         }
         val brightness = sum / pixels.size
+        lastFrameBrightness = brightness
 
         // Calculate pixel change vs last frame (matches ARAY's pixelChange tracking)
         var pixelChange = 0f
@@ -261,6 +272,7 @@ class HardwareShutterDetector(
         brightnessHistory.clear()
         pixelChangeHistory.clear()
         lastBrightness = -1f
+        lastFrameBrightness = -1f
         dipDetected = false
         lastFramePixels = null
     }

@@ -318,8 +318,16 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         viewModel.resetCaptureState()
     }
     // ── Hot shoe: extract the capture logic into a reusable lambda ──
-    // (used by both the on-screen shutter button + the hot shoe audio detector).
-    val triggerCapture: () -> Unit = {
+    // (used by the on-screen shutter button, hot shoe audio detector, and
+    // the DSLR hardware shutter detector).
+    //
+    // preCapturedFrame: when non-null (DSLR hardware shutter path), this is
+    // the last GOOD (non-black) frame captured by the polling loop JUST
+    // BEFORE the DSLR blackout. Using it makes capture INSTANT — no need to
+    // grab textureView.bitmap (which would be BLACK during the mirror-flip
+    // blackout) and no 450ms black-retry loop. When null (button / hand /
+    // hot-shoe paths), doCapture grabs from textureView with the retry loop.
+    val triggerCapture: (android.graphics.Bitmap?) -> Unit = { preCapturedFrame ->
         if (!isCapturing && activeStudent != null && timerCountdown == null) {
             captureError = null
             val timerDuration = when (shutterMode) { "timer-3" -> 3; "timer-5" -> 5; "timer-10" -> 10; else -> 0 }
@@ -327,53 +335,71 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 isCapturing = true
                 captureStatus = "saving"  // Show progress bar overlay
                 scope.launch(Dispatchers.Default) {
+                    // Track whether we own the bitmap (need to recycle it).
+                    // preCapturedFrame is owned by us (stolen from the polling
+                    // loop's lastGoodFrame). textureView.bitmap is also a fresh
+                    // copy we own. Either way, recycle after processing.
+                    var ownedBitmap: android.graphics.Bitmap? = null
                     try {
-                        // ISSUE 3 FIX: retry black frame detection. Sometimes TextureView
-                        // returns a black bitmap (USB capture card not ready, frame not
-                        // rendered yet). Retry up to 3 times with 100ms delay between
-                        // attempts. If all 3 are black, capture anyway (better than no
-                        // photo — the admin can retake).
-                        var bitmap: android.graphics.Bitmap? = null
-                        var blackAttempts = 0
-                        for (attempt in 0 until 3) {
-                            bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
-                            if (bitmap == null || bitmap.isRecycled) {
-                                delay(100)
-                                continue
-                            }
-                            // Check if bitmap is all black (same logic as UVCCameraManager.isBitmapBlack)
-                            val w = bitmap.width
-                            val h = bitmap.height
-                            val stepX = maxOf(1, w / 20)
-                            val stepY = maxOf(1, h / 20)
-                            var blackCount = 0
-                            var totalCount = 0
-                            for (x in 0 until w step stepX) {
-                                for (y in 0 until h step stepY) {
-                                    val pixel = bitmap.getPixel(x, y)
-                                    totalCount++
-                                    val r = (pixel shr 16) and 0xFF
-                                    val g = (pixel shr 8) and 0xFF
-                                    val b = pixel and 0xFF
-                                    if (r + g + b < 30) blackCount++
+                        val bitmap: android.graphics.Bitmap?
+                        if (preCapturedFrame != null && !preCapturedFrame.isRecycled) {
+                            // DSLR hardware shutter path: use the pre-captured
+                            // frame (the last GOOD frame from JUST BEFORE the
+                            // DSLR mirror-flip blackout). This is INSTANT — no
+                            // need to grab textureView.bitmap (which would be
+                            // BLACK during the blackout) and no 450ms retry
+                            // loop. The pre-blackout frame is the actual scene.
+                            bitmap = preCapturedFrame
+                            ownedBitmap = preCapturedFrame
+                            Log.i("OperatorScreen", "Capture: using pre-blackout frame (DSLR shutter path) — instant capture, no retry")
+                        } else {
+                            // Button / hand / hot-shoe path: grab from
+                            // textureView with black-retry (USB capture card
+                            // might not be ready). Retry up to 3 times with
+                            // 100ms delay. If all 3 are black, capture anyway.
+                            bitmap = null
+                            var blackAttempts = 0
+                            for (attempt in 0 until 3) {
+                                bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
+                                if (bitmap == null || bitmap.isRecycled) {
+                                    delay(100)
+                                    continue
                                 }
+                                // Check if bitmap is all black
+                                val w = bitmap.width
+                                val h = bitmap.height
+                                val stepX = maxOf(1, w / 20)
+                                val stepY = maxOf(1, h / 20)
+                                var blackCount = 0
+                                var totalCount = 0
+                                for (x in 0 until w step stepX) {
+                                    for (y in 0 until h step stepY) {
+                                        val pixel = bitmap.getPixel(x, y)
+                                        totalCount++
+                                        val r = (pixel shr 16) and 0xFF
+                                        val g = (pixel shr 8) and 0xFF
+                                        val b = pixel and 0xFF
+                                        if (r + g + b < 30) blackCount++
+                                    }
+                                }
+                                if (totalCount > 0 && blackCount.toFloat() / totalCount > 0.95f) {
+                                    // >95% black — likely USB capture card not ready. Retry.
+                                    blackAttempts++
+                                    bitmap.recycle()
+                                    bitmap = null
+                                    delay(150)
+                                    continue
+                                }
+                                break  // Good frame found
                             }
-                            if (totalCount > 0 && blackCount.toFloat() / totalCount > 0.95f) {
-                                // >95% black — likely USB capture card not ready. Retry.
-                                blackAttempts++
-                                bitmap.recycle()
-                                bitmap = null
-                                delay(150)
-                                continue
+                            ownedBitmap = bitmap
+                            if (bitmap != null && blackAttempts >= 3) {
+                                Log.w("OperatorScreen", "Capture: all 3 attempts were black — capturing anyway")
                             }
-                            break  // Good frame found
                         }
 
                         val proj = project
                         if (bitmap != null && proj != null) {
-                            if (blackAttempts >= 3) {
-                                Log.w("OperatorScreen", "Capture: all 3 attempts were black — capturing anyway")
-                            }
                             // Crop OSD if enabled — crop 8% from top + bottom
                             val captureBitmap = if (cropOsd) {
                                 val cropH = bitmap.height / 12  // ~8% each side
@@ -396,6 +422,11 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { captureError = "Gagal: ${e.message}" }
                     } finally {
+                        // Recycle the owned bitmap (preCapturedFrame or
+                        // textureView.bitmap copy) to avoid accumulation.
+                        // CameraCapture.processFrame/bitmapToBase64 create
+                        // their own bitmaps; the source is no longer needed.
+                        try { ownedBitmap?.recycle() } catch (_: Exception) {}
                         withContext(Dispatchers.Main) {
                             isCapturing = false
                             // Reset DSLR shutter detector cooldown so it's
@@ -493,16 +524,30 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // ── Hot shoe: when a pulse is detected → trigger capture ──
     LaunchedEffect(hotShoePulseCount) {
         if (hotShoePulseCount > 0) {
-            triggerCapture()
+            triggerCapture(null)
         }
     }
 
     // ── DSLR Hardware Shutter Detection: polling loop ──
-    // Polls TextureView.getBitmap() every ~200ms (5fps, matches ARAY) + feeds
-    // each frame to HardwareShutterDetector. When the DSLR shutter fires →
-    // detector detects brightness dip + pixel change spike → triggerCapture().
-    // Only runs when dslrShutterTrigger is ON + UVC camera is connected +
-    // there's an active student (same conditions as hot shoe).
+    // Polls TextureView.getBitmap() every ~100ms (10fps) + feeds each frame
+    // to HardwareShutterDetector. When the DSLR shutter fires → detector
+    // detects brightness dip + pixel change spike → onShutterDetected →
+    // triggerCapture(lastGoodFrame).
+    //
+    // PRE-BLACKOUT FRAME CAPTURE (instant shutter fix):
+    // The polling loop maintains `lastGoodFrame` — the most recent frame
+    // whose brightness was above 30 (i.e. NOT a blackout frame). When the
+    // DSLR shutter fires, the detector sees the blackout (mirror up → dark).
+    // At that moment, textureView.bitmap would be BLACK. Instead of grabbing
+    // a black frame + retrying for 450ms (the old behavior — slow + often
+    // captured black photos, forcing the user to "hold" the shutter), we
+    // pass `lastGoodFrame` (the pre-blackout frame = the actual scene) to
+    // triggerCapture. This makes capture INSTANT and reliable — a quick
+    // shutter press is sufficient.
+    //
+    // The polling loop also feeds every frame to the detector (which needs
+    // to see the brightness dip to trigger). The detector downscales to 32×32
+    // internally, so processFrame is cheap.
     //
     // ISSUE 2 FIX: skip polling when isCapturing=true. Previously the polling
     // continued during capture → the capture's own flash/brightness change
@@ -511,11 +556,34 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // + resumes after isCapturing goes back to false.
     val isCapturingRef = remember { mutableStateOf(false) }
     isCapturingRef.value = isCapturing
+    // Buffer for the last good (non-black) frame. Accessed from the polling
+    // coroutine (Dispatchers.Default) + the shutter callback. The lock
+    // ensures atomic steal-and-null (the shutter callback takes ownership;
+    // the polling loop won't recycle a stolen frame).
+    val lastGoodFrameHolder = remember { Array<Any?>(1) { null } }  // [0] = Bitmap?, lock-free via synchronized
+    val frameLock = remember { Any() }
     DisposableEffect(dslrShutterTrigger, uvcConnected, activeStudent) {
         if (!dslrShutterTrigger || !uvcConnected || activeStudent == null) {
             onDispose { }
         } else {
-            dslrShutterDetector.onShutterDetected = { triggerCapture() }
+            dslrShutterDetector.onShutterDetected = {
+                // Shutter detected — steal the last good frame (the pre-
+                // blackout frame = the actual scene). This is the frame from
+                // ~100ms ago (the previous poll), before the mirror flipped.
+                val stolenFrame = synchronized(frameLock) {
+                    val f = lastGoodFrameHolder[0] as? android.graphics.Bitmap
+                    lastGoodFrameHolder[0] = null  // transfer ownership
+                    f
+                }
+                // Run triggerCapture on the MAIN thread — it reads/writes
+                // Compose state (isCapturing, captureStatus, etc.). The
+                // polling coroutine runs on Dispatchers.Default; calling
+                // triggerCapture directly from there is a thread violation
+                // that could cause inconsistent state + double triggers.
+                scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                    triggerCapture(stolenFrame)
+                }
+            }
             dslrShutterDetector.start()
             val pollingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
             val pollingJob = pollingScope.launch {
@@ -529,7 +597,29 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                             // → shutter not detected.
                             val bitmap = withContext(kotlinx.coroutines.Dispatchers.Main) { textureView.bitmap }
                             if (bitmap != null && !bitmap.isRecycled) {
+                                // Feed to detector (downscales to 32×32 internally).
                                 dslrShutterDetector.processFrame(bitmap)
+
+                                // Save as lastGoodFrame if this frame is NOT
+                                // black (brightness > 30). The detector exposes
+                                // lastFrameBrightness after processFrame. Black
+                                // frames (during DSLR blackout) are NOT saved —
+                                // we keep the previous good frame as the pre-
+                                // blackout capture candidate.
+                                if (dslrShutterDetector.lastFrameBrightness > 30f) {
+                                    synchronized(frameLock) {
+                                        // Recycle the old lastGoodFrame (it's
+                                        // being replaced). But only if it wasn't
+                                        // stolen (set to null) by the shutter
+                                        // callback — in that case, don't touch.
+                                        val old = lastGoodFrameHolder[0] as? android.graphics.Bitmap
+                                        lastGoodFrameHolder[0] = bitmap
+                                        old?.recycle()
+                                    }
+                                } else {
+                                    // Black frame — don't save, recycle it.
+                                    bitmap.recycle()
+                                }
                             }
                         } catch (e: Exception) {
                             // Expected — keep polling
@@ -541,6 +631,11 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
             onDispose {
                 pollingJob.cancel()
                 dslrShutterDetector.stop()
+                // Clean up the buffered frame
+                synchronized(frameLock) {
+                    (lastGoodFrameHolder[0] as? android.graphics.Bitmap)?.recycle()
+                    lastGoodFrameHolder[0] = null
+                }
             }
         }
     }
@@ -1452,7 +1547,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     else -> if (CameraModes.isPhotoshootMode(project?.config?.mode ?: CameraModes.SINGLE)) "Foto" else "Toga"
                 }
                 Button(
-                    onClick = { triggerCapture() },
+                    onClick = { triggerCapture(null) },
                     modifier = Modifier.weight(1f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (activeStudent != null && !isCapturing && timerCountdown == null) GOLD else BORDER),
                     shape = RoundedCornerShape(8.dp), enabled = activeStudent != null && !isCapturing && timerCountdown == null,
