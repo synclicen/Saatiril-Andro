@@ -488,8 +488,11 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     // (with the isCapturing guard) — those are user-initiated + don't need
     // sub-second rapid-fire.
     val dslrShutterCapture: (android.graphics.Bitmap?) -> Unit = { preFrame ->
-        val student = activeStudent ?: return@let
-        val proj = project ?: return@let
+        val student = activeStudent
+        val proj = project
+        if (student == null || proj == null) {
+            Log.w("OperatorScreen", "DSLR shutter capture skipped — no active student/project")
+        } else {
         // Instant visual feedback — flash overlay (200ms)
         showFlash = true
         scope.launch { delay(200); showFlash = false }
@@ -535,6 +538,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                 dslrShutterDetector.resetCooldown()
             }
         }
+        } // end else (student != null && proj != null)
     }
 
     // ── Hot shoe: AudioRecord pulse detector ──
