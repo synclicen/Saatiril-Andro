@@ -341,7 +341,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                     // copy we own. Either way, recycle after processing.
                     var ownedBitmap: android.graphics.Bitmap? = null
                     try {
-                        val bitmap: android.graphics.Bitmap?
+                        var bitmap: android.graphics.Bitmap?
                         if (preCapturedFrame != null && !preCapturedFrame.isRecycled) {
                             // DSLR hardware shutter path: use the pre-captured
                             // frame (the last GOOD frame from JUST BEFORE the
