@@ -456,6 +456,87 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // DSLR INSTANT SHUTTER CAPTURE — fully decoupled from isCapturing
+    // ═══════════════════════════════════════════════════════════════════════
+    // This is a DEDICATED capture path for the DSLR hardware shutter detector.
+    // It does NOT check/set isCapturing — every detected shutter press is
+    // accepted immediately + processed in the background. This makes capture
+    // RATA (consistent) — bagaimanapun caranya, setiap tekan shutter = 1 foto.
+    //
+    // Why decoupled (previous problem): triggerCapture checked isCapturing,
+    // so a 2nd shutter press during the 1st capture's background processing
+    // (base64 encode + save = ~300-500ms) was SILENTLY DROPPED. The user had
+    // to press 2-4 times because the 1st press's processing window ate the
+    // 2nd press. Also, polling paused during isCapturing → lastGoodFrame
+    // became stale → the 2nd press fell back to the 450ms black-retry loop
+    // → slow + sometimes captured a black photo → user pressed again.
+    //
+    // Fix:
+    //  1. dslrShutterCapture does NOT check isCapturing. Every shutter = 1 capture.
+    //  2. It does NOT set isCapturing (the detector keeps running + polling
+    //     continues, so lastGoodFrame stays fresh for the next press).
+    //  3. It COPYs lastGoodFrame (not steal) — so a rapid 2nd press within
+    //     100ms still has a frame to use.
+    //  4. It processes in the background (crop + processFrame + base64 +
+    //     handleLocalCapture) — the detector is free to detect the next
+    //     shutter immediately.
+    //  5. handleLocalCapture accumulates photos (1/2 → 2/2 → done), so two
+    //     rapid presses = toga + ijazah = correct 2-photo session.
+    //
+    // The on-screen button / hand / hot-shoe paths still use triggerCapture
+    // (with the isCapturing guard) — those are user-initiated + don't need
+    // sub-second rapid-fire.
+    val dslrShutterCapture: (android.graphics.Bitmap?) -> Unit = { preFrame ->
+        val student = activeStudent ?: return@let
+        val proj = project ?: return@let
+        // Instant visual feedback — flash overlay (200ms)
+        showFlash = true
+        scope.launch { delay(200); showFlash = false }
+        Log.i("OperatorScreen", "DSLR shutter capture — student=${student.nama}, frame=${if (preFrame != null) "pre-blackout" else "fallback-textureView"}")
+        // Background processing — does NOT touch isCapturing
+        scope.launch(Dispatchers.Default) {
+            var ownedBitmap: android.graphics.Bitmap? = null
+            try {
+                val bitmap: android.graphics.Bitmap?
+                if (preFrame != null && !preFrame.isRecycled) {
+                    // Use the pre-blackout frame (copy — don't steal, so the
+                    // polling loop's lastGoodFrame stays available for a rapid
+                    // 2nd press).
+                    bitmap = preFrame.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                    ownedBitmap = bitmap
+                } else {
+                    // Fallback: grab from textureView (no retry loop — instant).
+                    // This happens if lastGoodFrame was null (e.g. right after
+                    // the detector started, before the 1st good poll). Accept
+                    // whatever frame we get — better than dropping the press.
+                    bitmap = withContext(Dispatchers.Main) { textureView.bitmap }
+                    ownedBitmap = bitmap
+                }
+                if (bitmap != null) {
+                    val captureBitmap = if (cropOsd) {
+                        val cropH = bitmap.height / 12  // ~8% each side
+                        android.graphics.Bitmap.createBitmap(
+                            bitmap, 0, cropH, bitmap.width, bitmap.height - cropH * 2
+                        )
+                    } else bitmap
+                    val processed = try { CameraCapture.processFrame(captureBitmap, proj.config, frameBitmap) } catch (e: Exception) { captureBitmap }
+                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                    // handleLocalCapture accumulates (1/2 → 2/2 → done). Two
+                    // rapid DSLR presses = toga + ijazah = correct session.
+                    viewModel.handleLocalCapture(student, base64, activeChannel)
+                }
+            } catch (e: Exception) {
+                Log.e("OperatorScreen", "DSLR shutter capture error: ${e.message}", e)
+            } finally {
+                try { ownedBitmap?.recycle() } catch (_: Exception) {}
+                // Reset the detector cooldown so it's ready for the next
+                // shutter immediately (toga → ijazah fast succession).
+                dslrShutterDetector.resetCooldown()
+            }
+        }
+    }
+
     // ── Hot shoe: AudioRecord pulse detector ──
     // Monitors the mic input for sharp amplitude spikes (hot shoe pulse from
     // camera's flash/shutter). When detected → increment hotShoePulseCount →
@@ -529,109 +610,94 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
     }
 
     // ── DSLR Hardware Shutter Detection: polling loop ──
-    // Polls TextureView.getBitmap() every ~100ms (10fps) + feeds each frame
+    // Polls TextureView.getBitmap() every ~80ms (~12fps) + feeds each frame
     // to HardwareShutterDetector. When the DSLR shutter fires → detector
     // detects brightness dip + pixel change spike → onShutterDetected →
-    // triggerCapture(lastGoodFrame).
+    // dslrShutterCapture(lastGoodFrame).
     //
-    // PRE-BLACKOUT FRAME CAPTURE (instant shutter fix):
+    // PRE-BLACKOUT FRAME CAPTURE (instant + consistent):
     // The polling loop maintains `lastGoodFrame` — the most recent frame
-    // whose brightness was above 30 (i.e. NOT a blackout frame). When the
-    // DSLR shutter fires, the detector sees the blackout (mirror up → dark).
-    // At that moment, textureView.bitmap would be BLACK. Instead of grabbing
-    // a black frame + retrying for 450ms (the old behavior — slow + often
-    // captured black photos, forcing the user to "hold" the shutter), we
-    // pass `lastGoodFrame` (the pre-blackout frame = the actual scene) to
-    // triggerCapture. This makes capture INSTANT and reliable — a quick
-    // shutter press is sufficient.
+    // whose brightness was above 30 (NOT a blackout frame). When the DSLR
+    // shutter fires, the detector sees the blackout (mirror up → dark). At
+    // that moment, textureView.bitmap would be BLACK. We pass lastGoodFrame
+    // (the pre-blackout frame = the actual scene) to dslrShutterCapture,
+    // which processes it in the background. Capture is INSTANT.
     //
-    // The polling loop also feeds every frame to the detector (which needs
-    // to see the brightness dip to trigger). The detector downscales to 32×32
-    // internally, so processFrame is cheap.
+    // POLLING CONTINUES DURING CAPTURE (critical for consistency):
+    // The polling loop does NOT pause when isCapturing=true. The textureView
+    // shows the LIVE HDMI feed from the capture card — it is NOT affected by
+    // the UI's showFlash overlay (that's a Compose overlay on top, not in
+    // textureView.bitmap). So polling during capture is safe: the detector
+    // keeps seeing the live scene + lastGoodFrame stays fresh. This means a
+    // 2nd shutter press (even during the 1st capture's background save) gets
+    // a fresh lastGoodFrame → instant + consistent. The old code paused
+    // polling during capture, which made lastGoodFrame stale → the 2nd press
+    // fell back to the slow 450ms black-retry loop → inconsistent timing.
     //
-    // ISSUE 2 FIX: skip polling when isCapturing=true. Previously the polling
-    // continued during capture → the capture's own flash/brightness change
-    // could be misdetected as a shutter → false trigger → race condition →
-    // ijazah capture sometimes failed. Now the detector pauses during capture
-    // + resumes after isCapturing goes back to false.
-    val isCapturingRef = remember { mutableStateOf(false) }
-    isCapturingRef.value = isCapturing
-    // Buffer for the last good (non-black) frame. Accessed from the polling
-    // coroutine (Dispatchers.Default) + the shutter callback. The lock
-    // ensures atomic steal-and-null (the shutter callback takes ownership;
-    // the polling loop won't recycle a stolen frame).
-    val lastGoodFrameHolder = remember { Array<Any?>(1) { null } }  // [0] = Bitmap?, lock-free via synchronized
+    // The detector's own COOLDOWN_MS (800ms) prevents mirror-flip retrigger
+    // — that's the only rate-limit needed. isCapturing is NOT used as a
+    // rate-limit here (dslrShutterCapture doesn't check it).
+    val lastGoodFrameHolder = remember { Array<Any?>(1) { null } }  // [0] = Bitmap?
     val frameLock = remember { Any() }
     DisposableEffect(dslrShutterTrigger, uvcConnected, activeStudent) {
         if (!dslrShutterTrigger || !uvcConnected || activeStudent == null) {
             onDispose { }
         } else {
             dslrShutterDetector.onShutterDetected = {
-                // Shutter detected — steal the last good frame (the pre-
-                // blackout frame = the actual scene). This is the frame from
-                // ~100ms ago (the previous poll), before the mirror flipped.
-                val stolenFrame = synchronized(frameLock) {
-                    val f = lastGoodFrameHolder[0] as? android.graphics.Bitmap
-                    lastGoodFrameHolder[0] = null  // transfer ownership
-                    f
+                // Shutter detected — READ lastGoodFrame (do NOT steal/null it).
+                // dslrShutterCapture copies the bitmap, so the original stays
+                // available for a rapid 2nd press. This is critical: if the
+                // user presses twice within 100ms (before the next poll
+                // refreshes lastGoodFrame), both presses get a frame.
+                val frame = synchronized(frameLock) {
+                    lastGoodFrameHolder[0] as? android.graphics.Bitmap
                 }
-                // Run triggerCapture on the MAIN thread — it reads/writes
-                // Compose state (isCapturing, captureStatus, etc.). The
-                // polling coroutine runs on Dispatchers.Default; calling
-                // triggerCapture directly from there is a thread violation
-                // that could cause inconsistent state + double triggers.
+                // Run dslrShutterCapture on the MAIN thread (it reads Compose
+                // state: activeStudent, project, cropOsd, frameBitmap, showFlash).
                 scope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                    triggerCapture(stolenFrame)
+                    dslrShutterCapture(frame)
                 }
             }
             dslrShutterDetector.start()
             val pollingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
             val pollingJob = pollingScope.launch {
                 while (dslrShutterTrigger && uvcConnected && activeStudent != null) {
-                    // Skip polling during capture — the capture's own flash/
-                    // brightness change would be misdetected as a shutter.
-                    if (!isCapturingRef.value) {
-                        try {
-                            // CRITICAL: textureView.bitmap MUST be called on the main thread.
-                            // Calling it on Dispatchers.Default can return null or stale bitmap
-                            // → shutter not detected.
-                            val bitmap = withContext(kotlinx.coroutines.Dispatchers.Main) { textureView.bitmap }
-                            if (bitmap != null && !bitmap.isRecycled) {
-                                // Feed to detector (downscales to 32×32 internally).
-                                dslrShutterDetector.processFrame(bitmap)
+                    // NOTE: polling CONTINUES during capture (isCapturing is
+                    // not checked here). The textureView shows the live HDMI
+                    // feed — it's not affected by the capture's UI flash or
+                    // background save. Keeping polling running ensures
+                    // lastGoodFrame stays fresh for rapid 2nd presses.
+                    try {
+                        // CRITICAL: textureView.bitmap MUST be called on the main thread.
+                        val bitmap = withContext(kotlinx.coroutines.Dispatchers.Main) { textureView.bitmap }
+                        if (bitmap != null && !bitmap.isRecycled) {
+                            // Feed to detector (downscales to 32×32 internally).
+                            dslrShutterDetector.processFrame(bitmap)
 
-                                // Save as lastGoodFrame if this frame is NOT
-                                // black (brightness > 30). The detector exposes
-                                // lastFrameBrightness after processFrame. Black
-                                // frames (during DSLR blackout) are NOT saved —
-                                // we keep the previous good frame as the pre-
-                                // blackout capture candidate.
-                                if (dslrShutterDetector.lastFrameBrightness > 30f) {
-                                    synchronized(frameLock) {
-                                        // Recycle the old lastGoodFrame (it's
-                                        // being replaced). But only if it wasn't
-                                        // stolen (set to null) by the shutter
-                                        // callback — in that case, don't touch.
-                                        val old = lastGoodFrameHolder[0] as? android.graphics.Bitmap
-                                        lastGoodFrameHolder[0] = bitmap
-                                        old?.recycle()
-                                    }
-                                } else {
-                                    // Black frame — don't save, recycle it.
-                                    bitmap.recycle()
+                            // Save as lastGoodFrame if this frame is NOT black
+                            // (brightness > 30). Black frames (during DSLR
+                            // blackout) are NOT saved — we keep the previous
+                            // good frame as the pre-blackout capture candidate.
+                            if (dslrShutterDetector.lastFrameBrightness > 30f) {
+                                synchronized(frameLock) {
+                                    val old = lastGoodFrameHolder[0] as? android.graphics.Bitmap
+                                    lastGoodFrameHolder[0] = bitmap
+                                    old?.recycle()
                                 }
+                            } else {
+                                // Black frame — don't save, recycle it.
+                                bitmap.recycle()
                             }
-                        } catch (e: Exception) {
-                            // Expected — keep polling
                         }
+                    } catch (e: Exception) {
+                        // Expected — keep polling
                     }
-                    kotlinx.coroutines.delay(100)  // 10fps polling (was 200ms/5fps — faster = catches shorter blackouts)
+                    kotlinx.coroutines.delay(80)  // ~12fps polling — faster = catches shorter blackouts + refreshes lastGoodFrame sooner
                 }
             }
             onDispose {
                 pollingJob.cancel()
                 dslrShutterDetector.stop()
-                // Clean up the buffered frame
                 synchronized(frameLock) {
                     (lastGoodFrameHolder[0] as? android.graphics.Bitmap)?.recycle()
                     lastGoodFrameHolder[0] = null
