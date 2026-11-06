@@ -23,4 +23,5 @@
     <string name="photo_2_ready">Pose 2 - Siap Foto</string>
     <string name="sending">Mengirim foto...</string>
     <string name="done">Selesai!</string>
+    <string name="device_admin_description">Mengizinkan Saatiril masuk mode kiosk (Lock Task Mode) tanpa dialog konfirmasi. Tidak menerapkan kebijakan password/kamera/wipe.</string>
 </resources>

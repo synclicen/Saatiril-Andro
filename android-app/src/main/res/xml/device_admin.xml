@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Device Admin policy for Saatiril — used ONLY for Screen Pinning /
+    Lock Task Mode (kiosk mode) during live ceremonies.
+
+    Why this is needed:
+    - Android's startLockTask() API has two tiers:
+      (a) Non-Device-Owner: shows a system confirmation dialog each time
+          ("Pin this app?"), and the user can unpin via a long-press of
+          Back+Recents. Good for ad-hoc pinning.
+      (b) Device Owner: app is whitelisted via setLockTaskPackages(), so
+          startLockTask() works WITHOUT confirmation, AND the user cannot
+          exit without the app calling stopLockTask(). True kiosk mode.
+    - Tier (b) requires the device to be set as Device Owner via ADB:
+          dpm set-device-owner com.saatiril.andro/.admin.SaatirilDeviceAdminReceiver
+      (one-time setup; requires no accounts on the device).
+    - This DeviceAdminReceiver is the component Android invokes to grant
+      Device Owner status. It contains NO policy logic — Saatiril does
+      not enforce password/camera/wipe policies. The receiver exists
+      purely so dpm has a target to bind to.
+
+    The <uses-policies> block declares the MINIMUM policies needed for
+    Device Admin. We keep it empty (no uses-policies tag) because we
+    don't actually use any device-admin policies beyond Lock Task Mode,
+    which is granted by Device Owner status itself, not by policy XML.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Intentionally empty — no password / camera / wipe policies.
+         Lock Task Mode whitelisting is a Device Owner capability, not
+         a device-admin policy. -->
+</device-admin>

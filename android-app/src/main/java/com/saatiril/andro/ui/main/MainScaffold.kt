@@ -55,13 +55,22 @@ fun MainScaffold(viewModel: AdminViewModel) {
     val lanIp by viewModel.lanIp.collectAsState()
     val port by viewModel.serverPort.collectAsState()
     val running by viewModel.serverRunning.collectAsState()
+    val isLocked by viewModel.lockTaskActive.collectAsState()
 
     var selectedTab by remember { mutableStateOf(Tab.PROSESI) }
     var isFullscreen by remember { mutableStateOf(false) }
+    var isDeviceOwner by remember { mutableStateOf(false) }
+    var showLockHelp by remember { mutableStateOf(false) }
 
     // #7: Fullscreen immersive mode toggle
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? android.app.Activity
+
+    // Check Device Owner status once on entry (used to show the ADB-setup
+    // hint in the lock-help dialog).
+    LaunchedEffect(Unit) {
+        isDeviceOwner = activity?.let { viewModel.checkDeviceOwner(it) } ?: false
+    }
 
     // ── Request BLE permissions (Android 12+) so the BLE server can advertise ──
     // ROOT CAUSE of "MC remote tidak menemukan admin saat scan": the saatiril-
@@ -165,6 +174,113 @@ fun MainScaffold(viewModel: AdminViewModel) {
         )
     }
 
+    // ── Lock Task Mode help dialog ───────────────────────────────
+    if (showLockHelp) {
+        AlertDialog(
+            onDismissRequest = { showLockHelp = false },
+            containerColor = PANEL,
+            titleContentColor = GOLD,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Lock, contentDescription = null, tint = GOLD, modifier = Modifier.size(22.dp))
+                    Text("Mode Kiosk (Lock Task)", color = GOLD, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isDeviceOwner) {
+                        // True kiosk mode — Device Owner is set
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(GREEN.copy(alpha = 0.1f))
+                                .border(1.dp, GREEN.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = GREEN, modifier = Modifier.size(16.dp))
+                            Text(
+                                "Device Owner aktif. Klik tombol Lock untuk masuk mode kiosk penuh — tombol Home, Back, dan Recents akan diblokir total.",
+                                color = GREEN, fontSize = 11.sp, lineHeight = 15.sp
+                            )
+                        }
+                    } else {
+                        // Manual pinning mode
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(GOLD.copy(alpha = 0.08f))
+                                .border(1.dp, GOLD.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = GOLD, modifier = Modifier.size(16.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "Mode Pin Manual (tanpa ADB):",
+                                    color = GOLD, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "Klik tombol Lock → muncul dialog sistem \"Pin this app?\" → konfirmasi. " +
+                                        "Untuk keluar: tahan Back + Recents bersamaan (gestur sistem, tidak bisa diblokir).",
+                                    color = MUTED, fontSize = 10.sp, lineHeight = 14.sp
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Untuk kiosk penuh (blokir Home/Back/Recents total, tanpa bisa di-bypass), " +
+                                "set perangkat sebagai Device Owner via ADB SEKALI saja:",
+                            color = MUTED, fontSize = 11.sp, lineHeight = 15.sp
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // ADB command box
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(BG)
+                                .border(1.dp, BORDER, RoundedCornerShape(6.dp))
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("Di laptop (dengan ADB terinstall):", color = MUTED, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                "adb shell dpm set-device-owner \\\n  com.saatiril.andro/.admin.SaatirilDeviceAdminReceiver",
+                                color = GOLD,
+                                fontSize = 10.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                lineHeight = 14.sp
+                            )
+                            Text(
+                                "Catatan: tidak boleh ada akun Google di perangkat. Factory reset dulu jika perlu.",
+                                color = MUTED.copy(alpha = 0.7f), fontSize = 9.sp, lineHeight = 12.sp
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Saat terkunci: tombol Stop dan Fullscreen tetap bisa dipakai dari dalam app. " +
+                            "Klik tombol Lock lagi untuk membuka kunci.",
+                        color = MUTED.copy(alpha = 0.8f), fontSize = 10.sp, lineHeight = 14.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showLockHelp = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = GOLD),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Mengerti", color = BG, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        )
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize().background(BG),
         containerColor = BG,
@@ -178,6 +294,12 @@ fun MainScaffold(viewModel: AdminViewModel) {
                 running = running,
                 isFullscreen = isFullscreen,
                 onToggleFullscreen = { isFullscreen = !isFullscreen },
+                isLocked = isLocked,
+                isDeviceOwner = isDeviceOwner,
+                onToggleLock = {
+                    activity?.let { viewModel.toggleLockTask(it) }
+                },
+                onShowLockHelp = { showLockHelp = true },
                 onStop = { viewModel.stopServer() }
             )
         },
@@ -241,6 +363,10 @@ private fun TopBar(
     running: Boolean,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
+    isLocked: Boolean,
+    isDeviceOwner: Boolean,
+    onToggleLock: () -> Unit,
+    onShowLockHelp: () -> Unit,
     onStop: () -> Unit
 ) {
     Surface(color = PANEL, tonalElevation = 4.dp) {
@@ -265,6 +391,34 @@ private fun TopBar(
                         style = TextStyle(color = MUTED, fontSize = 10.sp), maxLines = 1
                     )
                 }
+            }
+            // ── Lock Task Mode toggle (kiosk) ──────────────────────────
+            // When locked: green Lock icon. When unlocked: gold LockOpen icon.
+            // Long-press / help icon shows the setup instructions dialog.
+            Box(contentAlignment = Alignment.Center) {
+                IconButton(onClick = onToggleLock, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        contentDescription = if (isLocked) "Buka Kunci" else "Kunci Mode Kiosk",
+                        tint = if (isLocked) GREEN else GOLD,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                // Small badge dot when in true kiosk mode (Device Owner)
+                if (isLocked && isDeviceOwner) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(GREEN)
+                    )
+                }
+            }
+            // Help / info about kiosk mode (long-press target)
+            IconButton(onClick = onShowLockHelp, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Info, contentDescription = "Bantuan Kiosk", tint = MUTED, modifier = Modifier.size(18.dp))
             }
             // #7: Fullscreen toggle button
             IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) {

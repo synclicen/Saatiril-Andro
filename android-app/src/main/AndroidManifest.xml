@@ -101,5 +101,32 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="VPN for ceremony mode internet blocking" />
         </service>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- Device Admin Receiver — required for Device Owner status,   -->
+        <!-- which in turn is required for true kiosk Lock Task Mode     -->
+        <!-- (no per-launch confirmation, no user-exit gesture).         -->
+        <!--                                                             -->
+        <!-- One-time setup via ADB:                                     -->
+        <!--   adb shell dpm set-device-owner \                          -->
+        <!--     com.saatiril.andro/.admin.SaatirilDeviceAdminReceiver   -->
+        <!--                                                             -->
+        <!-- To remove:                                                  -->
+        <!--   adb shell dpm remove-active-admin \                       -->
+        <!--     com.saatiril.andro/.admin.SaatirilDeviceAdminReceiver   -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <receiver
+            android:name=".admin.SaatirilDeviceAdminReceiver"
+            android:label="Saatiril Device Admin"
+            android:description="@string/device_admin_description"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="false">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

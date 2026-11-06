@@ -1286,6 +1286,65 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ─── Lock Task Mode (Screen Pinning / Kiosk) ────────────────
+    /**
+     * Whether the app is currently in Lock Task Mode (pinned/kiosk).
+     * Updated by [syncLockTaskState], which is called from MainActivity
+     * on `onResume` and `onLockTaskModeChanged`.
+     */
+    private val _lockTaskActive = MutableStateFlow(false)
+    val lockTaskActive: StateFlow<Boolean> = _lockTaskActive.asStateFlow()
+
+    /**
+     * Sync the lock-task state from the activity. Called on `onResume`
+     * and `onLockTaskModeChanged`. Idempotent.
+     */
+    fun syncLockTaskState(isActive: Boolean) {
+        if (_lockTaskActive.value != isActive) {
+            _lockTaskActive.value = isActive
+            Log.i(TAG, "Lock Task Mode: ${if (isActive) "ACTIVE (kiosk)" else "inactive"}")
+        }
+    }
+
+    /**
+     * Toggle Lock Task Mode. Called by the lock button in MainScaffold.
+     * The activity reference is needed because `startLockTask()` /
+     * `stopLockTask()` are Activity methods (not available on the
+     * Application context the ViewModel holds).
+     *
+     * Returns the NEW state (true = now locked, false = now unlocked).
+     */
+    fun toggleLockTask(activity: android.app.Activity): Boolean {
+        val ma = activity as? com.saatiril.andro.MainActivity
+        if (ma == null) {
+            Log.w(TAG, "toggleLockTask: activity is not MainActivity — ignoring")
+            return _lockTaskActive.value
+        }
+        return if (_lockTaskActive.value) {
+            // Currently locked → unlock
+            ma.exitLockTask()
+            // Optimistic update; onLockTaskModeChanged will confirm.
+            false
+        } else {
+            // Currently unlocked → lock
+            ma.enterLockTask()
+            // Optimistic update; onLockTaskModeChanged will confirm.
+            // For non-Device-Owner, the system dialog may still be pending,
+            // but we set the flag so the UI shows "locking..." feedback.
+            true
+        }
+    }
+
+    /**
+     * True iff this app is the Device Owner (enables true kiosk mode
+     * without per-launch confirmation). The UI uses this to decide
+     * whether to show the "ADB setup required" hint.
+     */
+    fun checkDeviceOwner(activity: android.app.Activity): Boolean {
+        val ma = activity as? com.saatiril.andro.MainActivity ?: return false
+        return ma.isDeviceOwner()
+    }
+
     // ─── MC channel selection (for dual modes) ─────────────────
     private val _myChannel = MutableStateFlow(1)
     val myChannel: StateFlow<Int> = _myChannel.asStateFlow()

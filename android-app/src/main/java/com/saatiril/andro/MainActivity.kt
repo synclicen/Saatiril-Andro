@@ -3,6 +3,8 @@ package com.saatiril.andro
 import android.Manifest
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
+import com.saatiril.andro.admin.SaatirilDeviceAdminReceiver
 import com.saatiril.andro.data.AdminViewModel
 import com.saatiril.andro.ui.generator.LicenseGeneratorScreen
 import com.saatiril.andro.ui.hub.ProjectHubScreen
@@ -160,6 +163,151 @@ class MainActivity : ComponentActivity() {
         viewModel.onAppForegrounded()
         // Cancel any outstanding "return to app" notification
         cancelReturnToAppNotification()
+        // Sync lock-task state (the user may have unpinned via the system
+        // gesture while the app was backgrounded).
+        viewModel.syncLockTaskState(isInLockTaskMode())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Lock Task Mode (Screen Pinning / Kiosk Mode)
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // Two tiers of locking:
+    //
+    //  (1) Manual pinning (no setup needed):
+    //      Call startLockTask() → Android shows a system dialog "Pin this
+    //      app?". User confirms → app is pinned. The user can unpin by
+    //      long-pressing Back+Recents (system gesture, cannot be blocked).
+    //      Good for ad-hoc protection during a ceremony.
+    //
+    //  (2) Device Owner kiosk mode (one-time ADB setup):
+    //      The device is set as Device Owner via:
+    //          adb shell dpm set-device-owner \
+    //              com.saatiril.andro/.admin.SaatirilDeviceAdminReceiver
+    //      Then this app calls setLockTaskPackages() to whitelist itself,
+    //      and startLockTask() works WITHOUT the confirmation dialog AND
+    //      the user CANNOT exit via the system gesture. The only way out
+    //      is for the app to call stopLockTask(). True kiosk.
+    //
+    // The UI exposes a single "Kunci" toggle button in MainScaffold's TopBar.
+    // Internally, [enterLockTask] picks the right tier based on whether the
+    // device is a Device Owner.
+
+    /** ComponentName of our DeviceAdminReceiver — used for DPM queries. */
+    private val adminComponent: ComponentName by lazy {
+        ComponentName(this, SaatirilDeviceAdminReceiver::class.java)
+    }
+
+    /** True iff this app is the Device Owner (enables true kiosk mode). */
+    fun isDeviceOwner(): Boolean {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        return try {
+            dpm.isDeviceOwnerApp(packageName)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** True iff the activity is currently in Lock Task Mode (pinned). */
+    fun isInLockTaskMode(): Boolean {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        return try {
+            dpm.isLockTaskPermitted(packageName) &&
+                (Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                    isInLockTaskModeCompat())
+        } catch (e: Exception) {
+            // Fallback: check the activity manager
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                @Suppress("DEPRECATION")
+                am.isInLockTaskMode
+            } catch (_: Exception) { false }
+        }
+    }
+
+    /** API 23+ compatible isInLockTaskMode check via DevicePolicyManager. */
+    private fun isInLockTaskModeCompat(): Boolean {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        return try {
+            // API 23+: use the hidden isLockTaskModeActive via reflection-free path
+            // dpm.isLockTaskModeActive is internal; use ActivityManager.isInLockTaskMode
+            // (deprecated but works through API 28) or check the running tasks.
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            // The deprecated API still works on all current versions.
+            @Suppress("DEPRECATION")
+            am.isInLockTaskMode
+        } catch (e: Exception) {
+            // Final fallback: check the running tasks list
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                @Suppress("DEPRECATION")
+                val tasks = am.getRunningTasks(1)
+                tasks?.firstOrNull()?.let { it.id == -1 } ?: false
+            } catch (_: Exception) { false }
+        }
+    }
+
+    /**
+     * Enter Lock Task Mode. Behavior depends on Device Owner status:
+     *  - Device Owner: whitelist self, then startLockTask() — no prompt,
+     *    user cannot exit without the app calling stopLockTask().
+     *  - Non-Device-Owner: startLockTask() — Android shows "Pin this
+     *    app?" dialog. User confirms to pin. User can unpin via the
+     *    long-press Back+Recents gesture.
+     *
+     * Returns true if the lock attempt was initiated (the system dialog
+     * may still be pending for non-Device-Owner), false if it could not
+     * be started at all.
+     */
+    fun enterLockTask(): Boolean {
+        return try {
+            if (isDeviceOwner()) {
+                // Whitelist our own package so startLockTask() works without
+                // a confirmation dialog AND the user cannot exit via the
+                // system gesture.
+                val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                dpm.setLockTaskPackages(adminComponent, arrayOf(packageName))
+                Log.i(TAG, "enterLockTask: Device Owner — whitelisted $packageName, starting lock task")
+            } else {
+                Log.i(TAG, "enterLockTask: not Device Owner — startLockTask() will show system pin dialog")
+            }
+            startLockTask()
+            true
+        } catch (e: SecurityException) {
+            Log.e(TAG, "enterLockTask: SecurityException — ${e.message}", e)
+            Toast.makeText(this, "Tidak dapat masuk mode kiosk: ${e.message}", Toast.LENGTH_LONG).show()
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "enterLockTask: failed — ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Exit Lock Task Mode. For Device Owner this is the ONLY way out.
+     * For manual pinning, this also works (alternative to the user
+     * long-pressing Back+Recents).
+     */
+    fun exitLockTask(): Boolean {
+        return try {
+            stopLockTask()
+            Log.i(TAG, "exitLockTask: stopLockTask() called")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "exitLockTask: failed — ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Called by the system when Lock Task Mode starts or stops. Updates
+     * the ViewModel so the UI can reflect the lock state (e.g., change
+     * the lock button icon, hide the BackHandler exit dialog).
+     */
+    override fun onLockTaskModeChanged(isActive: Boolean) {
+        super.onLockTaskModeChanged(isActive)
+        Log.i(TAG, "onLockTaskModeChanged: isActive=$isActive")
+        viewModel.syncLockTaskState(isActive)
     }
 
     /**
