@@ -1443,6 +1443,38 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun resetStudentPhoto(studentId: String, channel: Int) {
         viewModelScope.launch {
+            // ── Delete the student's old photo FILES from disk BEFORE clearing
+            // photoHistory (so we still have the URIs + the nim/nama to build
+            // the filename prefix). Two-pronged approach for reliability:
+            //   1. Delete by URI — exact, removes the specific saved files.
+            //   2. Delete by filename prefix — catches any versioned files
+            //      (v1, v2, …) that might not be in photoHistory (e.g. from a
+            //      previous session, or if photoHistory.photos was stripped).
+            val (urisToDelete, prefix) = projectMutex.withLock {
+                val cur = _project.value ?: return@withLock Pair(emptyList<String>(), "")
+                val student = cur.database.firstOrNull { it.id == studentId }
+                val uris = cur.photoHistory
+                    .filter { it.student.id == studentId }
+                    .flatMap { it.photos }
+                    .filter { uri -> uri.startsWith("content://") || uri.startsWith("file://") }
+                val prefix = if (student != null) {
+                    com.saatiril.andro.util.FilenameUtils.buildIdentityPart(student.nim, student.nama, student.id)
+                } else ""
+                Pair(uris, prefix)
+            }
+            // Run disk deletion on IO (SAF calls can block).
+            withContext(Dispatchers.IO) {
+                // 1. Delete by URI (exact files we saved).
+                for (uri in urisToDelete) {
+                    try { photoSaver.deletePhotoByUri(uri) } catch (_: Exception) {}
+                }
+                // 2. Delete by filename prefix (catches ALL versions: v1, v2, …
+                //    for both Toga/Ijazah and Ch1/Ch2 photoshoot variants).
+                if (prefix.isNotEmpty()) {
+                    try { photoSaver.deletePhotosByFilenamePrefix(prefix) } catch (_: Exception) {}
+                }
+            }
+            // ── Now clear photoHistory + captureVersions + re-activate.
             projectMutex.withLock {
                 val cur = _project.value ?: return@withLock
                 val updatedDb = cur.database.map { s ->
