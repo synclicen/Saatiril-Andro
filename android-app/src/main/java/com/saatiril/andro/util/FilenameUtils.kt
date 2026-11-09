@@ -47,11 +47,8 @@ object FilenameUtils {
      *  - both empty → fall back to [studentId] (first 8 chars) if provided,
      *    else a short unique id derived from the clock. Without this, every
      *    such student produced filenames like "___1_Toga.jpg" that collided.
-     *
-     * Public so callers (e.g. the "Ulang Foto" retake flow) can build the
-     * filename prefix to delete ALL versions of a student's photos from disk.
      */
-    fun buildIdentityPart(nim: String?, nama: String?, studentId: String?): String {
+    private fun buildIdentityPart(nim: String?, nama: String?, studentId: String?): String {
         val nimPart = sanitizeNim(nim)
         val namaPart = sanitizeNama(nama)
         if (nimPart.isNotEmpty() && namaPart.isNotEmpty()) return "${nimPart}_${namaPart}"
