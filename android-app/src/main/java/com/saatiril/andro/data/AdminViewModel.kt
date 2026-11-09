@@ -1422,6 +1422,48 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Operator-initiated RETAKE ("Ulang Foto") — clears the student's captured
+     * photos + captureVersions and puts them back to ACTIVE status so the
+     * operator can immediately re-shoot (toga + ijazah) WITHOUT needing the MC
+     * to re-call them. This is different from [resetStudent] (which resets to
+     * "pending" + requires MC to re-call).
+     *
+     * Use case: after a 2-photo session (toga + ijazah) the operator notices a
+     * blurred face → tap "Ulang Foto" → student becomes active again → re-shoot.
+     *
+     * Clears:
+     *  - photoHistory entries for this student (all channels)
+     *  - captureVersions entries for this student (all channels) — so the
+     *    retake starts at v1, not v3
+     * Sets:
+     *  - status = "active_<channel>" (re-activates on the operator's channel)
+     *
+     * Broadcasts STUDENT_RESET so remote operators/MCs update their local state.
+     */
+    fun resetStudentPhoto(studentId: String, channel: Int) {
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == studentId) s.copy(status = "active_$channel") else s
+                }
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == studentId }
+                // Clear captureVersions for this student (both channels) so
+                // the retake filenames start at v1, not v2/v3.
+                val updatedVersions = cur.captureVersions.filterNot { it.key.startsWith("${studentId}_") }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
+                _project.value = updated
+                persistProject(updated)
+            }
+            // Broadcast STUDENT_RESET so remote operators/MCs clear their local
+            // photoHistory for this student. They'll then re-accumulate when the
+            // operator re-shoots.
+            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(studentId, channel))
+            pushSyncDb()
+        }
+    }
+
     /** markStudentDone is now ONLY called automatically by handlePhotosSaved/handleLocalCapture.
      *  Removed from MC panel — completion is event-driven (operator photo → auto-done). */
     fun markStudentDone(studentId: String, channel: Int) {
@@ -1674,7 +1716,9 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
                     if (s.id == studentId) s.copy(status = "pending") else s
                 }
                 val updatedHistory = cur.photoHistory.filterNot { it.student.id == studentId }
-                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory)
+                // Also clear captureVersions so a retake starts at v1.
+                val updatedVersions = cur.captureVersions.filterNot { it.key.startsWith("${studentId}_") }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
                 _project.value = updated
                 persistProject(updated)
             }

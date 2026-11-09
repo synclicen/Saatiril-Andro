@@ -1436,6 +1436,67 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 }
                             }
                         }
+                        // ── "Ulang Foto" section: recently-done students on this
+                        // channel (last 8). Operator can tap "Ulang" to clear
+                        // the student's photos + re-activate them for an
+                        // immediate retake (toga + ijazah). Use case: blurred
+                        // face noticed after the 2-photo session completed. ──
+                        val recentlyDone = remember(db) {
+                            db.filter { it.status == "done" && it.assignedChannel == myChannel }
+                                .takeLast(8)
+                                .reversed()
+                        }
+                        if (recentlyDone.isNotEmpty()) {
+                            HorizontalDivider(color = BORDER.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 1.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Selesai (Ulang Foto)", style = TextStyle(color = GREEN, fontSize = 8.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                            }
+                            val scrollDone = rememberScrollState()
+                            Column(
+                                modifier = Modifier.heightIn(max = 96.dp).verticalScroll(scrollDone),
+                                verticalArrangement = Arrangement.spacedBy(0.dp)
+                            ) {
+                                recentlyDone.forEachIndexed { i, s ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 3.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(Modifier.size(4.dp).clip(RoundedCornerShape(2.dp)).background(GREEN.copy(alpha = 0.6f)))
+                                        Text(
+                                            s.nama.take(16).ifBlank { s.nim.take(16) },
+                                            style = TextStyle(color = MUTED.copy(alpha = 0.8f), fontSize = 8.sp),
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1
+                                        )
+                                        // "Ulang" button — clears photos + re-activates
+                                        Card(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .clickable {
+                                                    viewModel.resetStudentPhoto(s.id, myChannel)
+                                                    // Reset capture phase so the operator can
+                                                    // immediately shoot toga (1/2) again.
+                                                    viewModel.resetCaptureState()
+                                                }
+                                                .border(1.dp, GOLD.copy(alpha = 0.6f), RoundedCornerShape(3.dp)),
+                                            colors = CardDefaults.cardColors(containerColor = GOLD.copy(alpha = 0.15f)),
+                                            shape = RoundedCornerShape(3.dp)
+                                        ) {
+                                            Text(
+                                                "Ulang",
+                                                style = TextStyle(color = GOLD, fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
