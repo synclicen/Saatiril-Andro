@@ -613,7 +613,7 @@ class OperatorViewModel(application: Application) : AndroidViewModel(application
             )
 
             // Convert back to base64 data URL
-            val resultDataUrl = CameraCapture.bitmapToBase64(processedBitmap, 95)
+            val resultDataUrl = CameraCapture.bitmapToBase64(processedBitmap)
 
             Log.i(TAG, "processPhotoWithFrame: output=${processedBitmap.width}x${processedBitmap.height} (${resultDataUrl.length} chars)")
 

@@ -408,7 +408,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                 )
                             } else bitmap
                             val processed = try { CameraCapture.processFrame(captureBitmap, proj.config, frameBitmap) } catch (e: Exception) { captureBitmap }
-                            val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                            val base64 = CameraCapture.bitmapToBase64(processed)
                             withContext(Dispatchers.Main) {
                                 showFlash = true
                                 scope.launch { delay(200); showFlash = false }
@@ -524,7 +524,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                         )
                     } else bitmap
                     val processed = try { CameraCapture.processFrame(captureBitmap, proj.config, frameBitmap) } catch (e: Exception) { captureBitmap }
-                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                    val base64 = CameraCapture.bitmapToBase64(processed)
                     // handleLocalCapture accumulates (1/2 → 2/2 → done). Two
                     // rapid DSLR presses = toga + ijazah = correct session.
                     viewModel.handleLocalCapture(student, base64, activeChannel)
@@ -750,7 +750,7 @@ fun AdminOperatorScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier
                                     val processed = try {
                                         CameraCapture.processFrame(bitmap, proj.config, currentFrameBitmap)
                                     } catch (e: Exception) { bitmap }
-                                    val base64 = CameraCapture.bitmapToBase64(processed, 95)
+                                    val base64 = CameraCapture.bitmapToBase64(processed)
                                     showFlash = true
                                     scope.launch { delay(200); showFlash = false }
                                     viewModel.handleLocalCapture(student, base64, currentActiveChannel)

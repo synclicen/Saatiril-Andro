@@ -911,7 +911,12 @@ class UVCCameraManager(private val context: Context) {
         // We include several alternatives because capture cards vary in what
         // they support — if 1280x960 fails, 1024x768 may succeed, etc.
         if (targetRatio >= 1.3f && targetRatio <= 1.4f) {
-            // 4:3 landscape (1.333)
+            // 4:3 landscape (1.333) — HD+ candidates for crisp graduation photos.
+            // 1920x1440 = full HD-height 4:3 (2.76 MP). Most UVC capture cards
+            // that output 1080p HDMI also accept 1920x1440 MJPEG. If the card
+            // rejects it, fall back to 1600x1200 (2MP), then 1280x960, etc.
+            candidates.add(Triple(1920, 1440, "4:3 1920x1440 (HD+)"))
+            candidates.add(Triple(1600, 1200, "4:3 1600x1200 (2MP)"))
             candidates.add(Triple(1280, 960, "4:3 1280x960"))
             candidates.add(Triple(1024, 768, "4:3 1024x768"))
             candidates.add(Triple(800, 600, "4:3 800x600"))
@@ -1212,7 +1217,7 @@ class UVCCameraManager(private val context: Context) {
                 if (bitmap != null && !bitmap.isRecycled) {
                     if (!isBitmapBlack(bitmap)) {
                         val outputStream = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
                         val bytes = outputStream.toByteArray()
                         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         val dataUrl = "data:image/jpeg;base64,$base64"
@@ -1295,7 +1300,7 @@ class UVCCameraManager(private val context: Context) {
                         )
                         val outputStream = ByteArrayOutputStream()
                         yuvImage.compressToJpeg(
-                            Rect(0, 0, negotiatedWidth, negotiatedHeight), 95, outputStream
+                            Rect(0, 0, negotiatedWidth, negotiatedHeight), 100, outputStream
                         )
                         val bytes = outputStream.toByteArray()
                         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -1335,7 +1340,7 @@ class UVCCameraManager(private val context: Context) {
                             val bitmap = tv.bitmap
                             if (bitmap != null && !bitmap.isRecycled) {
                                 val outputStream = ByteArrayOutputStream()
-                                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
                                 val bytes = outputStream.toByteArray()
                                 val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                                 val dataUrl = "data:image/jpeg;base64,$base64"
