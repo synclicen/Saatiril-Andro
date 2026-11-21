@@ -180,4 +180,31 @@ export function registerCameraSdkIpc(ipcMain: any, getAllWindows?: () => any[]) 
     // Canon capture not yet implemented
     return null
   })
+
+  // Install Sony camera driver (libusbK) — one UAC prompt, then persistent
+  ipcMain.handle('camera-sdk:install-sony-driver', async () => {
+    if (!isWindows()) return { success: false, message: 'Windows only' }
+    return new Promise((resolve) => {
+      const driverScript = path.join(__dirname, 'sony-sdk', 'driver', 'install-driver.ps1')
+      if (!fs.existsSync(driverScript)) {
+        resolve({ success: false, message: 'Driver script not found: ' + driverScript })
+        return
+      }
+      execFile('powershell',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', driverScript, 'install'],
+        { timeout: 120000, maxBuffer: 1024 * 1024 },
+        (err: any, stdout: string, _stderr: string) => {
+          if (err) {
+            resolve({ success: false, message: 'Driver install error: ' + err.message })
+            return
+          }
+          try {
+            const resp = JSON.parse(stdout.trim())
+            resolve(resp)
+          } catch (e) {
+            resolve({ success: false, message: 'Parse error: ' + stdout.substring(0, 200) })
+          }
+        })
+    })
+  })
 }

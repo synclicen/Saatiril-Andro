@@ -170,3 +170,29 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('open-in-browser', url)
   },
 })
+
+// ── Camera SDK API (Sony Camera Remote SDK + Canon) ─────────────────
+// Lets the renderer list DSLR cameras (Sony/Canon connected via USB),
+// get live-view frames, and capture photos — all using official SDKs
+// bundled inside Saatiril. NO driver installation by user needed.
+contextBridge.exposeInMainWorld('saatirilCamera', {
+  // List all connected cameras (Sony + Canon)
+  listCameras: (): Promise<Array<{
+    id: string       // 'sony:0' or 'canon:0'
+    brand: string    // 'Sony' / 'Canon'
+    model: string    // 'ILCE-7M4' / 'EOS M6'
+    name: string     // display name
+  }>> => ipcRenderer.invoke('camera-sdk:list'),
+
+  // Get one live-view frame as base64 JPEG (poll ~5fps)
+  getLiveView: (cameraId: string): Promise<string | null> =>
+    ipcRenderer.invoke('camera-sdk:liveview', cameraId),
+
+  // Trigger shutter + download photo as base64 JPEG
+  capture: (cameraId: string): Promise<string | null> =>
+    ipcRenderer.invoke('camera-sdk:capture', cameraId),
+
+  // Install Sony camera driver (libusbK) — one UAC prompt, then persistent
+  installSonyDriver: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('camera-sdk:install-sony-driver'),
+})
