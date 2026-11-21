@@ -81,6 +81,37 @@ jobs:
           else { Write-Error "operator.html v11 NOT found!"; exit 1 }
       - name: Compile Electron preload
         run: npx tsc -p electron/tsconfig.json
+      - name: Build Sony CLI (CMake)
+        shell: pwsh
+        run: |
+          $sdkDir = "electron/sony-sdk"
+          if (Test-Path "$sdkDir/CMakeLists.txt") {
+            # Copy Cr_Core.lib from SimpleCli if available
+            $libPath = "$sdkDir/dll/Cr_Core.lib"
+            if (-not (Test-Path $libPath)) {
+              # Create lib directory and copy from external
+              New-Item -ItemType Directory -Force -Path "$sdkDir/lib" | Out-Null
+              # The .lib file might be in the dll directory already
+              Get-ChildItem -Path $sdkDir -Filter "Cr_Core.lib" -Recurse | ForEach-Object {
+                Copy-Item $_.FullName $libPath -Force
+              }
+            }
+            # Build with CMake
+            $buildDir = "$sdkDir/build"
+            New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+            & cmake -S $sdkDir -B $buildDir -A x64 2>&1
+            & cmake --build $buildDir --config Release 2>&1
+            # Copy the built CLI to the sdk directory
+            $cliExe = Get-ChildItem -Path $buildDir -Filter "sony-cli.exe" -Recurse | Select-Object -First 1
+            if ($cliExe) {
+              Copy-Item $cliExe.FullName "$sdkDir/sony-cli.exe" -Force
+              Write-Host "Sony CLI built: $sdkDir/sony-cli.exe"
+            } else {
+              Write-Host "WARNING: sony-cli.exe not found after build"
+            }
+          } else {
+            Write-Host "Sony SDK CMakeLists.txt not found — skipping CLI build"
+          }
       - name: Bundle Electron main
         run: npx esbuild electron/main.ts --bundle --platform=node --outfile=electron/main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder
       - name: Build Electron app

@@ -26,6 +26,7 @@ import * as os from 'os'
 import { createServer } from 'http'
 import { Server as SocketIOServer } from 'socket.io'
 import { checkLicenseStatus, activateLicense, getMachineId, getDisplayMachineId, generateLicenseCode } from './license'
+import { registerCameraSdkIpc } from './camera-sdk'
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const DEFAULT_HTTP_PORT = 3000
@@ -1729,6 +1730,13 @@ app.whenReady().then(async () => {
       createWindow()
     }
   })
+  // Register camera SDK IPC (Sony + Canon)
+  try {
+    registerCameraSdkIpc(ipcMain, () => BrowserWindow.getAllWindows())
+    console.log('[SAATIRIL] Camera SDK IPC registered (Sony + Canon)')
+  } catch (e) {
+    console.warn('[SAATIRIL] Camera SDK IPC registration failed:', (e as Error).message)
+  }
 })
 
 app.on('window-all-closed', () => {
