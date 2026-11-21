@@ -4,26 +4,20 @@ project(SonyCli CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Source files
-set(SOURCES
-    cli/main.cpp
-    cli/CrDebugString.cpp  # If exists, otherwise remove
-)
+# Source files — only main.cpp (CrDebugString.cpp optional)
+set(SOURCES cli/main.cpp)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/cli/CrDebugString.cpp)
+    list(APPEND SOURCES cli/CrDebugString.cpp)
+endif()
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# Find the Cr_Core.lib
-set(CR_CORE_LIB ${CMAKE_CURRENT_SOURCE_DIR}/dll/../external/crsdk/Cr_Core.lib)
-if(NOT EXISTS ${CR_CORE_LIB})
-    # Try alternate path
-    set(CR_CORE_LIB ${CMAKE_CURRENT_SOURCE_DIR}/lib/Cr_Core.lib)
-endif()
-
 # Output binary
 add_executable(sony-cli ${SOURCES})
 
-# Link with Cr_Core.lib if found
+# Link with Cr_Core.lib
+set(CR_CORE_LIB ${CMAKE_CURRENT_SOURCE_DIR}/dll/Cr_Core.lib)
 if(EXISTS ${CR_CORE_LIB})
     target_link_libraries(sony-cli ${CR_CORE_LIB})
 endif()

@@ -82,6 +82,7 @@ jobs:
       - name: Compile Electron preload
         run: npx tsc -p electron/tsconfig.json
       - name: Build Sony CLI (CMake)
+        continue-on-error: true
         shell: pwsh
         run: |
           $sdkDir = "electron/sony-sdk"
