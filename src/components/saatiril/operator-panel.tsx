@@ -3453,6 +3453,48 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
                   </Select>
                 </div>
               )}
+              {/* DSLR camera actions — Install Sony Driver + Scan DSLR */}
+              {(window as any).saatirilCamera && (
+                <div className="flex items-center gap-1 ml-1">
+                  <button
+                    onClick={async () => {
+                      const cam = (window as any).saatirilCamera
+                      if (!cam) return
+                      try {
+                        const result = await cam.installSonyDriver()
+                        alert(result.message || (result.success ? 'Driver installed' : 'Install failed'))
+                        if (result.success) {
+                          // Refresh camera list after driver install
+                          void enumerateVideoDevices()
+                        }
+                      } catch (e) {
+                        alert('Error: ' + (e as Error).message)
+                      }
+                    }}
+                    className="rounded text-[8px] px-1.5 py-1 font-bold transition-all cursor-pointer shrink-0"
+                    style={{
+                      backgroundColor: THEME.panel,
+                      color: THEME.gold,
+                      border: `1px solid ${THEME.gold}55`,
+                    }}
+                    title="Install Sony camera driver (libusbK) — one UAC prompt, then replug camera"
+                  >
+                    Install Sony Driver
+                  </button>
+                  <button
+                    onClick={() => { void enumerateVideoDevices() }}
+                    className="rounded text-[8px] px-1.5 py-1 font-bold transition-all cursor-pointer shrink-0"
+                    style={{
+                      backgroundColor: THEME.panel,
+                      color: THEME.muted,
+                      border: `1px solid ${THEME.border}`,
+                    }}
+                    title="Scan ulang kamera (termasuk DSLR Sony/Canon)"
+                  >
+                    Scan
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

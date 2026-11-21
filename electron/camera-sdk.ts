@@ -45,7 +45,12 @@ export async function listSonyCameras(): Promise<SdkCamera[]> {
   return new Promise((resolve) => {
     const cliPath = getSonyCliPath()
     if (!fs.existsSync(cliPath)) { resolve([]); return }
-    execFile(cliPath, ['list'], { timeout: 15000, maxBuffer: 10 * 1024 * 1024 },
+    // Set cwd to the CLI directory so Windows finds the DLLs there
+    const cliDir = path.dirname(cliPath)
+    // Also add DLL directories to PATH
+    const dllDirs = [cliDir, path.join(cliDir, 'dll'), path.join(cliDir, 'dll', 'CrAdapter')]
+    const env = { ...process.env, PATH: `${dllDirs.join(';')};${process.env.PATH || ''}` }
+    execFile(cliPath, ['list'], { timeout: 15000, maxBuffer: 10 * 1024 * 1024, cwd: cliDir, env },
       (err: any, stdout: string, _stderr: string) => {
         if (err) { console.warn('[Sony CLI] list error:', err.message); resolve([]); return }
         try {
@@ -69,7 +74,10 @@ export async function getSonyLiveViewFrame(camIndex: number): Promise<string | n
   return new Promise((resolve) => {
     const cliPath = getSonyCliPath()
     if (!fs.existsSync(cliPath)) { resolve(null); return }
-    execFile(cliPath, ['liveview', String(camIndex)], { timeout: 30000, maxBuffer: 30 * 1024 * 1024 },
+    const cliDir = path.dirname(cliPath)
+    const dllDirs = [cliDir, path.join(cliDir, 'dll'), path.join(cliDir, 'dll', 'CrAdapter')]
+    const env = { ...process.env, PATH: `${dllDirs.join(';')};${process.env.PATH || ''}` }
+    execFile(cliPath, ['liveview', String(camIndex)], { timeout: 30000, maxBuffer: 30 * 1024 * 1024, cwd: cliDir, env },
       (err: any, stdout: string, _stderr: string) => {
         if (err) { resolve(null); return }
         try {
@@ -87,7 +95,10 @@ export async function captureSonyPhoto(camIndex: number): Promise<string | null>
   return new Promise((resolve) => {
     const cliPath = getSonyCliPath()
     if (!fs.existsSync(cliPath)) { resolve(null); return }
-    execFile(cliPath, ['capture', String(camIndex)], { timeout: 30000, maxBuffer: 50 * 1024 * 1024 },
+    const cliDir = path.dirname(cliPath)
+    const dllDirs = [cliDir, path.join(cliDir, 'dll'), path.join(cliDir, 'dll', 'CrAdapter')]
+    const env = { ...process.env, PATH: `${dllDirs.join(';')};${process.env.PATH || ''}` }
+    execFile(cliPath, ['capture', String(camIndex)], { timeout: 30000, maxBuffer: 50 * 1024 * 1024, cwd: cliDir, env },
       (err: any, stdout: string, _stderr: string) => {
         if (err) { resolve(null); return }
         try {

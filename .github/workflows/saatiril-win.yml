@@ -107,6 +107,13 @@ jobs:
             if ($cliExe) {
               Copy-Item $cliExe.FullName "$sdkDir/sony-cli.exe" -Force
               Write-Host "Sony CLI built: $sdkDir/sony-cli.exe"
+              # Copy ALL DLLs to the same directory as sony-cli.exe
+              # (Windows searches for DLLs in the exe's directory first)
+              Copy-Item "$sdkDir/dll/*.dll" "$sdkDir/" -Force
+              if (Test-Path "$sdkDir/dll/CrAdapter") {
+                Copy-Item "$sdkDir/dll/CrAdapter/*.dll" "$sdkDir/" -Force
+              }
+              Write-Host "DLLs copied to sony-cli.exe directory"
             } else {
               Write-Host "WARNING: sony-cli.exe not found after build"
             }
