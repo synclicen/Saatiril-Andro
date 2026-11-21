@@ -676,6 +676,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const nextRowRef = useRef<HTMLDivElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const selectedDeviceRef = useRef<string>('')
+  // DSLR camera (Sony/Canon via Camera SDK) live view
+  const dslrPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [dslrLiveViewUrl, setDslrLiveViewUrl] = useState<string | null>(null)
   // BUG #7 fix (audit Remote/Mirror batch 2): generation token so in-flight
   // startCamera can detect that the camera was released during getUserMedia's
   // await and bail out before assigning streamRef. Incremented each time the
@@ -942,6 +945,23 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           deviceId: d.deviceId,
           label: d.label || `Kamera ${d.deviceId.slice(0, 6)}`,
         }))
+      // ── Merge DSLR cameras (Sony/Canon via Camera SDK) ──────────────
+      // window.saatirilCamera exposes the camera SDK (Sony Cr_Core.dll +
+      // Canon WPD). DSLR cameras appear in the dropdown with dslr: prefix.
+      try {
+        const cam = (window as any).saatirilCamera
+        if (cam) {
+          const dslrCams = await cam.listCameras()
+          if (dslrCams && dslrCams.length > 0) {
+            for (const c of dslrCams) {
+              videoInputs.push({
+                deviceId: `dslr:${c.id}`,
+                label: `${c.brand} ${c.model}`,
+              })
+            }
+          }
+        }
+      } catch (e) { /* camera SDK not available */ }
       setVideoDevices(videoInputs)
       if (videoInputs.length > 0 && !selectedDeviceRef.current) {
         // ── Per-channel camera selection ──────────────────────────────────
@@ -1002,6 +1022,28 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // after cleanup explicitly released it.
   const startCamera = useCallback(
     async (deviceId?: string, gen?: number) => {
+      // ── DSLR camera (Sony/Canon via Camera SDK) — bypass getUserMedia ──
+      // Device IDs starting with "dslr:" are DSLR cameras controlled via
+      // the Sony Camera Remote SDK or Canon WPD. Live view is polled as
+      // base64 JPEG frames and displayed via an <img> element.
+      if (deviceId && deviceId.startsWith('dslr:')) {
+        const dslrId = deviceId.slice('dslr:'.length)
+        setCameraAvailable(true)
+        // Start DSLR live view polling
+        if (dslrPollingRef.current) clearInterval(dslrPollingRef.current)
+        const cam = (window as any).saatirilCamera
+        if (!cam) return
+        dslrPollingRef.current = setInterval(async () => {
+          try {
+            const b64 = await cam.getLiveView(dslrId)
+            if (b64) {
+              setDslrLiveViewUrl(`data:image/jpeg;base64,${b64}`)
+            }
+          } catch (e) { /* transient */ }
+        }, 200) // ~5fps
+        return
+      }
+
       if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
         setCameraAvailable(false)
         return
@@ -1112,6 +1154,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
+      // Stop DSLR live view polling
+      if (dslrPollingRef.current) {
+        clearInterval(dslrPollingRef.current)
+        dslrPollingRef.current = null
+      }
+      setDslrLiveViewUrl(null)
     }
   }, [startCamera, cameraActive])
 
@@ -1874,6 +1922,25 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       if (cssFilter !== 'none') ctx.filter = cssFilter
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
       ctx.filter = 'none'
+    } else if (dslrLiveViewUrl) {
+      // ── DSLR capture: draw the current live view <img> onto canvas ──
+      // The DSLR live view is a base64 JPEG displayed in an <img>. We draw
+      // it onto the canvas (same center-crop logic as video).
+      const img = new Image()
+      img.src = dslrLiveViewUrl
+      // Image is already loaded (it's the current live view frame)
+      if (img.naturalWidth > 0) {
+        const imgRatio = img.naturalWidth / img.naturalHeight
+        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight
+        if (imgRatio > aspectRatio) {
+          sw = img.naturalHeight * aspectRatio
+          sx = (img.naturalWidth - sw) / 2
+        } else {
+          sh = img.naturalWidth / aspectRatio
+          sy = (img.naturalHeight - sh) / 2
+        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
+      }
     } else {
       ctx.fillStyle = '#1a0b2e'
       ctx.fillRect(0, 0, targetWidth, targetHeight)
@@ -2779,8 +2846,23 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
         style={{
           filter: cssFilter !== 'none' ? cssFilter : undefined,
           transform: mirror ? 'scaleX(-1)' : undefined,
+          display: dslrLiveViewUrl ? 'none' : 'block',
         }}
       />
+      {/* DSLR live view (Sony/Canon via Camera SDK) — shown when a DSLR
+          camera is selected. Replaces the <video> element with an <img>
+          that displays JPEG frames polled from the camera SDK. */}
+      {dslrLiveViewUrl && (
+        <img
+          src={dslrLiveViewUrl}
+          alt="DSLR Live View"
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{
+            transform: mirror ? 'scaleX(-1)' : undefined,
+            zIndex: 1,
+          }}
+        />
+      )}
 
       {frameData && (
         <img
