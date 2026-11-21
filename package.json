@@ -30,11 +30,13 @@
     },
     "asar": true,
     "files": [
+      "electron/sony-sdk/**",
       "electron/main.js",
       "electron/preload.js",
       "out/**/*",
       "public/**/*",
-      "package.json"
+      "package.json",
+      "electron/camera-sdk.js"
     ],
     "win": {
       "icon": "public/icon.ico",
@@ -79,7 +81,11 @@
       "target": [
         "dmg"
       ]
-    }
+    },
+    "asarUnpack": [
+      "electron/sony-sdk/dll/**",
+      "electron/sony-sdk/driver/**"
+    ]
   },
   "dependencies": {
     "pagedjs": "^0.4.3",
