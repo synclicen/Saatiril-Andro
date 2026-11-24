@@ -1912,6 +1912,48 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   useEffect(() => { handleCaptureRef.current = handleCapture }, [handleCapture])
   const handleCaptureClickRef = useRef<() => void>(() => {})
 
+  // ── Hot Folder capture: finalize WITHOUT drawing from video ──
+  // Unlike handleCapture (which draws the <video> frame to canvas),
+  // this function assumes the canvas ALREADY has the Canon photo drawn
+  // (by the hot folder watcher). It only adds the frame overlay + calls
+  // finalizeCapture. This preserves the Canon photo instead of overwriting
+  // it with the webcam frame.
+  const handleHotFolderCapture = useCallback(() => {
+    if (!opCurrentTarget) return
+    if (photoshoot) {
+      if (capturePhase !== 'ready-1') return
+    } else {
+      if (capturePhase !== 'ready-1' && capturePhase !== 'ready-2') return
+    }
+    if (isCapturingRef.current) return
+    isCapturingRef.current = true
+
+    const canvas = canvasRef.current
+    if (!canvas) { isCapturingRef.current = false; return }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { isCapturingRef.current = false; return }
+
+    // Canvas already has the Canon photo drawn by the hot folder watcher.
+    // Just add the frame overlay (same logic as handleCapture).
+    const targetWidth = canvas.width
+    const targetHeight = canvas.height
+    if (frameImgRef.current) {
+      ctx.drawImage(frameImgRef.current, 0, 0, targetWidth, targetHeight)
+      finalizeCapture(canvas)
+    } else if (frameData) {
+      const frameImg = new Image()
+      frameImg.crossOrigin = 'anonymous'
+      frameImg.onload = () => { ctx.drawImage(frameImg, 0, 0, targetWidth, targetHeight); finalizeCapture(canvas) }
+      frameImg.onerror = () => { finalizeCapture(canvas) }
+      frameImg.src = frameData
+    } else {
+      finalizeCapture(canvas)
+    }
+  }, [opCurrentTarget, capturePhase, frameData, finalizeCapture, photoshoot])
+
+  const handleHotFolderCaptureRef = useRef(handleHotFolderCapture)
+  useEffect(() => { handleHotFolderCaptureRef.current = handleHotFolderCapture }, [handleHotFolderCapture])
+
   // ── DSLR Hardware Shutter Detection hook ──
   // Polls the <video> element at 5fps + detects DSLR shutter via brightness
   // dip + pixel change spike. When detected → handleCaptureRef.current().
@@ -2017,8 +2059,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             ctx.fillStyle = '#000000'
             ctx.fillRect(0, 0, targetWidth, targetHeight)
             ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
-            // Feed into the existing capture pipeline
-            handleCaptureRef.current()
+            // Feed into the hot folder capture pipeline — does NOT redraw
+            // from video. Only adds frame overlay + calls finalizeCapture.
+            handleHotFolderCaptureRef.current()
             setHotFolderLastFile(newest.filename)
             // Update baseline so this file doesn't trigger again
             hotFolderBaselineMtimeRef.current = newest.mtime
