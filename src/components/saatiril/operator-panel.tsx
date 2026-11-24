@@ -1983,11 +1983,16 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       alert('Desktop capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe), bukan web browser.')
       return
     }
+    // CRITICAL: set ref to true IMMEDIATELY — before any async operations.
+    // This prevents startCamera from overriding the EOS stream during
+    // the async getUserMedia call (race condition fix).
+    eosLiveViewActiveRef.current = true
     setHotFolderStatus('Mencari EOS Utility...')
     try {
       const sources = await api.getWindowSources()
       if (!sources || sources.length === 0) {
         alert('Tidak ada window terdeteksi.\nPastikan EOS Utility terbuka dan menampilkan Remote Live View.')
+        eosLiveViewActiveRef.current = false
         setHotFolderStatus('Watching...')
         return
       }
@@ -2038,6 +2043,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         const windowNames = sources.map((s: any) => s.name).join('\n')
         alert('Gagal capture window.\n\nWindows terdeteksi:\n' + windowNames +
           '\n\nPastikan EOS Utility terbuka dan menampilkan Remote Live View window.')
+        eosLiveViewActiveRef.current = false
         setHotFolderStatus('Watching...')
         return
       }
@@ -2058,6 +2064,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
       alert('Error: ' + (e as Error).message)
+      eosLiveViewActiveRef.current = false
       setHotFolderStatus('Watching...')
     }
   }, [])
