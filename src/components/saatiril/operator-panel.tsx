@@ -2560,6 +2560,26 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             </button>
           </div>
         )}
+        {/* Hot Folder: ratio guide — shows the target aspect ratio so the
+            operator can frame the photo in EOS Utility's live view */}
+        {hotFolderEnabled && !compact && (
+          <div className="flex items-center gap-2 mt-1 px-2 py-1 rounded" style={{ backgroundColor: THEME.bg, border: `1px solid ${THEME.emerald}55` }}>
+            <span className="text-[8px] font-bold" style={{ color: THEME.emerald }}>RATIO:</span>
+            {/* Visual ratio indicator — a rectangle showing the target ratio */}
+            <div className="relative shrink-0" style={{
+              width: aspectRatio > 1 ? '32px' : `${Math.round(24 * aspectRatio)}px`,
+              height: aspectRatio > 1 ? `${Math.round(32 / aspectRatio)}px` : '24px',
+              border: `2px solid ${THEME.emerald}`,
+              backgroundColor: `${THEME.emerald}11`,
+            }} />
+            <span className="text-[9px] font-bold" style={{ color: THEME.gold }}>
+              {config?.ratio || '4:3'}
+            </span>
+            <span className="text-[7px]" style={{ color: THEME.muted }}>
+              Frame loosely — Saatiril auto-crop ke rasio ini
+            </span>
+          </div>
+        )}
 
         {/* Row 3: Camera mirror toggle (flip horizontal) — mirrors the live
             preview via transform: scaleX(-1). Does NOT affect the captured
