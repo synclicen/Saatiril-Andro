@@ -668,6 +668,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const [hotFolderLastFile, setHotFolderLastFile] = useState('') // last processed filename
   const [hotFolderStatus, setHotFolderStatus] = useState('') // status message
   const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // EOS Utility window capture
+  const eosLiveViewActiveRef = useRef(false)
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1156,6 +1157,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // generation token so a stale device-change doesn't grab the camera after
     // a newer selection (or a cameraActive=false cleanup) invalidated it.
     if (cameraActive && selectedDeviceId && selectedDeviceRef.current !== selectedDeviceId) {
+      // Skip webcam startCamera if EOS Live View is active — the EOS Utility
+      // window capture is already providing the video stream.
+      if (eosLiveViewActiveRef.current) {
+        selectedDeviceRef.current = selectedDeviceId // mark as handled
+        return
+      }
       selectedDeviceRef.current = selectedDeviceId
       const gen = ++cameraGenRef.current
       void startCamera(selectedDeviceId, gen)
@@ -2033,6 +2040,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         videoRef.current.play()
       }
       setEosLiveViewActive(true)
+      eosLiveViewActiveRef.current = true
       setCameraAvailable(true)
       setHotFolderStatus('Live: ' + targetSource.name.substring(0, 20))
       console.log('[EOS Live View] Captured:', targetSource.name)
