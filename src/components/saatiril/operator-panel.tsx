@@ -1129,7 +1129,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     return () => {
       // Invalidate this generation so any in-flight startCamera aborts.
       cameraGenRef.current = -1
-      // Always release on cleanup (unmount OR cameraActive flip to false).
+      // CRITICAL: Don't destroy the EOS stream on cleanup!
+      // When EOS Live View is active, the stream belongs to the EOS capture,
+      // not the webcam. Stopping it would kill the Canon live view.
+      if (eosLiveViewActiveRef.current) return
+      // Only stop + null the stream if it's a webcam stream (not EOS).
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
