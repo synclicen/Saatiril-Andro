@@ -658,6 +658,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // Detects DSLR shutter press via USB capture card by analyzing brightness +
   // pixel change between consecutive video frames. No audio cable needed.
   const [dslrShutterEnabled, setDslrShutterEnabled] = useState(false)
+  const [dslrShutterSensitivity, setDslrShutterSensitivity] = useState<'auto' | 'high' | 'medium' | 'low'>('auto')
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1912,7 +1913,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     isCapturing: sending,
     hasActiveTarget: hasActiveTarget,
     onShutter: () => { handleCaptureRef.current() },
-    sensitivity: 'auto',
+    sensitivity: dslrShutterSensitivity,
   })
 
   const cancelTimer = useCallback(() => {
@@ -2280,7 +2281,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           </button>
         )}
 
-        {/* Row 2b: DSLR Hardware Shutter toggle (visual detection — adapted from ARAY) */}
+        {/* Row 2b: DSLR Hardware Shutter toggle (USB Streaming + capture card) */}
         <button
           onClick={() => setDslrShutterEnabled((v) => !v)}
           className={`flex items-center gap-1 rounded-md font-semibold transition-all duration-200 cursor-pointer w-full min-w-0 ${
@@ -2292,10 +2293,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             border: `1px solid ${dslrShutterEnabled ? THEME.gold : THEME.border}`,
             boxShadow: dslrShutterEnabled ? `0 0 8px ${THEME.gold}22` : 'none',
           }}
-          title={`DSLR Shutter — deteksi shutter DSLR via USB capture card. Saat shutter ditekan, app otomatis capture. Tidak perlu kabel audio.`}
+          title={`DSLR Shutter — deteksi shutter fisik via USB Streaming atau HDMI capture card. Saat tombol shutter kamera ditekan, layar gelap sejenak → app otomatis capture. Untuk Sony/Canon/Nikon: set kamera ke mode "USB Streaming" (bukan PC Remote), colok kabel USB, pilih kamera dari dropdown, aktifkan toggle ini. Jika tidak terdeteksi, coba ganti sensitivity ke High.`}
         >
           <Aperture className="size-3" />
           <span className="font-bold">DSLR Shutter</span>
+          <span className={`text-[7px] ${compact ? '' : 'text-[8px]'}`} style={{ color: dslrShutterEnabled ? THEME.gold : THEME.muted, opacity: 0.7 }}>(USB/HDMI)</span>
           {dslrShutterEnabled && (
             <>
               <span style={{ color: THEME.muted }}>•</span>
@@ -2305,6 +2307,31 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             </>
           )}
         </button>
+        {/* Sensitivity selector for DSLR Shutter */}
+        {dslrShutterEnabled && !compact && (
+          <div className="flex gap-0.5 mt-0.5">
+            {(['high', 'auto', 'medium', 'low'] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setDslrShutterSensitivity(s)}
+                className={`rounded text-[8px] px-1.5 py-0.5 font-bold transition-all cursor-pointer flex-1 ${
+                  dslrShutterSensitivity === s ? 'scale-[1.02]' : 'hover:bg-white/5'
+                }`}
+                style={{
+                  backgroundColor: dslrShutterSensitivity === s ? `${THEME.gold}22` : THEME.bg,
+                  color: dslrShutterSensitivity === s ? THEME.gold : THEME.muted,
+                  border: `1px solid ${dslrShutterSensitivity === s ? THEME.gold : THEME.border}`,
+                }}
+                title={s === 'high' ? '30% brightness drop — paling sensitif, mungkin false trigger' :
+                       s === 'auto' ? 'Smart detection — brightness dip + pixel change (recommended)' :
+                       s === 'medium' ? '40% drop + recovery — balanced' :
+                       '60% drop — only long blackouts, paling aman'}
+              >
+                {s === 'high' ? 'High' : s === 'auto' ? 'Auto' : s === 'medium' ? 'Med' : 'Low'}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Row 3: Camera mirror toggle (flip horizontal) — mirrors the live
             preview via transform: scaleX(-1). Does NOT affect the captured
