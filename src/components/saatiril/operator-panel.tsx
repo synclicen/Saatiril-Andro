@@ -1962,35 +1962,67 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const captureEosLiveView = useCallback(async () => {
     const api = (window as any).saatirilAPI
     if (!api?.getWindowSources) {
-      alert('Desktop capture tidak tersedia (web mode). Gunakan Saatiril Desktop.')
+      alert('Desktop capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe), bukan web browser.')
       return
     }
+    setHotFolderStatus('Mencari EOS Utility...')
     try {
       const sources = await api.getWindowSources()
       if (!sources || sources.length === 0) {
-        alert('Tidak ada window terdeteksi. Pastikan EOS Utility / Imaging Edge terbuka.')
+        alert('Tidak ada window terdeteksi.\nPastikan EOS Utility terbuka dan menampilkan Remote Live View.')
+        setHotFolderStatus('Watching...')
         return
       }
-      // Find camera software window (EOS Utility, Imaging Edge, Remote Live View, etc.)
+      // Find camera software window
       const cameraWindow = sources.find((s: any) =>
-        /eos utility|imaging edge|remote live view|canon|sony|nikon|camera/i.test(s.name)
+        /eos utility|imaging edge|remote live view|canon|sony|nikon|camera|remote/i.test(s.name)
       )
-      const targetSource = cameraWindow || sources[0] // fallback to first window
-      // Capture the window
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          // @ts-ignore — chromeMediaSource is Electron-specific
-          mandatory: {
+      const targetSource = cameraWindow || sources[0]
+      setHotFolderStatus('Capturing: ' + targetSource.name)
+      // Try getUserMedia with desktop source — try multiple constraint formats
+      let stream: MediaStream | null = null
+      // Format 1: non-mandatory (newer Electron)
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: targetSource.id,
             minWidth: 640,
             maxWidth: 1920,
             minHeight: 480,
             maxHeight: 1080,
-          }
-        } as any
-      })
+          } as any
+        })
+      } catch (e1) {
+        console.warn('[EOS Live View] Format 1 failed:', (e1 as Error).message)
+        // Format 2: mandatory (older Electron)
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: targetSource.id,
+                minWidth: 640,
+                maxWidth: 1920,
+                minHeight: 480,
+                maxHeight: 1080,
+              }
+            } as any
+          })
+        } catch (e2) {
+          console.warn('[EOS Live View] Format 2 failed:', (e2 as Error).message)
+        }
+      }
+      if (!stream) {
+        // List available windows for debugging
+        const windowNames = sources.map((s: any) => s.name).join('\n')
+        alert('Gagal capture window.\n\nWindows terdeteksi:\n' + windowNames +
+          '\n\nPastikan EOS Utility terbuka dan menampilkan Remote Live View window.')
+        setHotFolderStatus('Watching...')
+        return
+      }
       // Attach to the existing <video> element
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
@@ -2002,11 +2034,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       }
       setEosLiveViewActive(true)
       setCameraAvailable(true)
-      setHotFolderStatus('Live view: ' + targetSource.name)
-      console.log('[EOS Live View] Captured window:', targetSource.name)
+      setHotFolderStatus('Live: ' + targetSource.name.substring(0, 20))
+      console.log('[EOS Live View] Captured:', targetSource.name)
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
-      alert('Gagal capture window: ' + (e as Error).message + '\nPastikan EOS Utility terbuka dan menampilkan live view.')
+      alert('Error: ' + (e as Error).message)
+      setHotFolderStatus('Watching...')
     }
   }, [])
 
@@ -2617,7 +2650,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           </div>
         )}
         {/* EOS Live View button — capture EOS Utility window → show in Saatiril */}
-        {hotFolderEnabled && !compact && (
+        {hotFolderEnabled && (
           <button
             onClick={() => { void captureEosLiveView() }}
             className={`rounded text-[9px] px-2 py-1 font-bold transition-all cursor-pointer w-full mt-0.5 ${
@@ -2628,15 +2661,14 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
               color: eosLiveViewActive ? THEME.emerald : THEME.muted,
               border: `1px solid ${eosLiveViewActive ? THEME.emerald : THEME.border}`,
             }}
-            title="Capture window EOS Utility / Imaging Edge → tampilkan live view kamera Canon di Saatiril. Klik untuk mulai, pastikan EOS Utility terbuka dan menampilkan live view."
+            title="Capture window EOS Utility / Imaging Edge → tampilkan live view kamera Canon di Saatiril."
           >
             <Monitor className="size-2.5 mr-1 inline" />
-            {eosLiveViewActive ? 'EOS Live View Aktif ✓' : 'Live View dari EOS Utility'}
+            {eosLiveViewActive ? 'EOS Live View Aktif ✓' : 'Live View dari EOS'}
           </button>
         )}
-        {/* Hot Folder: ratio guide — shows the target aspect ratio so the
-            operator can frame the photo in EOS Utility's live view */}
-        {hotFolderEnabled && !compact && (
+        {/* Hot Folder: ratio guide — shows the target aspect ratio */}
+        {hotFolderEnabled && (
           <div className="flex items-center gap-2 mt-1 px-2 py-1 rounded" style={{ backgroundColor: THEME.bg, border: `1px solid ${THEME.emerald}55` }}>
             <span className="text-[8px] font-bold" style={{ color: THEME.emerald }}>RATIO:</span>
             {/* Visual ratio indicator — a rectangle showing the target ratio */}
