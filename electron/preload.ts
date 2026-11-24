@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     return ipcRenderer.invoke('create-folder', folderPath)
   },
 
+  // ── Hot Folder: list JPEG files + read photo as base64 ───────────
+  // Used by Hot Folder camera mode (EOS Utility / Imaging Edge integration)
+  listHotFolderFiles: (folderPath: string): Promise<Array<{ filename: string; mtime: number }>> =>
+    ipcRenderer.invoke('list-hot-folder-files', folderPath),
+  readHotFolderPhoto: (folderPath: string, filename: string): Promise<string | null> =>
+    ipcRenderer.invoke('read-hot-folder-photo', { folderPath, filename }),
+
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)
   },

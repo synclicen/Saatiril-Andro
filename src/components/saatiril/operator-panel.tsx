@@ -48,6 +48,7 @@ import {
   Check,
   Monitor,
   PowerOff,
+  FolderOpen,
 } from 'lucide-react'
 import {
   useSaatirilStore,
@@ -659,6 +660,13 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // pixel change between consecutive video frames. No audio cable needed.
   const [dslrShutterEnabled, setDslrShutterEnabled] = useState(false)
   const [dslrShutterSensitivity, setDslrShutterSensitivity] = useState<'auto' | 'high' | 'medium' | 'low'>('auto')
+  // ── Hot Folder mode (EOS Utility / Imaging Edge integration) ──
+  // Watches a folder for new JPEG files from external camera software.
+  // When a new photo appears → auto-import → frame → save with participant name → send to admin.
+  const [hotFolderEnabled, setHotFolderEnabled] = useState(false)
+  const [hotFolderPath, setHotFolderPath] = useState('')
+  const [hotFolderLastFile, setHotFolderLastFile] = useState('') // last processed filename
+  const [hotFolderStatus, setHotFolderStatus] = useState('') // status message
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1916,6 +1924,90 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     sensitivity: dslrShutterSensitivity,
   })
 
+  // ── Hot Folder watcher: poll folder every 500ms for new JPEG files ──
+  // When EOS Utility / Imaging Edge saves a new photo → auto-import into
+  // the Saatiril capture pipeline (frame, naming, save, send to admin).
+  const hotFolderPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const hotFolderImportingRef = useRef(false)
+  useEffect(() => {
+    if (!hotFolderEnabled || !hotFolderPath) {
+      if (hotFolderPollingRef.current) {
+        clearInterval(hotFolderPollingRef.current)
+        hotFolderPollingRef.current = null
+      }
+      setHotFolderStatus('')
+      return
+    }
+    setHotFolderStatus('Watching...')
+    hotFolderPollingRef.current = setInterval(async () => {
+      if (hotFolderImportingRef.current) return // skip if already importing
+      if (sending) return // skip during capture processing
+      if (!hasActiveTarget) return // need a participant to import for
+      try {
+        const api = (window as any).saatirilAPI
+        if (!api?.listHotFolderFiles) return
+        const files = await api.listHotFolderFiles(hotFolderPath)
+        if (!files || files.length === 0) return
+        // Get the newest file (sorted by mtime, newest first)
+        const newest = files[0]
+        if (newest.filename === hotFolderLastFile) return // already processed
+        // New file detected! Read it and import
+        hotFolderImportingRef.current = true
+        setHotFolderStatus('Importing: ' + newest.filename)
+        const base64 = await api.readHotFolderPhoto(hotFolderPath, newest.filename)
+        if (base64) {
+          // Draw the photo to canvas + feed into capture pipeline
+          const img = new Image()
+          img.onload = async () => {
+            const canvas = canvasRef.current
+            if (!canvas) { hotFolderImportingRef.current = false; return }
+            const targetWidth = 1920
+            const targetHeight = Math.round(targetWidth / aspectRatio)
+            canvas.width = targetWidth
+            canvas.height = targetHeight
+            const ctx = canvas.getContext('2d')
+            if (!ctx) { hotFolderImportingRef.current = false; return }
+            // Draw image with center-crop (same logic as webcam capture)
+            const imgRatio = img.naturalWidth / img.naturalHeight
+            let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight
+            if (imgRatio > aspectRatio) {
+              sw = img.naturalHeight * aspectRatio
+              sx = (img.naturalWidth - sw) / 2
+            } else {
+              sh = img.naturalWidth / aspectRatio
+              sy = (img.naturalHeight - sh) / 2
+            }
+            ctx.fillStyle = '#000000'
+            ctx.fillRect(0, 0, targetWidth, targetHeight)
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
+            // Feed into the existing capture pipeline
+            handleCaptureRef.current()
+            setHotFolderLastFile(newest.filename)
+            setHotFolderStatus('Imported ✓ — waiting for next...')
+            setTimeout(() => { hotFolderImportingRef.current = false }, 1500)
+          }
+          img.onerror = () => {
+            console.warn('[Hot Folder] Failed to load image:', newest.filename)
+            setHotFolderStatus('Error loading image')
+            hotFolderImportingRef.current = false
+          }
+          img.src = `data:image/jpeg;base64,${base64}`
+        } else {
+          setHotFolderStatus('Error reading file')
+          hotFolderImportingRef.current = false
+        }
+      } catch (e) {
+        // transient — keep polling
+      }
+    }, 500) // poll every 500ms
+    return () => {
+      if (hotFolderPollingRef.current) {
+        clearInterval(hotFolderPollingRef.current)
+        hotFolderPollingRef.current = null
+      }
+    }
+  }, [hotFolderEnabled, hotFolderPath, hotFolderLastFile, sending, hasActiveTarget, aspectRatio])
+
   const cancelTimer = useCallback(() => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current)
@@ -2330,6 +2422,60 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
                 {s === 'high' ? 'High' : s === 'auto' ? 'Auto' : s === 'medium' ? 'Med' : 'Low'}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Hot Folder mode — auto-import photos from EOS Utility / Imaging Edge */}
+        <button
+          onClick={() => setHotFolderEnabled((v) => !v)}
+          className={`flex items-center gap-1 rounded-md font-semibold transition-all duration-200 cursor-pointer w-full min-w-0 ${
+            compact ? 'px-1 py-0.5 text-[8px]' : 'px-2 py-1.5 text-[10px]'
+          } ${hotFolderEnabled ? 'scale-[1.02]' : 'hover:bg-white/5'}`}
+          style={{
+            backgroundColor: hotFolderEnabled ? `${THEME.emerald}22` : THEME.panel,
+            color: hotFolderEnabled ? THEME.emerald : THEME.muted,
+            border: `1px solid ${hotFolderEnabled ? THEME.emerald : THEME.border}`,
+            boxShadow: hotFolderEnabled ? `0 0 8px ${THEME.emerald}22` : 'none',
+          }}
+          title="Hot Folder — auto-import foto dari EOS Utility / Imaging Edge. Set kamera ke PC Remote mode, colok USB, buka EOS Utility, set folder output di sini. Saat shutter ditekan → foto masuk folder → Saatiril auto-proses (frame, nama peserta, save, kirim ke admin)."
+        >
+          <FolderOpen className="size-3" />
+          <span className="font-bold">Hot Folder</span>
+          {hotFolderEnabled && (
+            <>
+              <span style={{ color: THEME.muted }}>•</span>
+              <span className={`text-[8px] ${compact ? '' : 'text-[9px]'}`} style={{ color: THEME.emerald }}>
+                {hotFolderStatus || 'Setup...'}
+              </span>
+            </>
+          )}
+        </button>
+        {/* Hot Folder: folder picker */}
+        {hotFolderEnabled && (
+          <div className="flex items-center gap-1 mt-0.5">
+            <input
+              type="text"
+              value={hotFolderPath}
+              onChange={(e) => setHotFolderPath(e.target.value)}
+              placeholder="C:\Photos\Canon\ atau klik Browse..."
+              className="flex-1 min-w-0 rounded text-[9px] px-2 py-1"
+              style={{ backgroundColor: THEME.bg, border: `1px solid ${THEME.border}`, color: THEME.muted }}
+            />
+            <button
+              onClick={async () => {
+                const api = (window as any).saatirilAPI
+                if (!api?.selectFolder) { alert('Folder picker tidak tersedia (web mode)'); return }
+                const folder = await api.selectFolder(hotFolderPath || '')
+                if (folder) {
+                  setHotFolderPath(folder)
+                  setHotFolderLastFile('') // reset so next photo triggers import
+                }
+              }}
+              className="rounded text-[9px] px-2 py-1 font-bold cursor-pointer shrink-0"
+              style={{ backgroundColor: THEME.emerald + '22', color: THEME.emerald, border: `1px solid ${THEME.emerald}` }}
+            >
+              Browse
+            </button>
           </div>
         )}
 

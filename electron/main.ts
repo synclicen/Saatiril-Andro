@@ -970,6 +970,43 @@ function registerIpcHandlers() {
     }
   })
 
+  // ── Hot Folder: list JPEG files in a folder (for auto-import) ───────
+  // Returns array of { filename, mtime } sorted by mtime (newest first).
+  // Used by the Hot Folder camera mode to detect new photos from EOS Utility
+  // / Imaging Edge / other camera control software.
+  ipcMain.handle('list-hot-folder-files', async (_event, folderPath: string) => {
+    try {
+      if (!folderPath || !fs.existsSync(folderPath)) return []
+      const files = fs.readdirSync(folderPath)
+      const jpgFiles = files
+        .filter(f => /\.(jpg|jpeg|JPG|JPEG)$/.test(f))
+        .map(f => {
+          const stat = fs.statSync(path.join(folderPath, f))
+          return { filename: f, mtime: stat.mtimeMs }
+        })
+        .sort((a, b) => b.mtime - a.mtime) // newest first
+      return jpgFiles
+    } catch (err: any) {
+      console.error('[SAATIRIL] list-hot-folder-files error:', err.message)
+      return []
+    }
+  })
+
+  // ── Hot Folder: read a photo file as base64 ─────────────────────────
+  // Reads a JPEG from the hot folder and returns it as base64 (no data: prefix).
+  // This feeds into the existing capture pipeline (frame overlay, naming, etc.)
+  ipcMain.handle('read-hot-folder-photo', async (_event, data: { folderPath: string, filename: string }) => {
+    try {
+      const filePath = path.join(data.folderPath, data.filename)
+      if (!fs.existsSync(filePath)) return null
+      const buffer = fs.readFileSync(filePath)
+      return buffer.toString('base64')
+    } catch (err: any) {
+      console.error('[SAATIRIL] read-hot-folder-photo error:', err.message)
+      return null
+    }
+  })
+
   // Save photo to disk
   ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }) => {
     try {
