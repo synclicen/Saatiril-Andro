@@ -1927,8 +1927,41 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // ── Hot Folder watcher: poll folder every 500ms for new JPEG files ──
   // When EOS Utility / Imaging Edge saves a new photo → auto-import into
   // the Saatiril capture pipeline (frame, naming, save, send to admin).
+  // IMPORTANT: uses mtime baseline — only files NEWER than the baseline
+  // trigger import. This prevents old photos already in the folder from
+  // being auto-imported when a new participant is selected.
   const hotFolderPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const hotFolderImportingRef = useRef(false)
+  const hotFolderBaselineMtimeRef = useRef(0) // only import files with mtime > this
+  const hotFolderPrevTargetRef = useRef<string | null>(null) // track participant changes
+
+  // When hot folder starts OR folder path changes → set baseline to current
+  // newest file's mtime (so existing photos don't trigger import)
+  useEffect(() => {
+    if (!hotFolderEnabled || !hotFolderPath) {
+      hotFolderBaselineMtimeRef.current = 0
+      return
+    }
+    // Set baseline to current time — only photos saved AFTER this moment
+    // will trigger import. This prevents old photos from being imported.
+    hotFolderBaselineMtimeRef.current = Date.now()
+    setHotFolderLastFile('')
+    setHotFolderStatus('Watching...')
+  }, [hotFolderEnabled, hotFolderPath])
+
+  // When participant changes → reset baseline (so previous participant's
+  // photo doesn't trigger import for the new participant)
+  useEffect(() => {
+    const currentTargetId = opCurrentTarget?.id || null
+    if (currentTargetId !== hotFolderPrevTargetRef.current) {
+      hotFolderPrevTargetRef.current = currentTargetId
+      // Reset baseline to now — only NEW photos after this participant
+      // selection will trigger import
+      hotFolderBaselineMtimeRef.current = Date.now()
+      setHotFolderLastFile('')
+    }
+  }, [opCurrentTarget?.id])
+
   useEffect(() => {
     if (!hotFolderEnabled || !hotFolderPath) {
       if (hotFolderPollingRef.current) {
@@ -1950,6 +1983,10 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         if (!files || files.length === 0) return
         // Get the newest file (sorted by mtime, newest first)
         const newest = files[0]
+        // CRITICAL: only import if the file is NEWER than the baseline.
+        // This prevents old photos from triggering import when a new
+        // participant is selected.
+        if (newest.mtime <= hotFolderBaselineMtimeRef.current) return
         if (newest.filename === hotFolderLastFile) return // already processed
         // New file detected! Read it and import
         hotFolderImportingRef.current = true
@@ -1983,6 +2020,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             // Feed into the existing capture pipeline
             handleCaptureRef.current()
             setHotFolderLastFile(newest.filename)
+            // Update baseline so this file doesn't trigger again
+            hotFolderBaselineMtimeRef.current = newest.mtime
             setHotFolderStatus('Imported ✓ — waiting for next...')
             setTimeout(() => { hotFolderImportingRef.current = false }, 1500)
           }
