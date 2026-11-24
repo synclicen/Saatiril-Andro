@@ -1013,6 +1013,14 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // after cleanup explicitly released it.
   const startCamera = useCallback(
     async (deviceId?: string, gen?: number) => {
+      // ── EOS Live View guard: if EOS Utility window capture is active,
+      // do NOT start the webcam. The EOS stream is already attached to
+      // <video>. This guard is at the FUNCTION level — prevents ALL
+      // callers (effects, callbacks, etc.) from overriding the EOS stream.
+      if (eosLiveViewActiveRef.current) {
+        console.log('[Camera] Skipping startCamera — EOS Live View is active')
+        return
+      }
       if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
         setCameraAvailable(false)
         return
