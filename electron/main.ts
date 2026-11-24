@@ -1007,6 +1007,20 @@ function registerIpcHandlers() {
     }
   })
 
+  // ── Desktop capture: list windows (for EOS Utility live view) ──────
+  // Returns window sources so the renderer can capture the EOS Utility /
+  // Imaging Edge window and show Canon's live view in Saatiril.
+  const { desktopCapturer } = require('electron')
+  ipcMain.handle('get-window-sources', async () => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } })
+      return sources.map((s: any) => ({ id: s.id, name: s.name }))
+    } catch (err: any) {
+      console.error('[SAATIRIL] get-window-sources error:', err.message)
+      return []
+    }
+  })
+
   // Save photo to disk
   ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }) => {
     try {

@@ -667,6 +667,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const [hotFolderPath, setHotFolderPath] = useState('')
   const [hotFolderLastFile, setHotFolderLastFile] = useState('') // last processed filename
   const [hotFolderStatus, setHotFolderStatus] = useState('') // status message
+  const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // EOS Utility window capture
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1954,6 +1955,61 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const handleHotFolderCaptureRef = useRef(handleHotFolderCapture)
   useEffect(() => { handleHotFolderCaptureRef.current = handleHotFolderCapture }, [handleHotFolderCapture])
 
+  // ── EOS Utility live view: capture the EOS Utility window ──────────
+  // Uses Electron desktopCapturer to find the EOS Utility / Imaging Edge
+  // window and display its live view in Saatiril's <video> element.
+  // This replaces the USB webcam with the Canon's actual live view.
+  const captureEosLiveView = useCallback(async () => {
+    const api = (window as any).saatirilAPI
+    if (!api?.getWindowSources) {
+      alert('Desktop capture tidak tersedia (web mode). Gunakan Saatiril Desktop.')
+      return
+    }
+    try {
+      const sources = await api.getWindowSources()
+      if (!sources || sources.length === 0) {
+        alert('Tidak ada window terdeteksi. Pastikan EOS Utility / Imaging Edge terbuka.')
+        return
+      }
+      // Find camera software window (EOS Utility, Imaging Edge, Remote Live View, etc.)
+      const cameraWindow = sources.find((s: any) =>
+        /eos utility|imaging edge|remote live view|canon|sony|nikon|camera/i.test(s.name)
+      )
+      const targetSource = cameraWindow || sources[0] // fallback to first window
+      // Capture the window
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          // @ts-ignore — chromeMediaSource is Electron-specific
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: targetSource.id,
+            minWidth: 640,
+            maxWidth: 1920,
+            minHeight: 480,
+            maxHeight: 1080,
+          }
+        } as any
+      })
+      // Attach to the existing <video> element
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        videoRef.current.play()
+      }
+      setEosLiveViewActive(true)
+      setCameraAvailable(true)
+      setHotFolderStatus('Live view: ' + targetSource.name)
+      console.log('[EOS Live View] Captured window:', targetSource.name)
+    } catch (e) {
+      console.error('[EOS Live View] Error:', e)
+      alert('Gagal capture window: ' + (e as Error).message + '\nPastikan EOS Utility terbuka dan menampilkan live view.')
+    }
+  }, [])
+
   // ── DSLR Hardware Shutter Detection hook ──
   // Polls the <video> element at 5fps + detects DSLR shutter via brightness
   // dip + pixel change spike. When detected → handleCaptureRef.current().
@@ -2559,6 +2615,24 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
               Browse
             </button>
           </div>
+        )}
+        {/* EOS Live View button — capture EOS Utility window → show in Saatiril */}
+        {hotFolderEnabled && !compact && (
+          <button
+            onClick={() => { void captureEosLiveView() }}
+            className={`rounded text-[9px] px-2 py-1 font-bold transition-all cursor-pointer w-full mt-0.5 ${
+              eosLiveViewActive ? 'scale-[1.02]' : 'hover:bg-white/5'
+            }`}
+            style={{
+              backgroundColor: eosLiveViewActive ? `${THEME.emerald}22` : THEME.bg,
+              color: eosLiveViewActive ? THEME.emerald : THEME.muted,
+              border: `1px solid ${eosLiveViewActive ? THEME.emerald : THEME.border}`,
+            }}
+            title="Capture window EOS Utility / Imaging Edge → tampilkan live view kamera Canon di Saatiril. Klik untuk mulai, pastikan EOS Utility terbuka dan menampilkan live view."
+          >
+            <Monitor className="size-2.5 mr-1 inline" />
+            {eosLiveViewActive ? 'EOS Live View Aktif ✓' : 'Live View dari EOS Utility'}
+          </button>
         )}
         {/* Hot Folder: ratio guide — shows the target aspect ratio so the
             operator can frame the photo in EOS Utility's live view */}

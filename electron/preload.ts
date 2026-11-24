@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     ipcRenderer.invoke('list-hot-folder-files', folderPath),
   readHotFolderPhoto: (folderPath: string, filename: string): Promise<string | null> =>
     ipcRenderer.invoke('read-hot-folder-photo', { folderPath, filename }),
+  // ── Desktop capture: list windows (for EOS Utility live view) ────
+  getWindowSources: (): Promise<Array<{ id: string; name: string }>> =>
+    ipcRenderer.invoke('get-window-sources'),
 
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)
