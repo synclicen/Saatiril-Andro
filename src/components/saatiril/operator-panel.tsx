@@ -1113,6 +1113,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // (cameraGenRef) so any in-flight getUserMedia can detect that the camera
     // was released during the await and bail out before touching streamRef.
     if (!cameraActive) return
+    // Skip webcam startCamera if EOS Live View is active — EOS Utility
+    // window capture provides the video stream, don't override with webcam.
+    if (eosLiveViewActiveRef.current) return
     const gen = ++cameraGenRef.current
     void startCamera(undefined, gen)
     return () => {
