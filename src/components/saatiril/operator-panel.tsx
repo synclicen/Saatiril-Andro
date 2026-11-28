@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -91,9 +92,158 @@ const THEME = {
 const EOS_LIVE_VIEW_ERRORS: Record<string, string> = {
   'unsupported-platform': 'Live View EOS hanya tersedia di Windows — webcam aktif.',
   'ffmpeg-not-found': 'FFmpeg bawaan Saatiril tidak ditemukan — webcam aktif.',
-  'no-window': 'Window live view EOS/Imaging Edge tidak ditemukan — webcam aktif.',
-  'window-not-found': 'Window kamera tidak ditemukan — webcam aktif.',
+  'no-window': 'Window live view kamera tidak ditemukan — webcam aktif.',
+  'live-view-closed': 'Window live view kamera belum terbuka — webcam aktif.',
+  'window-not-found': 'Window yang dipilih sudah tidak ada — webcam aktif.',
   'capture-failed': 'EOS Live View gagal — webcam aktif.',
+}
+
+// One entry of the window picker (electron/ffmpeg-capture.ts → listCaptureWindows).
+type EosPickerWindow = { id: string; name: string; rank: number; thumbnail?: string }
+
+// Ranks the main process starts without asking (AUTO_START_MAX_RANK there):
+// a live view window, or Imaging Edge's remote shooting window "Remote".
+const EOS_LIKELY_LIVE_VIEW_MAX_RANK = 1
+
+// ─── EOS live view: window picker ─────────────────────────────────────────
+// Fallback of the automatic window detection: a preview of every open
+// window, the likely live view windows first. Shown in a portal so the panel
+// it is opened from cannot clip it.
+function EosWindowPicker({ hint, windows, busy, error, canRetry, onPick, onRefresh, onRetry, onClose }: {
+  hint: string
+  windows: EosPickerWindow[] | null // null = still reading the list
+  busy: string // title of the window being started
+  error: string
+  canRetry: boolean // nothing is running → the automatic start can be repeated
+  onPick: (name: string) => void
+  onRefresh: () => void
+  onRetry: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const buttonClass =
+    'rounded px-3 py-1.5 text-[11px] font-bold cursor-pointer transition-colors hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed'
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(10, 4, 24, 0.85)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl max-h-[92vh] flex flex-col rounded-xl overflow-hidden"
+        style={{ backgroundColor: THEME.panel, border: `1px solid ${THEME.border}` }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${THEME.border}` }}>
+          <div className="min-w-0">
+            <div className="text-sm font-bold text-white">Pilih window live view kamera</div>
+            <div className="text-[11px] mt-0.5" style={{ color: THEME.muted }}>
+              {hint || 'Klik gambar window yang menampilkan live view kamera.'}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            title="Tutup"
+            className="shrink-0 cursor-pointer rounded p-1 hover:bg-white/10"
+            style={{ color: THEME.muted }}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div
+            className="mx-4 mt-3 px-3 py-1.5 rounded text-[11px]"
+            style={{ backgroundColor: `${THEME.red}22`, color: THEME.red, border: `1px solid ${THEME.red}66` }}
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {windows === null ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm" style={{ color: THEME.muted }}>
+              <Loader2 className="size-4 animate-spin" /> Membaca daftar window...
+            </div>
+          ) : windows.length === 0 ? (
+            <div className="py-10 text-center text-sm" style={{ color: THEME.muted }}>
+              Tidak ada window lain yang bisa ditangkap.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {windows.map((w) => {
+                const likely = w.rank <= EOS_LIKELY_LIVE_VIEW_MAX_RANK
+                const title = w.name.length > 48 ? w.name.slice(0, 47) + '…' : w.name
+                return (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => onPick(w.name)}
+                    disabled={busy !== ''}
+                    title={w.name}
+                    className="flex flex-col rounded-lg overflow-hidden text-left cursor-pointer transition-colors hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: THEME.bg, border: `1px solid ${likely ? THEME.emerald : THEME.border}` }}
+                  >
+                    <div className="w-full aspect-video flex items-center justify-center" style={{ backgroundColor: '#000' }}>
+                      {w.thumbnail ? (
+                        <img src={w.thumbnail} alt={w.name} draggable={false} className="w-full h-full object-contain" />
+                      ) : (
+                        <Monitor className="size-6" style={{ color: THEME.muted }} />
+                      )}
+                    </div>
+                    <div className="px-2 py-1.5 flex items-center gap-1.5 min-w-0">
+                      {busy === w.name ? (
+                        <Loader2 className="size-3 shrink-0 animate-spin" style={{ color: THEME.emerald }} />
+                      ) : likely ? (
+                        <Check className="size-3 shrink-0" style={{ color: THEME.emerald }} />
+                      ) : null}
+                      <span className="text-[10px] font-semibold truncate" style={{ color: likely ? THEME.emerald : THEME.muted }}>
+                        {title}
+                      </span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3" style={{ borderTop: `1px solid ${THEME.border}` }}>
+          <button
+            onClick={onRefresh}
+            disabled={busy !== ''}
+            className={buttonClass}
+            style={{ backgroundColor: THEME.card, color: THEME.muted, border: `1px solid ${THEME.border}` }}
+          >
+            Segarkan
+          </button>
+          {canRetry && (
+            <button
+              onClick={onRetry}
+              disabled={busy !== ''}
+              className={buttonClass}
+              style={{ backgroundColor: `${THEME.cyan}22`, color: THEME.cyan, border: `1px solid ${THEME.cyan}` }}
+            >
+              Coba Lagi (Otomatis)
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            disabled={busy !== ''}
+            className={buttonClass}
+            style={{ backgroundColor: THEME.card, color: THEME.muted, border: `1px solid ${THEME.border}` }}
+          >
+            Batal
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── Shutter mode types ────────────────────────────────────────────────────
@@ -679,9 +829,15 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const [hotFolderPath, setHotFolderPath] = useState('')
   const [hotFolderLastFile, setHotFolderLastFile] = useState('') // last processed filename
   const [hotFolderStatus, setHotFolderStatus] = useState('') // status message
-  const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // EOS Utility window capture
+  const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // camera software live view capture
   const eosLiveViewActiveRef = useRef(false)
   const [eosLiveViewMjpegUrl, setEosLiveViewMjpegUrl] = useState<string | null>(null)
+  // Window picker: opened when no live view window could be started by
+  // itself, or when the operator wants another window than the one shown.
+  const [eosPicker, setEosPicker] = useState<{ open: boolean; hint: string }>({ open: false, hint: '' })
+  const [eosPickerWindows, setEosPickerWindows] = useState<EosPickerWindow[] | null>(null)
+  const [eosPickerError, setEosPickerError] = useState('')
+  const [eosPickerBusy, setEosPickerBusy] = useState('')
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1990,12 +2146,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const handleHotFolderCaptureRef = useRef(handleHotFolderCapture)
   useEffect(() => { handleHotFolderCaptureRef.current = handleHotFolderCapture }, [handleHotFolderCapture])
 
-  // ── EOS Utility live view: FFmpeg captures the EOS window ───────────
-  // The main process grabs the EOS Utility / Imaging Edge live view window
-  // with FFmpeg (gdigrab) and streams it to the <img> in renderCameraView,
-  // while the webcam <video> stays hidden and released. The button is a
-  // toggle: a second click stops the capture, and the camera effect
-  // (dependency eosLiveViewActive) restarts the webcam.
+  // ── EOS live view: FFmpeg captures the camera software's live view window ──
+  // The main process grabs the live view window of Imaging Edge ("Remote") or
+  // EOS Utility ("Remote Live View") with FFmpeg (gdigrab) and streams it to
+  // the <img> in renderCameraView, while the webcam <video> stays hidden and
+  // released. The button is a toggle: a second click stops the capture, and
+  // the camera effect (dependency eosLiveViewActive) restarts the webcam.
   const eosLiveViewOff = useCallback((status: string) => {
     eosLiveViewActiveRef.current = false
     setEosLiveViewActive(false)
@@ -2007,9 +2163,31 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // still starting must not apply the stale result afterwards.
   const eosLiveViewFlowRef = useRef(0)
 
-  const captureEosLiveView = useCallback(async () => {
+  // eosLiveViewOn(): applies a running capture, however it was started
+  // (found automatically or picked in the window picker).
+  const eosLiveViewOn = useCallback((title: string, url: string) => {
+    eosLiveViewActiveRef.current = true
+    setEosLiveViewMjpegUrl(url)
+    setEosLiveViewActive(true)
+    setCameraAvailable(true)
+    setHotFolderStatus('EOS Live: ' + (title.length > 26 ? title.slice(0, 26) + '…' : title))
+  }, [])
+
+  // captureEosLiveView({ pick: true }): the operator says the window being
+  // shown is the wrong one → open the picker without stopping the capture.
+  const captureEosLiveView = useCallback(async (options?: { pick?: boolean }) => {
     const api = (window as any).saatirilAPI
     const flow = ++eosLiveViewFlowRef.current
+
+    if (options?.pick) {
+      if (!api?.ffmpegCaptureStart || !api?.ffmpegCaptureWindows) {
+        alert('Memilih window hanya tersedia di Saatiril Desktop (portable.exe).')
+        return
+      }
+      setEosPickerError('')
+      setEosPicker({ open: true, hint: 'Pilih window yang menampilkan gambar live view kamera.' })
+      return
+    }
 
     // Second click → stop the EOS live view and return to the webcam.
     if (eosLiveViewActiveRef.current) {
@@ -2022,25 +2200,21 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       return
     }
     eosLiveViewActiveRef.current = true // keeps the webcam off while FFmpeg starts
-    setHotFolderStatus('Mencari window EOS/Imaging Edge...')
+    setHotFolderStatus('Mencari window live view kamera...')
     try {
-      // Resolves as soon as the first frame arrived (window found by its
-      // real title, or picked by the user in a native dialog) — or with an
-      // error code when no camera window could be captured.
+      // Resolves as soon as the first frame arrived — or with an error code
+      // and the reason in `detail` when no live view window could be started.
       const result = await api.ffmpegCaptureStart()
       if (flow !== eosLiveViewFlowRef.current) return
       if (result?.success && result.url) {
         const title = String(result.title || '')
-        setEosLiveViewMjpegUrl(result.url)
-        setEosLiveViewActive(true)
-        setCameraAvailable(true)
-        setHotFolderStatus('EOS Live: ' + (title.length > 26 ? title.slice(0, 26) + '…' : title))
+        eosLiveViewOn(title, result.url)
         console.log('[EOS Live View] started:', title, '→', result.url)
         toast({
           title: 'Live View EOS aktif',
           description:
             'Biarkan window live view kamera terbuka dan tidak tertutup jendela lain. ' +
-            'Klik tombolnya lagi untuk kembali ke webcam.',
+            'Kalau yang tampil bukan gambar kamera, klik "Pilih window lain".',
         })
         return
       }
@@ -2048,13 +2222,109 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       await api.ffmpegCaptureStop?.().catch(() => {})
       if (flow !== eosLiveViewFlowRef.current) return
       eosLiveViewOff(EOS_LIVE_VIEW_ERRORS[result?.error as string] || 'EOS Live View gagal — webcam aktif.')
+      // Another window only helps when the app itself can capture: offer the
+      // picker with the main process's reason as the hint (what is open, what is not).
+      const pickable =
+        typeof api.ffmpegCaptureWindows === 'function' &&
+        result?.error !== 'unsupported-platform' && result?.error !== 'ffmpeg-not-found'
+      if (pickable) {
+        setEosPickerError('')
+        setEosPicker({ open: true, hint: String(result?.detail || '') })
+      }
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
       await api.ffmpegCaptureStop?.().catch(() => {})
       if (flow !== eosLiveViewFlowRef.current) return
       eosLiveViewOff('EOS Live View gagal — webcam aktif.')
     }
-  }, [eosLiveViewOff, toast])
+  }, [eosLiveViewOff, eosLiveViewOn, toast])
+
+  // ── Window picker (no live view window found / wrong window shown) ──
+  const loadEosPickerWindows = useCallback(async () => {
+    const api = (window as any).saatirilAPI
+    setEosPickerWindows(null)
+    try {
+      const list = await api?.ffmpegCaptureWindows?.()
+      setEosPickerWindows(Array.isArray(list) ? list : [])
+    } catch (e) {
+      console.error('[EOS Live View] listing windows failed:', e)
+      setEosPickerWindows([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (eosPicker.open) void loadEosPickerWindows()
+  }, [eosPicker.open, loadEosPickerWindows])
+
+  const closeEosPicker = useCallback(async () => {
+    setEosPicker({ open: false, hint: '' })
+    setEosPickerError('')
+    // A capture that was showing before the picker opened may have been
+    // replaced by a failed attempt — do not keep a dead stream on screen.
+    if (!eosLiveViewActiveRef.current) return
+    const url = await (window as any).saatirilAPI?.ffmpegCaptureUrl?.().catch(() => null)
+    if (eosLiveViewActiveRef.current && !url) eosLiveViewOff('EOS Live View berhenti — webcam aktif.')
+  }, [eosLiveViewOff])
+
+  const pickEosWindow = useCallback(async (name: string) => {
+    const api = (window as any).saatirilAPI
+    if (!api?.ffmpegCaptureStart || eosPickerBusy) return
+    const flow = ++eosLiveViewFlowRef.current
+    setEosPickerBusy(name)
+    setEosPickerError('')
+    try {
+      const result = await api.ffmpegCaptureStart(name)
+      if (flow !== eosLiveViewFlowRef.current) return
+      if (result?.success && result.url) {
+        eosLiveViewOn(name, result.url)
+        setEosPicker({ open: false, hint: '' })
+        toast({
+          title: 'Live View EOS aktif',
+          description: `Menampilkan window "${name}". Biarkan window itu terbuka dan tidak tertutup jendela lain.`,
+        })
+        return
+      }
+      console.warn('[EOS Live View] picked window failed:', name, result?.error, result?.detail)
+      await api.ffmpegCaptureStop?.().catch(() => {})
+      if (flow !== eosLiveViewFlowRef.current) return
+      setEosPickerError(
+        `Window "${name}" tidak bisa ditangkap. ` + (EOS_LIVE_VIEW_ERRORS[result?.error as string] || 'Pilih window lain.'),
+      )
+      // The capture that was showing before is gone (the attempt replaced it).
+      if (eosLiveViewActiveRef.current && !(await api.ffmpegCaptureUrl?.().catch(() => null))) {
+        eosLiveViewOff('EOS Live View berhenti — webcam aktif.')
+      }
+    } catch (e) {
+      console.error('[EOS Live View] pick failed:', e)
+      if (flow !== eosLiveViewFlowRef.current) return
+      setEosPickerError(`Window "${name}" tidak bisa ditangkap: ${(e as Error).message}`)
+    } finally {
+      setEosPickerBusy('')
+    }
+  }, [eosLiveViewOff, eosLiveViewOn, eosPickerBusy, toast])
+
+  // Rendered in both layouts (mobile / desktop), in a portal on <body>.
+  const renderEosPicker = () =>
+    eosPicker.open
+      ? createPortal(
+          <EosWindowPicker
+            hint={eosPicker.hint}
+            windows={eosPickerWindows}
+            busy={eosPickerBusy}
+            error={eosPickerError}
+            canRetry={!eosLiveViewActive}
+            onPick={(name) => { void pickEosWindow(name) }}
+            onRefresh={() => { void loadEosPickerWindows() }}
+            onRetry={() => {
+              setEosPicker({ open: false, hint: '' })
+              setEosPickerError('')
+              void captureEosLiveView()
+            }}
+            onClose={() => { void closeEosPicker() }}
+          />,
+          document.body,
+        )
+      : null
 
   // The capture stopped on its own (EOS window closed, FFmpeg crashed or
   // stalled) → drop the stream; the camera effect restores the webcam.
@@ -2705,12 +2975,24 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             title={
               eosLiveViewActive
                 ? 'Klik untuk menghentikan Live View EOS dan kembali ke webcam.'
-                : 'Tangkap window live view EOS Utility / Imaging Edge dan tampilkan di sini (webcam dimatikan sementara). ' +
-                  'Window live view kamera harus terbuka dan tidak tertutup jendela lain. Klik lagi untuk berhenti.'
+                : 'Tangkap window live view kamera (Imaging Edge "Remote" / EOS Utility "Remote Live View") dan tampilkan di sini — webcam dimatikan sementara. ' +
+                  'Buka dulu window live view-nya dan jangan biarkan tertutup jendela lain. Klik lagi untuk berhenti.'
             }
           >
             <Monitor className="size-2.5 mr-1 inline" />
             {eosLiveViewActive ? 'EOS Live View Aktif ✓' : 'Live View dari EOS'}
+          </button>
+        )}
+        {/* EOS Live View: the wrong window is showing → pick the right one
+            (the capture keeps running until another window was chosen) */}
+        {hotFolderEnabled && eosLiveViewActive && (
+          <button
+            onClick={() => { void captureEosLiveView({ pick: true }) }}
+            className="w-full mt-0.5 rounded py-0.5 text-[8px] underline cursor-pointer hover:bg-white/5"
+            style={{ color: THEME.muted }}
+            title="Kalau yang tampil bukan gambar live view kamera, pilih sendiri window yang benar."
+          >
+            Bukan window ini? Pilih window lain
           </button>
         )}
         {/* Hot Folder: ratio guide — shows the target aspect ratio */}
@@ -3835,6 +4117,7 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
             </div>
           )}
         </div>
+        {renderEosPicker()}
       </div>
     )
   }
@@ -4080,6 +4363,8 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
       </ResizablePanelGroup>
           {renderMonitorLock()}
       {renderLockToggle()}
+      {/* EOS live view: window picker (portal on <body>) */}
+      {renderEosPicker()}
 </div>
       
   )

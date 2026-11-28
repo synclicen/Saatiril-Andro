@@ -32,11 +32,13 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   setEosDisplayHandler: (): Promise<boolean> =>
     ipcRenderer.invoke('set-eos-display-handler'),
   // ── FFmpeg window capture (EOS Utility / Imaging Edge live view) ──
-  // ffmpegCaptureStart(): the main process finds the EOS live view window
-  // by its real title (or asks the user to pick it), starts FFmpeg gdigrab
-  // and resolves once the first frame arrived — or with success=false and
-  // an error code: unsupported-platform | ffmpeg-not-found | no-window |
-  // window-not-found | capture-failed.
+  // ffmpegCaptureStart(windowTitle?): the main process finds the live view
+  // window by its real title (Imaging Edge "Remote", "Remote Live View", …)
+  // or captures the title that was picked with ffmpegCaptureWindows(), starts
+  // FFmpeg gdigrab and resolves once the first frame arrived — or with
+  // success=false and an error code: unsupported-platform | ffmpeg-not-found
+  // | no-window | live-view-closed | window-not-found | capture-failed
+  // (`detail` says what is open and what is not).
   ffmpegCaptureStart: (windowTitle?: string): Promise<{
     success: boolean
     url?: string
@@ -45,6 +47,12 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
     detail?: string
   }> => {
     return ipcRenderer.invoke('ffmpeg-capture:start', windowTitle)
+  },
+  // ffmpegCaptureWindows(): the other open windows for the picker, likely
+  // live view windows first: { id, name, rank, thumbnail } — thumbnail is a
+  // small JPEG data URL preview of the window.
+  ffmpegCaptureWindows: (): Promise<Array<{ id: string; name: string; rank: number; thumbnail?: string }>> => {
+    return ipcRenderer.invoke('ffmpeg-capture:windows')
   },
   ffmpegCaptureStop: (): Promise<boolean> => {
     return ipcRenderer.invoke('ffmpeg-capture:stop')

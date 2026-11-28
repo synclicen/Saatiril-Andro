@@ -16,6 +16,11 @@
  *     must stay open while the live view runs — when another window covers
  *     it, the capture shows the covering window instead.
  *
+ * Which window shows the live view is decided from its title
+ * (CAMERA_WINDOW_PATTERNS). When nothing certain is open, the renderer shows
+ * a picker with a preview of every window (listCaptureWindows) and starts the
+ * chosen title — the camera software's start page is never captured by itself.
+ *
  * ffmpeg.exe ships with the app (package.json → build.extraResources).
  *
  * Electron is required lazily (inside the functions) so the stream parts
@@ -23,7 +28,7 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
-import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from 'electron'
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
@@ -31,7 +36,8 @@ import * as path from 'path'
 export type CaptureErrorCode =
   | 'unsupported-platform' // gdigrab only exists on Windows
   | 'ffmpeg-not-found' // bundled ffmpeg.exe missing and no ffmpeg on PATH
-  | 'no-window' // no camera software window found / user cancelled the pick dialog
+  | 'no-window' // no window of the camera software found
+  | 'live-view-closed' // camera software is open, but its live view window is not
   | 'window-not-found' // gdigrab found no window with that exact title
   | 'capture-failed' // anything else: ffmpeg error, no frames
 
@@ -45,6 +51,18 @@ export interface CaptureResult {
   error?: CaptureErrorCode
   /** error text (ffmpeg's own message when there is one); set when !success */
   detail?: string
+}
+
+/** One open window of the window picker. */
+export interface CaptureWindow {
+  /** desktopCapturer source id (information only — gdigrab is started by title) */
+  id: string
+  /** window title */
+  name: string
+  /** index in CAMERA_WINDOW_PATTERNS; CAMERA_WINDOW_PATTERNS.length = not camera software */
+  rank: number
+  /** small JPEG data URL preview; only when a thumbnail width was requested */
+  thumbnail?: string
 }
 
 /** Pushed to the renderer when a running capture stops on its own. */
@@ -74,18 +92,24 @@ const FFMPEG_EXE = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
 const LOG = '[FFmpeg Capture]'
 
 // ── Window titles ───────────────────────────────────────────────────────
-// Ordered from "certainly the live view" to "possibly related". Only the
-// first tiers start automatically; the camera-brand tier just leads the
-// pick dialog list (a browser tab about a Canon camera lives there too).
+// Ordered from "certainly the live view" to "belongs to the camera software".
+// Camera software does not call its live view window "live view": Imaging
+// Edge (Sony / Canon) names it just "Remote", EOS Utility "Remote Live View".
+// Its start page is a trap — Imaging Edge's launcher ("Imaging Edge") only
+// offers Remote / Viewer / Edit and never shows a picture — so it is
+// recognised (to explain what is missing) but never captured by itself.
+// The camera-brand tier is no live view either: it only leads the picker.
 const CAMERA_WINDOW_PATTERNS: RegExp[] = [
-  /^remote live view/i, // EOS Utility / Imaging Edge live view window
-  /live ?view/i,
-  /eos utility|imaging edge/i,
-  /remote (shooting|capture)/i,
+  /live ?view/i, // "Remote Live View" (EOS Utility), "Live View"
+  /^remote(\s*[-–—:|].*)?$/i, // remote shooting window of Imaging Edge: "Remote"
+  /eos utility|remote (shooting|capture|control)/i,
+  /imaging edge/i, // start page (Remote / Viewer / Edit) — no live view here
   /\b(canon|eos|nikon|sony|fuji(film)?|panasonic|lumix|olympus)\b/i,
 ]
-const AUTO_START_MAX_RANK = 3
-const PICK_LIST_LIMIT = 10
+/** Windows up to this rank start without asking; the rest only leads the picker. */
+const AUTO_START_MAX_RANK = 1
+const PICK_LIST_LIMIT = 24
+const PICK_THUMBNAIL_WIDTH = 320
 const OWN_WINDOW_RE = /saatiril/i
 const BROWSER_WINDOW_RE = /(google chrome|mozilla firefox|microsoft ?edge|brave|vivaldi|opera)\s*$/i
 
@@ -94,7 +118,7 @@ function cameraWindowRank(title: string): number {
   return index === -1 ? CAMERA_WINDOW_PATTERNS.length : index
 }
 
-/** Camera software windows only, best candidate first. */
+/** Camera software windows only (no browsers, no Saatiril), best candidate first. */
 export function rankCameraWindows(titles: string[]): string[] {
   return titles
     .filter((t) => !OWN_WINDOW_RE.test(t) && !BROWSER_WINDOW_RE.test(t))
@@ -102,23 +126,85 @@ export function rankCameraWindows(titles: string[]): string[] {
     .sort((a, b) => cameraWindowRank(a) - cameraWindowRank(b) || a.localeCompare(b))
 }
 
-/** Real window titles from the OS (empty names and Saatiril's own windows removed). */
-export async function listCaptureWindows(): Promise<string[]> {
+/** The windows that show the live view, in the order they are tried without asking. */
+export function automaticCameraWindows(titles: string[]): string[] {
+  return rankCameraWindows(titles)
+    .filter((t) => cameraWindowRank(t) <= AUTO_START_MAX_RANK)
+    .slice(0, 3)
+}
+
+/**
+ * Why nothing was captured, in words for the operator. The renderer shows
+ * `detail` above its window picker, so it says what to open — not just that
+ * nothing was found.
+ */
+export function explainNoWindow(titles: string[], lastDetail?: string): CaptureResult {
+  const tried = automaticCameraWindows(titles)
+  if (tried.length > 0) {
+    return {
+      success: false,
+      error: 'no-window',
+      detail: `Window live view ditemukan (${tried.join(', ')}), tetapi gambarnya tidak bisa diambil${lastDetail ? `: ${lastDetail}` : '.'}`,
+    }
+  }
+  const cameraWindows = rankCameraWindows(titles)
+  if (cameraWindows.some((t) => /imaging edge/i.test(t))) {
+    return {
+      success: false,
+      error: 'live-view-closed',
+      detail:
+        'Imaging Edge sudah terbuka, tetapi window "Remote" belum. ' +
+        'Klik "Remote" di jendela Imaging Edge, tunggu sampai gambar kamera muncul, lalu coba lagi.',
+    }
+  }
+  if (cameraWindows.length > 0) {
+    return {
+      success: false,
+      error: 'live-view-closed',
+      detail:
+        'Software kamera sudah terbuka, tetapi window yang menampilkan gambar kamera belum. ' +
+        'Buka layar live view / remote shooting di software kamera, lalu coba lagi.',
+    }
+  }
+  return {
+    success: false,
+    error: 'no-window',
+    detail:
+      'Window software kamera (Imaging Edge / EOS Utility) tidak ditemukan. ' +
+      'Buka software-nya dan tampilkan live view kameranya, lalu coba lagi.',
+  }
+}
+
+/**
+ * Open windows with their rank, best candidates first. Saatiril's own
+ * windows are left out. Without a thumbnail width only the titles are read;
+ * with one, every window comes with a small JPEG preview for the picker.
+ */
+export async function listCaptureWindows(thumbnailWidth = 0): Promise<CaptureWindow[]> {
   try {
     const { desktopCapturer } = require('electron') as typeof import('electron')
     const sources = await desktopCapturer.getSources({
       types: ['window'],
-      thumbnailSize: { width: 0, height: 0 },
+      thumbnailSize: { width: thumbnailWidth, height: Math.round((thumbnailWidth * 9) / 16) },
       fetchWindowIcons: false,
     })
-    const titles: string[] = []
+    const windows: CaptureWindow[] = []
     for (const source of sources) {
       const name = String(source?.name || '').trim()
-      if (name && !OWN_WINDOW_RE.test(name) && !BROWSER_WINDOW_RE.test(name) && !titles.includes(name)) {
-        titles.push(name)
-      }
+      // gdigrab addresses a window by title: two windows with the same title are one choice.
+      if (!name || OWN_WINDOW_RE.test(name) || windows.some((w) => w.name === name)) continue
+      const thumbnail = source.thumbnail
+      windows.push({
+        id: String(source.id),
+        name,
+        // a browser tab about a camera is not camera software
+        rank: BROWSER_WINDOW_RE.test(name) ? CAMERA_WINDOW_PATTERNS.length : cameraWindowRank(name),
+        ...(thumbnailWidth > 0 && thumbnail && !thumbnail.isEmpty()
+          ? { thumbnail: `data:image/jpeg;base64,${thumbnail.toJPEG(60).toString('base64')}` }
+          : {}),
+      })
     }
-    return titles
+    return windows.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name))
   } catch (e) {
     console.error(`${LOG} listing windows failed:`, (e as Error).message)
     return []
@@ -492,50 +578,14 @@ export async function startMjpegCapture(ffmpegPath: string, args: string[], titl
   })
 }
 
-// ── Window picker ───────────────────────────────────────────────────────
-async function pickWindowDialog(candidates: string[], parent: BrowserWindow | null): Promise<string | null> {
-  const { dialog } = require('electron') as typeof import('electron')
-  const safeParent = parent && !parent.isDestroyed() ? parent : null
-  const show = (options: Electron.MessageBoxOptions) =>
-    safeParent ? dialog.showMessageBox(safeParent, options) : dialog.showMessageBox(options)
-
-  if (candidates.length === 0) {
-    await show({
-      type: 'warning',
-      buttons: ['OK'],
-      defaultId: 0,
-      noLink: true,
-      title: 'EOS Live View',
-      message: 'Window kamera tidak ditemukan.',
-      detail:
-        'Buka dulu window live view di EOS Utility / Imaging Edge (mis. klik "Remote Live View"), ' +
-        'lalu klik "Live View dari EOS" lagi.',
-    })
-    return null
-  }
-
-  const list = candidates.slice(0, PICK_LIST_LIMIT)
-  const label = (t: string) => (t.length > 60 ? `${t.slice(0, 59)}…` : t)
-  const { response } = await show({
-    type: 'question',
-    buttons: [...list.map(label), 'Batal'],
-    defaultId: 0,
-    cancelId: list.length,
-    noLink: true,
-    title: 'EOS Live View',
-    message: 'Window live view kamera tidak terdeteksi otomatis.',
-    detail:
-      'Pilih window EOS Utility / Imaging Edge yang menampilkan live view kamera — biasanya bernama "Remote Live View".',
-  })
-  return response >= 0 && response < list.length ? list[response] : null
-}
-
 /**
- * Start the EOS live view. Without a title the camera window is found by
- * its real OS title (best match first); when nothing matches, the user
- * picks it from a native dialog.
+ * Start the live view. Without a title the camera window is found by its
+ * real OS title — windows that show the live view only, best match first
+ * (see CAMERA_WINDOW_PATTERNS). When nothing could be started the result
+ * carries the reason in `detail`; the renderer then offers its window
+ * picker, and a picked title comes back here as it is.
  */
-export async function startWindowCapture(windowTitle?: string, parent: BrowserWindow | null = null): Promise<CaptureResult> {
+export async function startWindowCapture(windowTitle?: string): Promise<CaptureResult> {
   if (process.platform !== 'win32') {
     return { success: false, error: 'unsupported-platform', detail: 'Pengambilan window (gdigrab) hanya tersedia di Windows.' }
   }
@@ -547,36 +597,36 @@ export async function startWindowCapture(windowTitle?: string, parent: BrowserWi
   // A title the user picked is used as is — no guessing.
   if (windowTitle) return startMjpegCapture(ffmpeg.path, gdigrabArgs(windowTitle), windowTitle)
 
-  const ranked = rankCameraWindows(await listCaptureWindows())
-  const automatic = ranked.filter((t) => cameraWindowRank(t) <= AUTO_START_MAX_RANK).slice(0, 3)
-  console.log(`${LOG} camera windows: ${ranked.map((t) => JSON.stringify(t)).join(', ') || '(none)'} — trying ${automatic.length}`)
+  const titles = (await listCaptureWindows()).map((w) => w.name)
+  const automatic = automaticCameraWindows(titles)
+  console.log(
+    `${LOG} camera windows: ${rankCameraWindows(titles).map((t) => JSON.stringify(t)).join(', ') || '(none)'} — trying ${automatic.map((t) => JSON.stringify(t)).join(', ') || 'none'}`,
+  )
   let lastDetail: string | undefined
   for (const title of automatic) {
     const result = await startMjpegCapture(ffmpeg.path, gdigrabArgs(title), title)
     if (result.success) return result
     lastDetail = result.detail
   }
-
-  // Nothing started by itself → let the user pick the window from the real list.
-  const picked = await pickWindowDialog(ranked, parent)
-  if (!picked) return { success: false, error: 'no-window', detail: lastDetail }
-  return startMjpegCapture(ffmpeg.path, gdigrabArgs(picked), picked)
+  return explainNoWindow(titles, lastDetail)
 }
 
 // ── IPC ─────────────────────────────────────────────────────────────────
 export function registerFfmpegCaptureIpc(ipcMain: IpcMain): void {
-  const { BrowserWindow } = require('electron') as typeof import('electron')
-
-  ipcMain.handle('ffmpeg-capture:start', async (event: IpcMainInvokeEvent, windowTitle?: string) => {
-    const parent = BrowserWindow.fromWebContents(event.sender)
+  ipcMain.handle('ffmpeg-capture:start', async (_event: IpcMainInvokeEvent, windowTitle?: string) => {
+    const title = typeof windowTitle === 'string' && windowTitle.trim() ? windowTitle.trim() : undefined
     try {
-      const title = typeof windowTitle === 'string' && windowTitle.trim() ? windowTitle.trim() : undefined
-      return await startWindowCapture(title, parent)
+      return await startWindowCapture(title)
     } catch (e) {
       console.error(`${LOG} start failed:`, (e as Error).message)
       return { success: false, error: 'capture-failed', detail: (e as Error).message }
     }
   })
+
+  // Window list for the picker: likely live view windows first, each with a preview.
+  ipcMain.handle('ffmpeg-capture:windows', async () =>
+    (await listCaptureWindows(PICK_THUMBNAIL_WIDTH)).slice(0, PICK_LIST_LIMIT),
+  )
 
   ipcMain.handle('ffmpeg-capture:stop', async () => {
     stopWindowCapture()

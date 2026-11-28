@@ -124,6 +124,48 @@ jobs:
             echo "NOTE: gdigrab could not capture the runner desktop — informational only."
           fi
           rm -f "$OUT"
+      # The live view window is chosen by its title (CAMERA_WINDOW_PATTERNS in
+      # electron/ffmpeg-capture.ts): Imaging Edge's start page ("Imaging Edge")
+      # must never be captured while its remote shooting window ("Remote")
+      # shows the live view. Checked with the compiled module — the window
+      # decision and the MJPEG pipeline here, against two real windows below.
+      - name: Capture module tests (window selection, MJPEG pipeline)
+        shell: bash
+        run: node electron/tests/ffmpeg-capture.test.js electron/ffmpeg-capture.js node_modules/ffmpeg-static/ffmpeg.exe
+      # Real windows "Imaging Edge" / "Remote" + the bundled ffmpeg.exe: the
+      # capture must show "Remote" (green), a title picked by hand that window.
+      # Informational for now: a runner without a usable desktop must not
+      # block the release — the result goes into the job summary.
+      - name: EOS live view with real windows (Imaging Edge / Remote)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -u
+          OUT="$RUNNER_TEMP/eos-e2e"
+          mkdir -p "$OUT"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File electron/tests/eos-windows.ps1 -Seconds 150 > "$OUT/windows.log" 2>&1 &
+          HELPER=$!
+          FF="$(cygpath -w "$PWD/dist-electron/win-unpacked/resources/ffmpeg/ffmpeg.exe")"
+          node electron/tests/eos-live-view.e2e.js electron/ffmpeg-capture.js "$FF" "$OUT" > "$OUT/e2e.log" 2>&1
+          CODE=$?
+          kill "$HELPER" 2>/dev/null || true
+          cat "$OUT/e2e.log"
+          {
+            echo "### EOS live view with real windows"
+            if [ "$CODE" -eq 0 ]; then echo "PASS — the capture showed the window \"Remote\"."; else echo "FAILED (exit $CODE) — informational, does not block the release."; fi
+            echo '```'
+            cat "$OUT/e2e.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "e2e exit code: $CODE"
+          exit $CODE
+      - name: Upload EOS live view test frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eos-live-view-e2e
+          path: ${{ runner.temp }}/eos-e2e
+          if-no-files-found: ignore
       - name: Upload to releases
         shell: bash
         env:
