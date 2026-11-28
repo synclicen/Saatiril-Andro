@@ -118,7 +118,8 @@ const EOS_LIKELY_LIVE_VIEW_MAX_RANK = 1
 // window's own interface is re-captured pixel-identically every frame — dark
 // or bright — so a change test finds the picture where a brightness test
 // (tried before) misread a dark scene as margins and zoomed into its subject.
-type EosCrop = { sx: number; sy: number; sw: number; sh: number; nw: number; nh: number } | null
+type EosArea = { sx: number; sy: number; sw: number; sh: number; nw: number; nh: number }
+type EosCrop = EosArea | null
 type EosFrameSample = { nw: number; nh: number; w: number; h: number; lum: Uint8ClampedArray }
 
 // the grid two frames are compared on: fine enough that the noise of a live
@@ -128,9 +129,16 @@ const EOS_CROP_SAMPLE_PX = 480
 // is re-compressed identically frame to frame and stays 0; the noise of a
 // live camera is ±1…3 even on a completely still scene.
 const EOS_CROP_DIFF = 1
-// a live display area never covers only a sliver of the window; a smaller
+// A live display area never covers only a sliver of the window; a smaller
 // find is rejected and the untrimmed view is kept
 const EOS_CROP_MIN_FRACTION = 0.2
+// A measurement far from what is on screen is only applied once this many
+// consecutive pairs propose the same area: the camera software's own UI gets
+// busy right after a shot (a thumbnail drops into the film strip, reviewing
+// the strip scrolls it) and must not bring the black margins back; a real
+// layout change, in turn, is proposed again every second and applies after
+// this many seconds.
+const EOS_CROP_CONFIRM_PAIRS = 6
 
 /** Draws the current live frame onto the comparison grid. */
 function sampleEosFrame(img: HTMLImageElement): EosFrameSample | null {
@@ -2311,17 +2319,65 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     setHotFolderStatus('EOS Live: ' + (title.length > 26 ? title.slice(0, 26) + '…' : title))
   }, [])
 
-  // ── EOS live view: trim the black margins of the captured window ──
-  // The stream shows the whole window (title bar, panels, black letterbox
-  // around the camera picture). The picture area is re-measured while the
-  // stream runs — the camera software's layout may change any time.
   // ── EOS live view: show only the live display area of the captured window ──
   // Two live frames a second apart are compared; the area that changed is the
   // camera's display area, and only that is displayed, centred like the saved
   // photo. The measured area is re-checked every second — the window layout
-  // may change any time — and the last good one is kept while the stream
-  // gives nothing measurable (a frozen live view keeps its layout).
+  // may change any time.
+  // The camera software's own UI is busy right around a shot too (a new
+  // thumbnail drops into the film strip, reviewing the strip scrolls it), and
+  // a naive measurement then spans that UI as well — the black margins come
+  // back, just after a photo. So a measurement far from what is on screen is
+  // applied only once it holds for EOS_CROP_CONFIRM_PAIRS pairs, while the
+  // last good area stays on screen; a return to a recently shown area (the
+  // strip went quiet again) applies at once. While the stream gives nothing
+  // measurable — a frozen live view keeps its layout — the last good area is
+  // kept as well, and so is one across a stream restart of the same size
+  // (the capture re-binds to the same window).
+  const eosCropRef = useRef<EosCrop>(null)           // mirrors the applied crop
+  const eosPendingRef = useRef<{ area: EosArea; count: number } | null>(null)
+  const eosAreaMemoryRef = useRef<EosArea[]>([])      // the last two distinct areas
   const eosPrevSampleRef = useRef<EosFrameSample | null>(null)
+
+  const applyEosCrop = useCallback((next: EosArea | null) => {
+    const stored = eosCropRef.current
+    if (!next) {
+      eosPendingRef.current = null // nothing measurable → keep the last good area
+      return
+    }
+    if (!stored) {
+      // the first measurement of this stream
+    } else {
+      const close = (a: EosArea, b: EosArea) =>
+        a.nw === b.nw && a.nh === b.nh
+        && Math.abs(a.sx - b.sx) <= a.nw * 0.02 && Math.abs(a.sy - b.sy) <= a.nh * 0.02
+        && Math.abs(a.sw - b.sw) <= a.nw * 0.02 && Math.abs(a.sh - b.sh) <= a.nh * 0.02
+      if (close(stored, next)) {
+        eosPendingRef.current = null // the same area — keep the position stable
+        return
+      }
+      const big = (a: EosArea, b: EosArea) =>
+        Math.abs(a.sx - b.sx) > a.nw * 0.25 || Math.abs(a.sy - b.sy) > a.nh * 0.25
+        || Math.abs(a.sw - b.sw) > a.nw * 0.25 || Math.abs(a.sh - b.sh) > a.nh * 0.25
+      if (eosAreaMemoryRef.current.some((a) => close(a, next))) {
+        // back to a recently shown area (the camera software's UI went
+        // quiet again) — apply at once
+      } else if (big(stored, next)) {
+        // a far measurement: apply only once it holds, pair after pair
+        const pending = eosPendingRef.current
+        const count = pending && close(pending.area, next) ? pending.count + 1 : 1
+        eosPendingRef.current = { area: next, count }
+        if (count < EOS_CROP_CONFIRM_PAIRS) return
+      }
+      // a small move applies at once — push what was on screen to the memory
+      const memory = eosAreaMemoryRef.current.filter((a) => !close(a, stored))
+      memory.unshift(stored)
+      eosAreaMemoryRef.current = memory.slice(0, 2)
+    }
+    eosPendingRef.current = null
+    eosCropRef.current = next
+    setEosCrop(next)
+  }, [])
 
   const runEosCropDetection = useCallback(() => {
     const img = eosLiveImgRef.current
@@ -2333,27 +2389,22 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     if (!prev || prev.nw !== cur.nw || prev.nh !== cur.nh) {
       // first sample, or the stream changed size (the window was resized):
       // nothing to compare yet — and a stored area of the old size is void
-      setEosCrop((stored) => (stored && (stored.nw !== cur.nw || stored.nh !== cur.nh) ? null : stored))
+      const stored = eosCropRef.current
+      if (stored && (stored.nw !== cur.nw || stored.nh !== cur.nh)) {
+        eosCropRef.current = null
+        eosPendingRef.current = null
+        eosAreaMemoryRef.current = []
+        setEosCrop(null)
+      }
       return
     }
-    const next = detectEosDisplayArea(prev, cur)
-    setEosCrop((stored) => {
-      if (!next) return stored // nothing measurable → keep the last good area
-      if (stored && stored.nw === next.nw && stored.nh === next.nh) {
-        // keep the position stable against single-pixel jitter of the area
-        const moved = (a: number, b: number, total: number) => Math.abs(a - b) > total * 0.01
-        if (!moved(stored.sx, next.sx, next.nw) && !moved(stored.sy, next.sy, next.nh)
-          && !moved(stored.sw, next.sw, next.nw) && !moved(stored.sh, next.sh, next.nh)) return stored
-      }
-      return next
-    })
-  }, [])
+    applyEosCrop(detectEosDisplayArea(prev, cur))
+  }, [applyEosCrop])
 
   useEffect(() => {
     if (!eosLiveViewMjpegUrl) {
       eosPrevSampleRef.current = null
-      setEosCrop(null)
-      return
+      return // the measured area survives a capture restart of the same size
     }
     const first = window.setTimeout(runEosCropDetection, 300) // first frame decoded by then
     const repeat = window.setInterval(runEosCropDetection, 1000)
@@ -2361,7 +2412,6 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       window.clearTimeout(first)
       window.clearInterval(repeat)
       eosPrevSampleRef.current = null
-      setEosCrop(null)
     }
   }, [eosLiveViewMjpegUrl, runEosCropDetection])
 
