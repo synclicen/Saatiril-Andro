@@ -106,6 +106,11 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
   // (opQueue in operator-panel.tsx) already handles a list of 'sent'
   // students — the operator clicks whichever to photograph next.
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([])
+  // ── Reset & re-send confirmation: shows briefly in the SELESAI column ────
+  // Feedback that the reset student went straight to the operator's queue
+  // (the MC stays on the SELESAI column instead of jumping to ANTREAN).
+  const [resentStudentName, setResentStudentName] = useState('')
+  const resentResetTimerRef = useRef<number | null>(null)
   // ── Mobile/compact: active tab for the 3-section workspace ────────────────
   const [activeTab, setActiveTab] = useState<'antrean' | 'proses' | 'selesai'>('antrean')
 
@@ -601,14 +606,17 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     setSelectedStudentIds([])
   }, [selectedStudents, currentProject, dualPhotoshoot, updateStudentStatus, updateCurrentProject, saveProjectsToStorageNow])
 
-  // ── Photoshoot: reset (for retake)
-  // Clears the student's photoHistory + resets status to 'pending' + emits a
+  // ── Photoshoot: reset (for retake) & send straight back to the operator ──
+  // Clears the student's photoHistory + sets status to 'sent' + emits a
   // dedicated STUDENT_RESET event so operators (and admin) explicitly clear
   // their buffer / active target / photoHistory. This is necessary because
   // the normal SYNC_DB merge (mergeDatabases) BLOCKS status regression
   // (pending priority 0 < sent/done), and preservePhotoHistoryOnSync does
   // not propagate photoHistory deletions — so a reset via SYNC_DB alone would
   // be silently dropped on the receiver side.
+  // The student is then MC_CALLed right away, so the operator's queue shows
+  // them again immediately and the retake can start — the MC no longer has
+  // to hunt them down in ANTREAN and send a second batch by hand.
   const handleResetForRetake = useCallback((student: Student) => {
     const latestProject = useSaatirilStore.getState().currentProject
     if (!latestProject) return
@@ -619,36 +627,63 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     const cleanedPhotoHistory = latestProject.photoHistory.filter(
       (h) => h.student.id !== student.id,
     )
-
+    const newStatus: StudentStatus = 'sent'
     const updatedProject: typeof latestProject = {
       ...latestProject,
       database: latestProject.database.map((s) =>
-        s.id === student.id ? { ...s, status: 'pending' as StudentStatus } : s,
+        s.id === student.id ? { ...s, status: newStatus } : s,
       ),
       photoHistory: cleanedPhotoHistory,
     }
 
-    updateStudentStatus(student.id, 'pending')
+    updateStudentStatus(student.id, newStatus)
     updateCurrentProject(updatedProject)
     saveProjectsToStorageNow()
 
-    // Emit STUDENT_RESET to every relevant channel — this bypasses the merge
-    // priority logic and tells each operator to: clear mcCallBuffer entry,
+    // Emit STUDENT_RESET to every relevant channel FIRST — this bypasses the
+    // merge priority logic and tells each operator to: clear mcCallBuffer entry,
     // clear opCurrentTarget if it matches, remove their photoHistory entry,
     // and set the student status to 'pending' locally.
     const channels = dualPhotoshoot ? [1, 2] : [1]
     for (const ch of channels) {
       emitLocal('STUDENT_RESET', { studentId: student.id, channel: ch })
     }
-    // Also emit SYNC_DB for consistency (photoHistory + status now cleaned)
+
+    // Then MC_CALL the student straight back to the operator(s) — the same
+    // events handleSendBatchToOperator emits, so the operator's queue
+    // (opQueue, fed by mcCallBuffer + the database) shows the student again
+    // right away, ready for the retake.
+    if (dualPhotoshoot) {
+      emitLocal('MC_CALL', {
+        student: { ...student, status: newStatus, assignedChannel: 1 },
+        channel: 1,
+      })
+      emitLocal('MC_CALL', {
+        student: { ...student, status: newStatus, assignedChannel: 2 },
+        channel: 2,
+      })
+    } else {
+      emitLocal('MC_CALL', {
+        student: { ...student, status: newStatus },
+        channel: 1,
+      })
+    }
+
+    // SYNC_DB once at the end (lightweight — photos stripped) so every client
+    // converges on the reset + re-sent state.
     emitLocal('SYNC_DB', { project: stripFrameForSync(updatedProject) })
 
-    // Pre-select the student for easy re-send
-    setSelectedStudent({ ...student, status: 'pending' })
-    setSearchQuery(student.nama)
-    // Switch to ANTREAN tab so MC immediately sees the reset student at the
-    // top of the pending list and can re-send.
-    setActiveTab('antrean')
+    // Stay on the SELESAI column — the student has left it (photoHistory
+    // cleared) and is already in the operator's queue. Clear the selection
+    // (it was only for the reset) so the ANTREAN footer does not preview him
+    // as if he still had to be sent, and tell the MC where the student went.
+    setSelectedStudent(null)
+    if (resentResetTimerRef.current) window.clearTimeout(resentResetTimerRef.current)
+    setResentStudentName(student.nama)
+    resentResetTimerRef.current = window.setTimeout(() => {
+      resentResetTimerRef.current = null
+      setResentStudentName('')
+    }, 2500)
   }, [dualPhotoshoot, updateStudentStatus, updateCurrentProject, saveProjectsToStorageNow])
 
   // ── Render helpers
@@ -1455,14 +1490,19 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
                     {selectedStudent.nim}
                   </p>
                   <p className={`truncate mt-1 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
-                    Klik RESET & KIRIM ULANG untuk memfoto ulang.
+                    Klik RESET & KIRIM ULANG untuk kirim ulang langsung ke operator.
                   </p>
                 </div>
                 {renderCallButton()}
               </>
             ) : (
-              <p className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.muted }}>
-                Klik peserta selesai untuk reset & kirim ulang
+              <p
+                className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`}
+                style={{ color: resentStudentName ? THEME.emerald : THEME.muted }}
+              >
+                {resentStudentName
+                  ? `✓ ${resentStudentName} dikirim ulang ke operator`
+                  : 'Klik peserta selesai untuk reset & kirim ulang'}
               </p>
             )}
           </div>
