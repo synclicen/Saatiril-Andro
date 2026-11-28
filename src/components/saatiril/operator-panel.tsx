@@ -1989,35 +1989,28 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     }
     // Set ref IMMEDIATELY to prevent webcam from overriding
     eosLiveViewActiveRef.current = true
-    setHotFolderStatus('Mencari EOS Utility...')
+    setHotFolderStatus('Pilih window EOS Utility...')
 
     try {
-      // Step 1: Set up auto-select handler in main process
-      // This intercepts getDisplayMedia() and auto-selects EOS Utility window
-      if (api.setEosDisplayHandler) {
-        await api.setEosDisplayHandler()
-        console.log('[EOS Live View] Display handler set')
-      }
-
-      // Step 2: Use getDisplayMedia() — modern Web API for screen capture
-      // This is the recommended approach for Electron 28+ (chromeMediaSource
-      // is deprecated). The handler we set in step 1 auto-selects the window.
-      setHotFolderStatus('Capturing window...')
+      // Use getDisplayMedia() WITHOUT auto-select handler.
+      // This shows the NATIVE screen share picker dialog where the user
+      // manually selects the EOS Utility / Imaging Edge window.
+      // This is the most reliable approach — no guessing which window.
+      setHotFolderStatus('Pilih window di dialog...')
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 30 },
         audio: false,
       })
 
       if (!stream || stream.getVideoTracks().length === 0) {
-        throw new Error('No video track in display media stream')
+        throw new Error('No video track')
       }
 
-      // Log which window was captured
       const track = stream.getVideoTracks()[0]
-      const trackLabel = track.label || track.settings().displaySurface || 'unknown'
-      console.log('[EOS Live View] Stream obtained, label:', trackLabel)
+      const trackLabel = track.label || 'EOS window'
+      console.log('[EOS Live View] Stream obtained:', trackLabel)
 
-      // Step 3: Stop existing stream + attach new one
+      // Stop existing stream + attach new one
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
       }
@@ -2030,27 +2023,24 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       setEosLiveViewActive(true)
       eosLiveViewActiveRef.current = true
       setCameraAvailable(true)
-      setHotFolderStatus('EOS Live: ' + trackLabel.substring(0, 20))
+      setHotFolderStatus('EOS Live: ' + trackLabel.substring(0, 25))
 
-      // Step 4: Handle stream end (user stops sharing or window closes)
+      // Handle stream end
       stream.getVideoTracks()[0].addEventListener('ended', () => {
-        console.log('[EOS Live View] Stream ended')
         eosLiveViewActiveRef.current = false
         setEosLiveViewActive(false)
-        setHotFolderStatus('EOS Live View berhenti. Webcam aktif.')
-        // Restart webcam
+        setHotFolderStatus('EOS berhenti. Webcam aktif.')
         const gen = ++cameraGenRef.current
         void startCamera(undefined, gen)
       })
 
-      // Step 5: Timeout check — if no video data after 3s, revert
+      // Timeout check
       setTimeout(() => {
         const v = videoRef.current
         if (v && (v.videoWidth === 0 || v.videoHeight === 0)) {
-          console.warn('[EOS Live View] No video data after 3s — reverting')
           eosLiveViewActiveRef.current = false
           setEosLiveViewActive(false)
-          setHotFolderStatus('EOS gagal — webcam aktif. Lihat EOS Utility untuk live view.')
+          setHotFolderStatus('EOS gagal — webcam aktif.')
           const gen = ++cameraGenRef.current
           void startCamera(undefined, gen)
         }
@@ -2058,58 +2048,19 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
-      const errMsg = (e as Error).message
-      if (errMsg.includes('Permission denied') || errMsg.includes('denied')) {
-        alert('Izin ditolak. Saatiril butuh izin screen capture untuk menampilkan live view EOS Utility.')
-      } else if (errMsg.includes('Not found') || errMsg.includes('No sources')) {
-        alert('Window EOS Utility tidak ditemukan.\nPastikan EOS Utility terbuka dan menampilkan Remote Live View.')
-      } else {
-        // Fallback: try old chromeMediaSource approach
-        alert('getDisplayMedia gagal: ' + errMsg + '\n\nMencoba metode lama...')
-        await captureEosLiveViewLegacy()
-      }
-      eosLiveViewActiveRef.current = false
-      setHotFolderStatus('Watching...')
-    }
-  }, [])
-
-  // Legacy capture method — uses chromeMediaSource (older Electron)
-  const captureEosLiveViewLegacy = useCallback(async () => {
-    const api = (window as any).saatirilAPI
-    if (!api?.getWindowSources) return
-    try {
-      const sources = await api.getWindowSources()
-      if (!sources || sources.length === 0) return
-      const cameraWindow = sources.find((s: any) =>
-        /eos utility|imaging edge|remote live view|canon|sony|nikon|camera|remote/i.test(s.name)
-      )
-      const targetSource = cameraWindow || sources[0]
-      setHotFolderStatus('Capturing: ' + targetSource.name)
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: targetSource.id,
-          minWidth: 640, maxWidth: 1920, minHeight: 480, maxHeight: 1080,
-        } as any
-      })
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop())
-      }
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play().catch(() => {})
-      }
-      setEosLiveViewActive(true)
-      eosLiveViewActiveRef.current = true
-      setCameraAvailable(true)
-      setHotFolderStatus('EOS Live (legacy): ' + targetSource.name.substring(0, 20))
-    } catch (e) {
-      console.error('[EOS Live View Legacy] Error:', e)
       eosLiveViewActiveRef.current = false
       setEosLiveViewActive(false)
-      setHotFolderStatus('Watching...')
+      const errMsg = (e as Error).message
+      if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowed')) {
+        setHotFolderStatus('Izin ditolak. Webcam aktif.')
+      } else if (errMsg.includes('NotFound') || errMsg.includes('cancelled')) {
+        setHotFolderStatus('Dibatalkan. Webcam aktif.')
+      } else {
+        setHotFolderStatus('EOS gagal: ' + errMsg.substring(0, 30) + '. Webcam aktif.')
+      }
+      // Restart webcam
+      const gen = ++cameraGenRef.current
+      void startCamera(undefined, gen)
     }
   }, [])
 
