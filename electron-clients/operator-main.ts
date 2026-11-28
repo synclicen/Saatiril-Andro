@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, session, Menu, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as http from 'http'
+import { readCompleteJpeg } from '../electron/hotFolder'
 
 let mainWindow: BrowserWindow | null = null
 let localServer: http.Server | null = null
@@ -198,5 +199,32 @@ ipcMain.handle('save-photo', async (_event, data: { base64Data: string; filename
     console.error('[SAATIRIL OP-MAIN] Failed to save photo:', err.message)
     return null
   }
+})
+
+// ── Hot Folder (EOS Utility / Imaging Edge on the OPERATOR PC) ───────────
+// Same contract as the portable's main process (electron/main.ts): the
+// camera writes each .JPG into the watched folder progressively, and only
+// COMPLETE files are handed out — readCompleteJpeg (electron/hotFolder.ts)
+// waits for the JPEG EOI tail and reports 'incomplete' otherwise, so the
+// renderer retries instead of importing a half-written (black ~39 KB) photo.
+ipcMain.handle('list-hot-folder-files', async (_event, folderPath: string) => {
+  try {
+    if (!folderPath || !fs.existsSync(folderPath)) return []
+    const files = fs.readdirSync(folderPath)
+    return files
+      .filter(f => /\.(jpg|jpeg|JPG|JPEG)$/.test(f))
+      .map(f => {
+        const stat = fs.statSync(path.join(folderPath, f))
+        return { filename: f, mtime: stat.mtimeMs }
+      })
+      .sort((a, b) => b.mtime - a.mtime) // newest first
+  } catch (err: any) {
+    console.error('[SAATIRIL OP-MAIN] list-hot-folder-files error:', err.message)
+    return []
+  }
+})
+
+ipcMain.handle('read-hot-folder-photo', async (_event, data: { folderPath: string, filename: string }) => {
+  return readCompleteJpeg(data.folderPath, data.filename)
 })
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
