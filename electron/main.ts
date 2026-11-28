@@ -27,6 +27,7 @@ import { createServer } from 'http'
 import { Server as SocketIOServer } from 'socket.io'
 import { checkLicenseStatus, activateLicense, getMachineId, getDisplayMachineId, generateLicenseCode } from './license'
 import { registerFfmpegCaptureIpc, stopWindowCapture } from './ffmpeg-capture'
+import { readCompleteJpeg } from './hotFolder'
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const DEFAULT_HTTP_PORT = 3000
@@ -995,19 +996,14 @@ function registerIpcHandlers() {
     }
   })
 
-  // ── Hot Folder: read a photo file as base64 ─────────────────────────
-  // Reads a JPEG from the hot folder and returns it as base64 (no data: prefix).
-  // This feeds into the existing capture pipeline (frame overlay, naming, etc.)
+  // ── Hot Folder: read a photo file as base64 — COMPLETE files only ─────
+  // Camera software (EOS Utility / Imaging Edge) streams the .JPG into the
+  // watched folder progressively; importing a half-written file produced the
+  // pure-black ~39 KB photos (see electron/hotFolder.ts). The completeness
+  // check lives in readCompleteJpeg; the renderer retries 'incomplete'
+  // files on its next poll without marking them processed.
   ipcMain.handle('read-hot-folder-photo', async (_event, data: { folderPath: string, filename: string }) => {
-    try {
-      const filePath = path.join(data.folderPath, data.filename)
-      if (!fs.existsSync(filePath)) return null
-      const buffer = fs.readFileSync(filePath)
-      return buffer.toString('base64')
-    } catch (err: any) {
-      console.error('[SAATIRIL] read-hot-folder-photo error:', err.message)
-      return null
-    }
+    return readCompleteJpeg(data.folderPath, data.filename)
   })
 
   // ── Desktop capture: list windows (for EOS Utility live view) ──────

@@ -2668,14 +2668,27 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
         // participant is selected.
         if (newest.mtime <= hotFolderBaselineMtimeRef.current) return
         if (newest.filename === hotFolderLastFile) return // already processed
-        // New file detected! Read it and import
+        // New file detected! Read it — but ONLY a complete file: the camera
+        // software streams the .JPG into the folder progressively, and a
+        // half-written JPEG "loads" as a broken image whose drawImage paints
+        // nothing over the canvas' black prefill → the capture saves a
+        // pure-black ~39 KB photo and marks the file processed forever.
         hotFolderImportingRef.current = true
         setHotFolderStatus('Importing: ' + newest.filename)
-        const base64 = await api.readHotFolderPhoto(hotFolderPath, newest.filename)
+        const read = await api.readHotFolderPhoto(hotFolderPath, newest.filename)
+        const base64 = read?.status === 'complete' ? read.base64 : null
         if (base64) {
           // Draw the photo to canvas + feed into capture pipeline
           const img = new Image()
           img.onload = async () => {
+            // Decode guard: a broken image can fire onload with nothing
+            // drawable — capturing it would save the black canvas prefill.
+            // Not ready → let the next poll retry (never mark processed).
+            if (!img.naturalWidth || !img.naturalHeight) {
+              setHotFolderStatus(`Menunggu foto utuh: ${newest.filename}…`)
+              hotFolderImportingRef.current = false
+              return
+            }
             const canvas = canvasRef.current
             if (!canvas) { hotFolderImportingRef.current = false; return }
             const targetWidth = 1920
@@ -2711,12 +2724,19 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
           }
           img.onerror = () => {
             console.warn('[Hot Folder] Failed to load image:', newest.filename)
-            setHotFolderStatus('Error loading image')
+            // Usually a still-half-written file — retry on the next poll
+            // (do NOT mark processed or bump the baseline).
+            setHotFolderStatus(`Menunggu foto utuh: ${newest.filename}…`)
             hotFolderImportingRef.current = false
           }
           img.src = `data:image/jpeg;base64,${base64}`
+        } else if (read?.status === 'incomplete') {
+          // Still being written by the camera software — retry next poll.
+          // IMPORTANT: do NOT mark it processed or update the baseline.
+          setHotFolderStatus(`Menunggu foto utuh: ${newest.filename}…`)
+          hotFolderImportingRef.current = false
         } else {
-          setHotFolderStatus('Error reading file')
+          setHotFolderStatus('Gagal membaca: ' + newest.filename)
           hotFolderImportingRef.current = false
         }
       } catch (e) {

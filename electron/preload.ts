@@ -19,11 +19,20 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   },
 
   // ── Hot Folder: list JPEG files + read photo as base64 ───────────
-  // Used by Hot Folder camera mode (EOS Utility / Imaging Edge integration)
+  // Used by Hot Folder camera mode (EOS Utility / Imaging Edge integration).
+  // readHotFolderPhoto only hands out COMPLETE files ('incomplete' = the
+  // camera software is still writing it — the renderer retries; importing a
+  // half-written JPEG is what produced the black ~39 KB photos).
   listHotFolderFiles: (folderPath: string): Promise<Array<{ filename: string; mtime: number }>> =>
     ipcRenderer.invoke('list-hot-folder-files', folderPath),
-  readHotFolderPhoto: (folderPath: string, filename: string): Promise<string | null> =>
-    ipcRenderer.invoke('read-hot-folder-photo', { folderPath, filename }),
+  readHotFolderPhoto: (
+    folderPath: string,
+    filename: string,
+  ): Promise<
+    | { status: 'complete'; base64: string; size: number }
+    | { status: 'incomplete' }
+    | { status: 'error'; message: string }
+  > => ipcRenderer.invoke('read-hot-folder-photo', { folderPath, filename }),
   // ── Desktop capture: list windows (for EOS Utility live view) ────
   getWindowSources: (): Promise<Array<{ id: string; name: string }>> =>
     ipcRenderer.invoke('get-window-sources'),
