@@ -366,7 +366,11 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                         Modifier.padding(4.dp), style = TextStyle(color = MUTED, fontSize = 9.sp))
                 } else {
                     queueFilter.take(60).forEachIndexed { idx, s ->
-                        QueueRowWithStatus(idx + 1, s, myChannel) { viewModel.callStudent(s, myChannel) }
+                        // Done rows carry the RESET & KIRIM ULANG chip — the same
+                        // direct re-call the Electron SELESAI column performs.
+                        QueueRowWithStatus(idx + 1, s, myChannel,
+                            onReset = if (s.status == "done") ({ viewModel.resetAndRecallStudent(s, s.assignedChannel) }) else null,
+                        ) { viewModel.callStudent(s, myChannel) }
                     }
                 }
             }
@@ -410,7 +414,7 @@ private fun ActiveTargetCard(student: Student, channel: Int, opProgressText: Str
 
 // ─── Queue Row with Status Badge (matches Electron renderStatusBadge) ───
 @Composable
-private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onCall: () -> Unit) {
+private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onReset: (() -> Unit)? = null, onCall: () -> Unit) {
     val isActive = isActiveStatus(student.status)
     val isDone = student.status == "done"
     val isSent = student.status == "sent"
@@ -425,8 +429,10 @@ private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onCa
         isDone -> PANEL.copy(alpha = 0.3f)
         else -> PANEL
     }
-    // No per-row call button — matches Electron mc-panel.tsx which uses a single
-    // PANGGIL SEKARANG button at the top. Queue rows are display-only with status dots.
+    // No per-row CALL button — matches Electron mc-panel.tsx which uses a single
+    // PANGGIL SEKARANG button at the top. Queue rows are display-only with status
+    // dots — EXCEPT done rows, which carry a small "Kirim Ulang" chip (the same
+    // RESET & KIRIM ULANG the Electron SELESAI column has).
     // Text is intentionally SMALL (9sp) — this is a reference list, NOT the primary
     // info. The active/next student name at the top is the dominant element.
     Card(colors = CardDefaults.cardColors(containerColor = rowBg), shape = RoundedCornerShape(5.dp),
@@ -438,15 +444,26 @@ private fun QueueRowWithStatus(number: Int, student: Student, channel: Int, onCa
             Column(Modifier.weight(1f)) {
                 Text(student.nama.ifBlank { "(tanpa nama)" }, style = TextStyle(color = if (isDone) MUTED.copy(alpha = 0.4f) else Color.White, fontSize = 9.sp, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
-            // Status badge text only (no button)
-            val statusLabel = when {
-                isActive -> "◆"
-                isSent -> "Dikirim"
-                isDone -> "✓"
-                else -> ""
-            }
-            if (statusLabel.isNotEmpty()) {
-                Text(statusLabel, style = TextStyle(color = statusColor, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+            // Status badge text only (no button) — except done rows, whose chip
+            // IS the RESET & KIRIM ULANG action (reset + direct re-call)
+            if (isDone && onReset != null) {
+                Text("\u21BA Kirim Ulang",
+                    style = TextStyle(color = AMBER, fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(1.dp, AMBER.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                        .clickable(onClick = onReset)
+                        .padding(horizontal = 4.dp, vertical = 1.dp))
+            } else {
+                val statusLabel = when {
+                    isActive -> "\u25C6"
+                    isSent -> "Dikirim"
+                    isDone -> "\u2713"
+                    else -> ""
+                }
+                if (statusLabel.isNotEmpty()) {
+                    Text(statusLabel, style = TextStyle(color = statusColor, fontSize = 8.sp, fontWeight = FontWeight.Bold))
+                }
             }
         }
     }

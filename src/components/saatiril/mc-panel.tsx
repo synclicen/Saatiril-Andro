@@ -627,7 +627,14 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     const cleanedPhotoHistory = latestProject.photoHistory.filter(
       (h) => h.student.id !== student.id,
     )
-    const newStatus: StudentStatus = 'sent'
+    // Photoshoot: the student goes back to the operator's queue as 'sent'
+    // (both operators in dual-photoshoot). Wisuda (single/dual): they are
+    // re-CALLED straight on their OWN channel — 'active_<channel>' is the
+    // single-call status the operator's non-photoshoot flow expects.
+    const studentChannel = student.assignedChannel || 1
+    const newStatus: StudentStatus = photoshoot
+      ? 'sent'
+      : (`active_${studentChannel}` as StudentStatus)
     const updatedProject: typeof latestProject = {
       ...latestProject,
       database: latestProject.database.map((s) =>
@@ -644,7 +651,11 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     // merge priority logic and tells each operator to: clear mcCallBuffer entry,
     // clear opCurrentTarget if it matches, remove their photoHistory entry,
     // and set the student status to 'pending' locally.
-    const channels = dualPhotoshoot ? [1, 2] : [1]
+    // Photoshoot → every channel (both operators keep showing them);
+    // wisuda → only the student's own channel.
+    const channels = photoshoot
+      ? (dualPhotoshoot ? [1, 2] : [1])
+      : [studentChannel]
     for (const ch of channels) {
       emitLocal('STUDENT_RESET', { studentId: student.id, channel: ch })
     }
@@ -653,19 +664,28 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     // events handleSendBatchToOperator emits, so the operator's queue
     // (opQueue, fed by mcCallBuffer + the database) shows the student again
     // right away, ready for the retake.
-    if (dualPhotoshoot) {
-      emitLocal('MC_CALL', {
-        student: { ...student, status: newStatus, assignedChannel: 1 },
-        channel: 1,
-      })
-      emitLocal('MC_CALL', {
-        student: { ...student, status: newStatus, assignedChannel: 2 },
-        channel: 2,
-      })
+    if (photoshoot) {
+      if (dualPhotoshoot) {
+        emitLocal('MC_CALL', {
+          student: { ...student, status: newStatus, assignedChannel: 1 },
+          channel: 1,
+        })
+        emitLocal('MC_CALL', {
+          student: { ...student, status: newStatus, assignedChannel: 2 },
+          channel: 2,
+        })
+      } else {
+        emitLocal('MC_CALL', {
+          student: { ...student, status: newStatus },
+          channel: 1,
+        })
+      }
     } else {
+      // Wisuda: re-call them on their own channel — the operator of that
+      // channel sets them as the active target and can re-shoot at once.
       emitLocal('MC_CALL', {
         student: { ...student, status: newStatus },
-        channel: 1,
+        channel: studentChannel,
       })
     }
 
@@ -684,32 +704,34 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
       resentResetTimerRef.current = null
       setResentStudentName('')
     }, 2500)
-  }, [dualPhotoshoot, updateStudentStatus, updateCurrentProject, saveProjectsToStorageNow])
+  }, [photoshoot, dualPhotoshoot, updateStudentStatus, updateCurrentProject, saveProjectsToStorageNow])
 
   // ── Render helpers
   const renderCallButton = () => {
+    // Selected DONE student → RESET & KIRIM ULANG (every mode — photoshoot
+    // re-sends them to the operator's queue, wisuda re-calls them straight on
+    // their own channel). Used by the SELESAI column footer; the ANTREAN footer
+    // intercepts this case with a redirect hint instead.
+    if (selectedStudent && selectedStudent.status === 'done') {
+      return (
+        <Button
+          onClick={() => handleResetForRetake(selectedStudent)}
+          className={`w-full font-bold cursor-pointer transition-all duration-200 active:scale-[0.98] ${isMobile ? 'h-14 text-base' : compact ? 'h-9 text-xs hover:scale-[1.02]' : 'h-14 text-lg hover:scale-[1.02]'}`}
+          style={{
+            backgroundColor: THEME.gold,
+            color: THEME.bg,
+            border: `2px solid ${THEME.gold}`,
+            boxShadow: `0 0 20px ${THEME.gold}44`,
+          }}
+        >
+          <RotateCcw className={compact ? 'size-3' : 'size-4'} />
+          RESET & KIRIM ULANG
+        </Button>
+      )
+    }
     if (photoshoot) {
       // Photoshoot mode: always allow sending — NO BLOCKING.
-      // If the selected student is already 'done' (photographed), show a
-      // RESET & KIRIM ULANG button instead — this clears their photoHistory
-      // and resets status to 'pending' so the operator can retake.
-      if (selectedStudent && selectedStudent.status === 'done') {
-        return (
-          <Button
-            onClick={() => handleResetForRetake(selectedStudent)}
-            className={`w-full font-bold cursor-pointer transition-all duration-200 active:scale-[0.98] ${isMobile ? 'h-14 text-base' : compact ? 'h-9 text-xs hover:scale-[1.02]' : 'h-14 text-lg hover:scale-[1.02]'}`}
-            style={{
-              backgroundColor: THEME.gold,
-              color: THEME.bg,
-              border: `2px solid ${THEME.gold}`,
-              boxShadow: `0 0 20px ${THEME.gold}44`,
-            }}
-          >
-            <RotateCcw className={compact ? 'size-3' : 'size-4'} />
-            RESET & KIRIM ULANG
-          </Button>
-        )
-      }
+      // (A done student would have been caught by the RESET branch above.)
       return (
         <Button
           disabled={selectedStudents.length === 0}
@@ -790,7 +812,7 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
     const isNext = !photoshoot && student.id === nextPending?.id && student.status === 'pending'
     const isDone = student.status === 'done'
     const isSent = student.status === 'sent'
-    const isSelected = photoshoot && selectedStudent?.id === student.id
+    const isSelected = selectedStudent?.id === student.id
 
     if (isActive) {
       // Active participant being photographed — MOST prominent so the operator
@@ -1211,7 +1233,7 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
             </div>
           )}
           {/* When the selected student is already 'done', redirect reset to SELESAI column */}
-          {photoshoot && selectedStudent && selectedStudent.status === 'done' ? (
+          {selectedStudent && selectedStudent.status === 'done' ? (
             <p className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`} style={{ color: THEME.gold }}>
               ↳ Lihat kolom SELESAI untuk reset
             </p>
@@ -1432,18 +1454,16 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
               </div>
             ) : (
               displayedSelesai.map((student, idx) => {
-                const isSelected = photoshoot && selectedStudent?.id === student.id
+                const isSelected = selectedStudent?.id === student.id
                 return (
                   <div
                     key={student.id}
                     className={`flex items-center gap-2 transition-colors duration-200 min-w-0
-                      ${photoshoot ? 'cursor-pointer' : ''}
+                      cursor-pointer
                       ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
                     style={getRowStyle(student)}
                     onClick={() => {
-                      if (photoshoot) {
-                        setSelectedStudent(student)
-                      }
+                      setSelectedStudent(student)
                     }}
                   >
                     <span className={`font-mono shrink-0 ${isCompact ? 'text-[9px] w-3' : 'text-[10px] w-5'}`} style={{ color: THEME.muted }}>
@@ -1458,7 +1478,7 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
                     >
                       {student.nama}
                     </span>
-                    {photoshoot && isSelected && (
+                    {isSelected && (
                       <RotateCcw className={`shrink-0 ${isCompact ? 'size-3' : 'size-3.5'}`} style={{ color: THEME.gold }} />
                     )}
                   </div>
@@ -1468,54 +1488,46 @@ export function McPanel({ compact = false, channel }: { compact?: boolean; chann
           </div>
         </ScrollArea>
 
-        {/* Footer: RESET button (photoshoot only) */}
-        {photoshoot ? (
-          <div
-            className={`shrink-0 ${isCompact ? 'p-1.5' : 'p-3'}`}
-            style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
-          >
-            {selectedStudent && selectedStudent.status === 'done' ? (
-              <>
-                <div
-                  className={`rounded-md mb-2 min-w-0 ${isCompact ? 'p-1.5' : 'p-2'}`}
-                  style={{ backgroundColor: `${THEME.gold}15`, border: `1px solid ${THEME.gold}55` }}
-                >
-                  <p className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
-                    ⚠ Peserta Sudah Difoto
-                  </p>
-                  <p className={`font-bold truncate ${isCompact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
-                    {selectedStudent.nama}
-                  </p>
-                  <p className={`font-mono truncate ${isCompact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
-                    {selectedStudent.nim}
-                  </p>
-                  <p className={`truncate mt-1 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
-                    Klik RESET & KIRIM ULANG untuk kirim ulang langsung ke operator.
-                  </p>
-                </div>
-                {renderCallButton()}
-              </>
-            ) : (
-              <p
-                className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`}
-                style={{ color: resentStudentName ? THEME.emerald : THEME.muted }}
+        {/* Footer: RESET button (every mode — photoshoot re-sends to the
+            operator queue, wisuda re-calls straight on the student's channel) */}
+        <div
+          className={`shrink-0 ${isCompact ? 'p-1.5' : 'p-3'}`}
+          style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
+        >
+          {selectedStudent && selectedStudent.status === 'done' ? (
+            <>
+              <div
+                className={`rounded-md mb-2 min-w-0 ${isCompact ? 'p-1.5' : 'p-2'}`}
+                style={{ backgroundColor: `${THEME.gold}15`, border: `1px solid ${THEME.gold}55` }}
               >
-                {resentStudentName
-                  ? `✓ ${resentStudentName} dikirim ulang ke operator`
-                  : 'Klik peserta selesai untuk reset & kirim ulang'}
-              </p>
-            )}
-          </div>
-        ) : (
-          <div
-            className={`shrink-0 ${isCompact ? 'px-2 py-1.5' : 'px-3 py-2'}`}
-            style={{ borderTop: `1px solid ${THEME.border}`, backgroundColor: THEME.panel }}
-          >
-            <p className={`text-center italic ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
-              Selesai — alur wisuda (no reset)
+                <p className={`font-semibold uppercase tracking-wider truncate ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
+                  ⚠ Peserta Sudah Difoto
+                </p>
+                <p className={`font-bold truncate ${isCompact ? 'text-[10px]' : 'text-xs'}`} style={{ color: '#ffffff' }}>
+                  {selectedStudent.nama}
+                </p>
+                <p className={`font-mono truncate ${isCompact ? 'text-[9px]' : 'text-[10px]'}`} style={{ color: THEME.muted }}>
+                  {selectedStudent.nim}
+                </p>
+                <p className={`truncate mt-1 ${isCompact ? 'text-[8px]' : 'text-[10px]'}`} style={{ color: THEME.gold }}>
+                  {photoshoot
+                    ? 'Klik RESET & KIRIM ULANG untuk kirim ulang langsung ke operator.'
+                    : `Klik RESET & KIRIM ULANG untuk panggil ulang langsung ke operator Ch.${selectedStudent.assignedChannel || 1}.`}
+                </p>
+              </div>
+              {renderCallButton()}
+            </>
+          ) : (
+            <p
+              className={`text-center italic ${isCompact ? 'text-[9px]' : 'text-xs'}`}
+              style={{ color: resentStudentName ? THEME.emerald : THEME.muted }}
+            >
+              {resentStudentName
+                ? `✓ ${resentStudentName} dikirim ulang ke operator`
+                : 'Klik peserta selesai untuk reset & kirim ulang'}
             </p>
-          </div>
-        )}
+          )}
+        </div>
       </Card>
     )
   }

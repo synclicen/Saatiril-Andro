@@ -1397,6 +1397,38 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Wisuda (single/dual) "RESET & KIRIM ULANG" for an already-photographed
+     * student — the wisuda counterpart of [resetAndResendToOperator], which
+     * the queue list's done rows call. Mirrors the Electron mc-panel: clears
+     * the student's photoHistory + captureVersions, sets status straight to
+     * 'active_<channel>' (the single-call status of the non-photoshoot
+     * operator flow — NOT 'pending', no ANTREAN round-trip), broadcasts
+     * STUDENT_RESET first (so the operator clears their active target, buffer
+     * and photoHistory entry) and then immediately MC_CALLs the student on
+     * their OWN channel — the operator sets them as the active target and
+     * can re-shoot at once.
+     */
+    fun resetAndRecallStudent(student: Student, channel: Int) {
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) s.copy(status = "active_$channel") else s
+                }
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id }
+                val updatedVersions = cur.captureVersions.filterNot { it.key.startsWith("${student.id}_") }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory, captureVersions = updatedVersions)
+                _project.value = updated
+                persistProject(updated)
+            }
+            SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(student.id, channel))
+            val calledStudent = student.copy(status = "active_$channel")
+            SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(calledStudent, channel))
+            pushSyncDb()
+        }
+    }
+
+    /**
      * Batch variant of [sendToOperator] — sends ALL selected pending students
      * to operator(s) in one pass. Mirrors the Electron handleSendBatchToOperator:
      * marks every selected student as 'sent' in a single DB pass, then emits

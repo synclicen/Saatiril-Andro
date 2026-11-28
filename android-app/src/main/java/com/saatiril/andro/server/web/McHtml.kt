@@ -50,6 +50,8 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 .panggil-btn.waiting { background:#533485; color:#d4af37; cursor:wait; }
 .panggil-btn.disabled { background:#2a164a; color:#c4b5fd; cursor:default; }
 .reset-btn { width:100%; height:44px; border:1px solid #fbbf24; background:transparent; color:#fbbf24; border-radius:10px; font-size:14px; cursor:pointer; margin-bottom:8px; }
+.rowreset-btn { border:1px solid #fbbf24; background:transparent; color:#fbbf24; border-radius:5px; font-size:9px; padding:2px 6px; cursor:pointer; margin-left:auto; }
+.rowreset-btn:active { background:#fbbf24; color:#1a0b2e; }
 .stats { display:flex; gap:12px; font-size:11px; color:#c4b5fd; margin-bottom:8px; }
 .stats span { color:#fff; font-weight:bold; }
 .queue-title { font-size:12px; color:#c4b5fd; font-weight:bold; margin:8px 0 4px; }
@@ -425,15 +427,23 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     html += '</div>';
 
     html += '<div class="queue-title">Antrean Ch.' + channel + ' (' + pending.length + ' menunggu)</div>';
+    // Done rows carry a "↺ Kirim Ulang" chip — the same RESET & KIRIM ULANG
+    // the desktop MC panel's SELESAI column has. The students are stored in a
+    // global map keyed by their queue index (numeric onclick arg — no HTML
+    // attribute escaping issues).
+    window.__doneMap = {};
     queue.forEach(function(s, i){
       var a = isActive(s.status);
       var d = s.status === 'done';
-      html += '<div class="queue-item ' + (a ? 'active' : '') + (d ? ' done' : '') + '">';
+      html += '<div class="queue-item ' + (a ? 'active' : '') + (d ? 'done' : '') + '">';
       html += '<span class="num">' + (i+1) + '</span>';
       html += '<span class="dot ' + (a ? 'active' : '') + (d ? 'done' : '') + '"></span>';
       html += '<span class="n">' + escapeHtml(s.nama || s.nim || '(tanpa nama)') + '</span>';
       if(a) html += '<span class="badge">\u25C6</span>';
-      if(d) html += '<span class="badge" style="color:#4ade80">\u2713</span>';
+      if(d) {
+        window.__doneMap[i] = s;
+        html += '<button class="rowreset-btn" onclick="window.__resetDone(' + i + ')">\u21BA Kirim Ulang</button>';
+      }
       html += '</div>';
     });
 
@@ -523,6 +533,42 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
   window.__reset = function() {
     var student = window.__activeStudent;
     if(student) resetStudent(student);
+  };
+
+  // RESET & KIRIM ULANG of an already-photographed (done) participant — the
+  // same direct flow the desktop MC panel's SELESAI column performs. The
+  // server's own admin composes the final state from the same two events
+  // (STUDENT_RESET → pending + photoHistory/captureVersions cleared, then
+  // MC_CALL → 'sent' in photoshoot / 'active_<ch>' in wisuda).
+  window.__resetDone = function(i) {
+    var student = window.__doneMap ? window.__doneMap[i] : null;
+    if(!student || !project) return;
+    var mode = project.config ? project.config.mode : 'single';
+    var isPs = mode.indexOf('photoshoot') >= 0;
+    var isDualPs = mode.indexOf('dual-photoshoot') >= 0;
+    // Clear the student everywhere first (operator buffer, active target, photos)
+    sendLanMessage('STUDENT_RESET', {studentId:student.id, channel:channel});
+    var newStatus;
+    if(isPs) {
+      // Photoshoot: straight back to the operator's queue as 'sent'
+      var chs = isDualPs ? [1, 2] : [1];
+      for(var c = 0; c < chs.length; c++) {
+        sendLanMessage('MC_CALL', {student:Object.assign({}, student, {status:'sent'}), channel:chs[c]});
+      }
+      newStatus = 'sent';
+    } else {
+      // Wisuda: direct re-call on the student's own channel
+      var ch = student.assignedChannel || 1;
+      sendLanMessage('MC_CALL', {student:Object.assign({}, student, {status:'active_' + ch}), channel:ch});
+      newStatus = 'active_' + ch;
+    }
+    if(project.database) {
+      project.database = project.database.map(function(s){
+        if(s.id === student.id) return Object.assign({}, s, {status:newStatus});
+        return s;
+      });
+      render();
+    }
   };
 
   connect();
