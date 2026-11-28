@@ -2058,13 +2058,27 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.play()
+        videoRef.current.play().catch(() => {})
       }
       setEosLiveViewActive(true)
       eosLiveViewActiveRef.current = true
       setCameraAvailable(true)
       setHotFolderStatus('Live: ' + targetSource.name.substring(0, 20))
       console.log('[EOS Live View] Captured:', targetSource.name)
+      // Timeout check: if the <video> has no video data after 3 seconds,
+      // the EOS capture likely failed silently. Revert to webcam.
+      setTimeout(() => {
+        const v = videoRef.current
+        if (v && (v.videoWidth === 0 || v.videoHeight === 0)) {
+          console.warn('[EOS Live View] No video data after 3s — reverting to webcam')
+          eosLiveViewActiveRef.current = false
+          setEosLiveViewActive(false)
+          setHotFolderStatus('EOS gagal — webcam aktif. Gunakan EOS Utility untuk live view.')
+          // Restart webcam
+          const gen = ++cameraGenRef.current
+          void startCamera(undefined, gen)
+        }
+      }, 3000)
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
       alert('Error: ' + (e as Error).message)
@@ -2177,9 +2191,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             }
             ctx.fillStyle = '#000000'
             ctx.fillRect(0, 0, targetWidth, targetHeight)
+            // Apply CSS filter (studio, cinematic, pro, etc.) — same as webcam
+            if (cssFilter !== 'none') ctx.filter = cssFilter
             ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight)
-            // Feed into the hot folder capture pipeline — does NOT redraw
-            // from video. Only adds frame overlay + calls finalizeCapture.
+            ctx.filter = 'none'
+            // Feed into the hot folder capture pipeline — adds frame overlay
+            // + calls finalizeCapture (saves with participant name).
             handleHotFolderCaptureRef.current()
             setHotFolderLastFile(newest.filename)
             // Update baseline so this file doesn't trigger again
