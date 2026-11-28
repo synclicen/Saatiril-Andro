@@ -106,37 +106,40 @@ type EosPickerWindow = { id: string; name: string; rank: number; thumbnail?: str
 // a live view window, or Imaging Edge's remote shooting window "Remote".
 const EOS_LIKELY_LIVE_VIEW_MAX_RANK = 1
 
-// ─── EOS live view: crop of the camera picture ────────────────────────────
+// ─── EOS live view: crop of the live display area ──────────────────────────
 // The captured window (Imaging Edge "Remote", EOS Utility "Remote Live View")
-// shows the camera picture surrounded by black margins — the window title,
-// panels, and letterbox around the picture. The saved photo comes from the
-// camera's own file via the hot folder, so it fills the frame; the live view
-// must look the same. The picture area is measured on the live frame and
-// only that area is displayed.
+// wraps the live view picture in the camera software's own interface: title
+// bar, menu, setting panels, black letterbox. The saved photo comes from the
+// camera's own file via the hot folder and fills the frame — the live view
+// must show the same: only the "Display Live View" area of the window,
+// centred, whatever the panel layout and however dark the scene.
+// That area is found by what makes it special: it is the only part of the
+// window that changes between two frames (camera noise and motion). The
+// window's own interface is re-captured pixel-identically every frame — dark
+// or bright — so a change test finds the picture where a brightness test
+// (tried before) misread a dark scene as margins and zoomed into its subject.
 type EosCrop = { sx: number; sy: number; sw: number; sh: number; nw: number; nh: number } | null
+type EosFrameSample = { nw: number; nh: number; w: number; h: number; lum: Uint8ClampedArray }
 
-// Margin detection runs on a thumbnail of the frame: small enough to run
-// between two stream frames, one sample pixel stays well under 1% of a side.
-const EOS_CROP_SAMPLE_PX = 192
-// JPEG compression keeps the black margins of the window below this
-// luminance; the camera picture itself is brighter than this almost
-// everywhere.
-const EOS_CROP_BLACK_LUMA = 26
-// A row/column counts as a margin when at least this share of it is black.
-// The dark rows of a photo (a graduation robe) reach ~0.7 — keep a gap.
-const EOS_CROP_MARGIN_BLACK = 0.8
-// Never trim more than this share of the frame on one axis: a wrong
-// detection falls back to the untrimmed view instead of a detail.
-const EOS_CROP_MIN_FRACTION = 0.25
+// the grid two frames are compared on: fine enough that the noise of a live
+// camera survives the downscale (each cell ≈ 3×3 stream pixels)
+const EOS_CROP_SAMPLE_PX = 480
+// a luminance change that counts as a live signal. A still window interface
+// is re-compressed identically frame to frame and stays 0; the noise of a
+// live camera is ±1…3 even on a completely still scene.
+const EOS_CROP_DIFF = 1
+// a live display area never covers only a sliver of the window; a smaller
+// find is rejected and the untrimmed view is kept
+const EOS_CROP_MIN_FRACTION = 0.2
 
-/** Measures the black margins of the captured window → the picture area. */
-function detectEosCrop(img: HTMLImageElement): EosCrop {
+/** Draws the current live frame onto the comparison grid. */
+function sampleEosFrame(img: HTMLImageElement): EosFrameSample | null {
   const nw = img.naturalWidth
   const nh = img.naturalHeight
   if (!nw || !nh) return null
   const scale = Math.min(1, EOS_CROP_SAMPLE_PX / Math.max(nw, nh))
-  const w = Math.max(8, Math.round(nw * scale))
-  const h = Math.max(8, Math.round(nh * scale))
+  const w = Math.max(16, Math.round(nw * scale))
+  const h = Math.max(16, Math.round(nh * scale))
   const canvas = document.createElement('canvas')
   canvas.width = w
   canvas.height = h
@@ -147,45 +150,69 @@ function detectEosCrop(img: HTMLImageElement): EosCrop {
   try {
     data = ctx.getImageData(0, 0, w, h).data
   } catch {
-    return null // a cross-origin stream cannot be read — keep the plain view
+    return null // an unreadable (cross-origin) stream — keep the plain view
   }
-  const rowBlack = new Array<number>(h).fill(0)
-  const colBlack = new Array<number>(w).fill(0)
+  const lum = new Uint8ClampedArray(w * h)
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4
+    lum[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]
+  }
+  return { nw, nh, w, h, lum }
+}
+
+/** The live display area: the span that changed between the two samples. */
+function detectEosDisplayArea(prev: EosFrameSample, cur: EosFrameSample): EosCrop {
+  if (prev.w !== cur.w || prev.h !== cur.h) return null
+  const { w, h, lum } = cur
+  const p = prev.lum
+  const colChanged = new Array<number>(w).fill(0)
+  const rowChanged = new Array<number>(h).fill(0)
+  let changed = 0
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4
-      // the margins are grey-black, so a plain luminance test is enough
-      if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < EOS_CROP_BLACK_LUMA) {
-        rowBlack[y]++
-        colBlack[x]++
+      const i = y * w + x
+      if (Math.abs(lum[i] - p[i]) >= EOS_CROP_DIFF) {
+        colChanged[x]++
+        rowChanged[y]++
+        changed++
       }
     }
   }
-  // walk in from every edge while the line is (almost) all black, then skip
-  // one more sample line: the first line of the picture can still be mostly
-  // black (a dark backdrop) and must not stay visible as a black edge
-  let top = 0
-  let bottom = h - 1
-  let left = 0
-  let right = w - 1
-  while (top < bottom && rowBlack[top] / w >= EOS_CROP_MARGIN_BLACK) top++
-  while (bottom > top && rowBlack[bottom] / w >= EOS_CROP_MARGIN_BLACK) bottom--
-  while (left < right && colBlack[left] / h >= EOS_CROP_MARGIN_BLACK) left++
-  while (right > left && colBlack[right] / h >= EOS_CROP_MARGIN_BLACK) right--
-  top = Math.min(top + 1, bottom)
-  bottom = Math.max(bottom - 1, top)
-  left = Math.min(left + 1, right)
-  right = Math.max(right - 1, left)
+  // nothing worth measuring: the stream just started, is frozen, or shows
+  // no camera — keep the previous view instead of guessing
+  if (changed < w * h * 0.004) return null
 
-  const sx = Math.min(nw - 1, Math.floor(left / scale))
-  const sy = Math.min(nh - 1, Math.floor(top / scale))
-  const sw = Math.max(1, Math.min(nw - sx, Math.ceil((right - left + 1) / scale)))
-  const sh = Math.max(1, Math.min(nh - sy, Math.ceil((bottom - top + 1) / scale)))
-  // no margins worth trimming → the plain object-cover view is already right
-  if (sw >= nw * 0.98 && sh >= nh * 0.98) return null
-  // a sliver left means the detection ran on a frame without a picture
-  if (sw < nw * EOS_CROP_MIN_FRACTION || sh < nh * EOS_CROP_MIN_FRACTION) return null
-  return { sx, sy, sw, sh, nw, nh }
+  // per axis: the span of the lines that changed, weighted by how much of
+  // them changed. The 1st/99th percentile cut ignores lone blinkers (a busy
+  // cursor, a status dot) that carry far under 1% of the change.
+  const span = (counts: number[]): [number, number] | null => {
+    let weight = 0
+    for (const c of counts) weight += c
+    if (!weight) return null
+    const at = (share: number) => {
+      let acc = 0
+      const edge = weight * share
+      for (let i = 0; i < counts.length; i++) {
+        acc += counts[i]
+        if (acc >= edge) return i
+      }
+      return counts.length - 1
+    }
+    return [at(0.01), at(0.99)]
+  }
+  const cols = span(colChanged)
+  const rows = span(rowChanged)
+  if (!cols || !rows) return null
+
+  const sx = Math.max(0, Math.floor((cols[0] / w) * cur.nw))
+  const sy = Math.max(0, Math.floor((rows[0] / h) * cur.nh))
+  const sw = Math.max(1, Math.min(cur.nw - sx, Math.ceil(((cols[1] - cols[0] + 1) / w) * cur.nw)))
+  const sh = Math.max(1, Math.min(cur.nh - sy, Math.ceil(((rows[1] - rows[0] + 1) / h) * cur.nh)))
+  // the live area covers (almost) the whole window → nothing worth trimming
+  if (sw >= cur.nw * 0.98 && sh >= cur.nh * 0.98) return null
+  // a sliver means the detection ran on a frame pair without a live picture
+  if (sw < cur.nw * EOS_CROP_MIN_FRACTION || sh < cur.nh * EOS_CROP_MIN_FRACTION) return null
+  return { sx, sy, sw, sh, nw: cur.nw, nh: cur.nh }
 }
 
 /** Positions the live image so the cropped picture area fills the frame (cover). */
@@ -938,8 +965,9 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // camera software live view capture
   const eosLiveViewActiveRef = useRef(false)
   const [eosLiveViewMjpegUrl, setEosLiveViewMjpegUrl] = useState<string | null>(null)
-  // The measured picture area of the captured window (black margins cut off),
-  // null = not measured yet (or nothing to trim) → plain object-cover.
+  // The measured live display area of the captured window (the window's own
+  // interface cut off), null = not measured yet (or the whole window is
+  // live) → plain object-cover.
   const [eosCrop, setEosCrop] = useState<EosCrop>(null)
   const eosLiveImgRef = useRef<HTMLImageElement | null>(null)
   // Window picker: opened when no live view window could be started by
@@ -2287,17 +2315,35 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // The stream shows the whole window (title bar, panels, black letterbox
   // around the camera picture). The picture area is re-measured while the
   // stream runs — the camera software's layout may change any time.
+  // ── EOS live view: show only the live display area of the captured window ──
+  // Two live frames a second apart are compared; the area that changed is the
+  // camera's display area, and only that is displayed, centred like the saved
+  // photo. The measured area is re-checked every second — the window layout
+  // may change any time — and the last good one is kept while the stream
+  // gives nothing measurable (a frozen live view keeps its layout).
+  const eosPrevSampleRef = useRef<EosFrameSample | null>(null)
+
   const runEosCropDetection = useCallback(() => {
     const img = eosLiveImgRef.current
     if (!img || !img.complete || !img.naturalWidth) return
-    const next = detectEosCrop(img)
-    setEosCrop((prev) => {
-      if (!next) return null // nothing measurable (or no margins) → plain view
-      if (prev && prev.nw === next.nw && prev.nh === next.nh) {
-        // keep the position stable against single-pixel jitter of the margins
+    const cur = sampleEosFrame(img)
+    const prev = eosPrevSampleRef.current
+    eosPrevSampleRef.current = cur
+    if (!cur) return
+    if (!prev || prev.nw !== cur.nw || prev.nh !== cur.nh) {
+      // first sample, or the stream changed size (the window was resized):
+      // nothing to compare yet — and a stored area of the old size is void
+      setEosCrop((stored) => (stored && (stored.nw !== cur.nw || stored.nh !== cur.nh) ? null : stored))
+      return
+    }
+    const next = detectEosDisplayArea(prev, cur)
+    setEosCrop((stored) => {
+      if (!next) return stored // nothing measurable → keep the last good area
+      if (stored && stored.nw === next.nw && stored.nh === next.nh) {
+        // keep the position stable against single-pixel jitter of the area
         const moved = (a: number, b: number, total: number) => Math.abs(a - b) > total * 0.01
-        if (!moved(prev.sx, next.sx, next.nw) && !moved(prev.sy, next.sy, next.nh)
-          && !moved(prev.sw, next.sw, next.nw) && !moved(prev.sh, next.sh, next.nh)) return prev
+        if (!moved(stored.sx, next.sx, next.nw) && !moved(stored.sy, next.sy, next.nh)
+          && !moved(stored.sw, next.sw, next.nw) && !moved(stored.sh, next.sh, next.nh)) return stored
       }
       return next
     })
@@ -2305,14 +2351,16 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
 
   useEffect(() => {
     if (!eosLiveViewMjpegUrl) {
+      eosPrevSampleRef.current = null
       setEosCrop(null)
       return
     }
     const first = window.setTimeout(runEosCropDetection, 300) // first frame decoded by then
-    const repeat = window.setInterval(runEosCropDetection, 2000)
+    const repeat = window.setInterval(runEosCropDetection, 1000)
     return () => {
       window.clearTimeout(first)
       window.clearInterval(repeat)
+      eosPrevSampleRef.current = null
       setEosCrop(null)
     }
   }, [eosLiveViewMjpegUrl, runEosCropDetection])
@@ -3636,10 +3684,11 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
         }}
       />
       {/* EOS/Imaging Edge live view — MJPEG stream served by the main process (FFmpeg gdigrab).
-          Only the camera picture of the captured window is shown: its black margins
-          (window title, panels, letterbox) are measured on the live frame and cut off.
-          The mirror transform sits on the wrapper, not the oversized <img>, so the
-          picture flips around the middle of the frame like the webcam does. */}
+          Only the live display area of the captured window is shown: the camera software's
+          own interface around it (window title, panels, letterbox) is static frame to frame
+          and is measured away on the live frames. The mirror transform sits on the wrapper,
+          not the oversized <img>, so the picture flips around the middle of the frame like
+          the webcam does. */}
       {eosLiveViewMjpegUrl && (
         <div
           className="absolute inset-0"
