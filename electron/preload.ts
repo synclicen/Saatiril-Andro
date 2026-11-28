@@ -31,6 +31,15 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   // screen share picker and auto-selects EOS Utility / Imaging Edge window.
   setEosDisplayHandler: (): Promise<boolean> =>
     ipcRenderer.invoke('set-eos-display-handler'),
+  // ── FFmpeg window capture (EOS Utility / Imaging Edge live view) ──
+  ffmpegCaptureStart: (windowTitle: string): Promise<{ success: boolean; url?: string; error?: string }> =>
+    ipcRenderer.invoke('ffmpeg-capture:start', windowTitle),
+  ffmpegCaptureStop: (): Promise<boolean> =>
+    ipcRenderer.invoke('ffmpeg-capture:stop'),
+  ffmpegCaptureUrl: (): Promise<string | null> =>
+    ipcRenderer.invoke('ffmpeg-capture:url'),
+  ffmpegCaptureCheck: (): Promise<{ available: boolean }> =>
+    ipcRenderer.invoke('ffmpeg-capture:check'),
 
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)

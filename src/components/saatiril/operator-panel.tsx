@@ -669,6 +669,7 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const [hotFolderStatus, setHotFolderStatus] = useState('') // status message
   const [eosLiveViewActive, setEosLiveViewActive] = useState(false) // EOS Utility window capture
   const eosLiveViewActiveRef = useRef(false)
+  const [eosLiveViewMjpegUrl, setEosLiveViewMjpegUrl] = useState<string | null>(null)
   const [timerCountdown, setTimerCountdown] = useState<number>(0)
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerActiveRef = useRef(false)
@@ -1983,84 +1984,85 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // This replaces the USB webcam with the Canon's actual live view.
   const captureEosLiveView = useCallback(async () => {
     const api = (window as any).saatirilAPI
-    if (!api) {
-      alert('Desktop capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe).')
+    if (!api?.ffmpegCaptureStart) {
+      alert('FFmpeg capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe).')
       return
     }
-    // Set ref IMMEDIATELY to prevent webcam from overriding
     eosLiveViewActiveRef.current = true
-    setHotFolderStatus('Pilih window EOS Utility...')
+    setHotFolderStatus('Mencari window EOS/Imaging Edge...')
 
     try {
-      // Use getDisplayMedia() WITHOUT auto-select handler.
-      // This shows the NATIVE screen share picker dialog where the user
-      // manually selects the EOS Utility / Imaging Edge window.
-      // This is the most reliable approach — no guessing which window.
-      setHotFolderStatus('Pilih window di dialog...')
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
-        audio: false,
-      })
-
-      if (!stream || stream.getVideoTracks().length === 0) {
-        throw new Error('No video track')
-      }
-
-      const track = stream.getVideoTracks()[0]
-      const trackLabel = track.label || 'EOS window'
-      console.log('[EOS Live View] Stream obtained:', trackLabel)
-
-      // Stop existing stream + attach new one
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop())
-      }
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.play().catch(() => {})
-      }
-
-      setEosLiveViewActive(true)
-      eosLiveViewActiveRef.current = true
-      setCameraAvailable(true)
-      setHotFolderStatus('EOS Live: ' + trackLabel.substring(0, 25))
-
-      // Handle stream end
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
+      // Check if FFmpeg is available
+      const check = await api.ffmpegCaptureCheck()
+      if (!check.available) {
         eosLiveViewActiveRef.current = false
-        setEosLiveViewActive(false)
-        setHotFolderStatus('EOS berhenti. Webcam aktif.')
-        const gen = ++cameraGenRef.current
-        void startCamera(undefined, gen)
-      })
+        setHotFolderStatus('FFmpeg tidak ditemukan. Webcam aktif.')
+        alert('FFmpeg tidak ditemukan di sistem.\nDownload ffmpeg.exe dan taruh di folder Saatiril, atau install FFmpeg ke PATH Windows.')
+        return
+      }
 
-      // Timeout check
-      setTimeout(() => {
-        const v = videoRef.current
-        if (v && (v.videoWidth === 0 || v.videoHeight === 0)) {
-          eosLiveViewActiveRef.current = false
-          setEosLiveViewActive(false)
-          setHotFolderStatus('EOS gagal — webcam aktif.')
-          const gen = ++cameraGenRef.current
-          void startCamera(undefined, gen)
+      // Try common window titles for EOS Utility / Imaging Edge
+      const titles = [
+        'Remote Live View',
+        'EOS Utility',
+        'Imaging Edge',
+        'Remote',
+        'Live View',
+      ]
+
+      let captureResult: { success: boolean; url?: string; error?: string } | null = null
+      for (const title of titles) {
+        setHotFolderStatus('Capture: ' + title)
+        captureResult = await api.ffmpegCaptureStart(title)
+        if (captureResult.success && captureResult.url) {
+          // Wait for frames to start flowing
+          await new Promise(r => setTimeout(r, 1500))
+          const url = await api.ffmpegCaptureUrl()
+          if (url) {
+            // Set the MJPEG URL as the <img> src for live view
+            setEosLiveViewMjpegUrl(url)
+            setEosLiveViewActive(true)
+            setCameraAvailable(true)
+            setHotFolderStatus('EOS Live: ' + title)
+            console.log('[EOS Live View] FFmpeg capture started:', title, '→', url)
+            return
+          }
         }
-      }, 3000)
+        // Stop and try next title
+        await api.ffmpegCaptureStop()
+      }
 
+      // If no title matched, try capturing by exact window name
+      // Ask user for window title
+      const userTitle = prompt(
+        'Window EOS Utility / Imaging Edge tidak ditemukan otomatis.\n' +
+        'Masukkan judul window (lihat title bar EOS Utility):\n\n' +
+        'Contoh: "Remote Live View", "EOS Utility", "Imaging Edge"'
+      )
+      if (userTitle) {
+        setHotFolderStatus('Capture: ' + userTitle)
+        captureResult = await api.ffmpegCaptureStart(userTitle)
+        if (captureResult.success) {
+          await new Promise(r => setTimeout(r, 1500))
+          const url = await api.ffmpegCaptureUrl()
+          if (url) {
+            setEosLiveViewMjpegUrl(url)
+            setEosLiveViewActive(true)
+            setCameraAvailable(true)
+            setHotFolderStatus('EOS Live: ' + userTitle)
+            return
+          }
+        }
+      }
+
+      eosLiveViewActiveRef.current = false
+      setEosLiveViewActive(false)
+      setHotFolderStatus('Window tidak ditemukan. Webcam aktif.')
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
       eosLiveViewActiveRef.current = false
       setEosLiveViewActive(false)
-      const errMsg = (e as Error).message
-      if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowed')) {
-        setHotFolderStatus('Izin ditolak. Webcam aktif.')
-      } else if (errMsg.includes('NotFound') || errMsg.includes('cancelled')) {
-        setHotFolderStatus('Dibatalkan. Webcam aktif.')
-      } else {
-        setHotFolderStatus('EOS gagal: ' + errMsg.substring(0, 30) + '. Webcam aktif.')
-      }
-      // Restart webcam
-      const gen = ++cameraGenRef.current
-      void startCamera(undefined, gen)
+      setHotFolderStatus('Error: ' + (e as Error).message.substring(0, 30))
     }
   }, [])
 
@@ -3184,8 +3186,22 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
         style={{
           filter: cssFilter !== 'none' ? cssFilter : undefined,
           transform: mirror ? 'scaleX(-1)' : undefined,
+          display: eosLiveViewMjpegUrl ? 'none' : 'block',
         }}
       />
+      {/* EOS/Imaging Edge live view via FFmpeg MJPEG stream */}
+      {eosLiveViewMjpegUrl && (
+        <img
+          src={eosLiveViewMjpegUrl}
+          alt="EOS Live View"
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{
+            transform: mirror ? 'scaleX(-1)' : undefined,
+            filter: cssFilter !== 'none' ? cssFilter : undefined,
+            zIndex: 1,
+          }}
+        />
+      )}
 
       {frameData && (
         <img

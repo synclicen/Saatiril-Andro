@@ -949,7 +949,10 @@ function getLanIPs(): { name: string; address: string }[] {
 }
 
 // ─── IPC Handlers ──────────────────────────────────────────────────────────
+const { registerFfmpegCaptureIpc } = require('./ffmpeg-capture')
 function registerIpcHandlers() {
+  // FFmpeg window capture (EOS Utility / Imaging Edge live view)
+  registerFfmpegCaptureIpc(ipcMain)
   // Select folder dialog
   ipcMain.handle('select-folder', async (_event, defaultPath: string) => {
     const result = await dialog.showOpenDialog({
