@@ -519,6 +519,18 @@ async function main() {
     assert.strictEqual(await statusCode(captured.url.replace('/liveview', '/other')), 404)
   })
 
+  await test('server: stream is CORS-clean (the renderer reads it into a canvas)', async () => {
+    const headers = await new Promise((resolve, reject) => {
+      const req = http.get(captured.url, (res) => { resolve(res.headers); req.destroy() })
+      req.on('error', reject)
+    })
+    // the page (localhost:<httpPort>) and the stream (127.0.0.1:<port>) are
+    // different origins: without this header a crossOrigin="anonymous" <img>
+    // would not load and the margin measurement could not read the pixels
+    assert.strictEqual(headers['access-control-allow-origin'], '*')
+    assert.match(String(headers['content-type']), /multipart\/x-mixed-replace/)
+  })
+
   await test('server: a second start replaces the first (old stream closed)', async () => {
     const oldUrl = captured.url
     const r = await cap.startMjpegCapture(ffmpeg, withSource('testsrc=size=640x480:rate=15'), 'second')

@@ -379,6 +379,11 @@ function openMjpegServer(getFrame: () => Buffer | null): Promise<MjpegServer> {
       'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
       Pragma: 'no-cache',
       Connection: 'close',
+      // The page is served from http://localhost:<httpPort>, the stream from
+      // http://127.0.0.1:<this port> — a different origin. The renderer reads
+      // the stream into a canvas to measure the live view area, which only
+      // works for a CORS-clean image (crossOrigin="anonymous" there).
+      'Access-Control-Allow-Origin': '*',
     })
     clients.add(res)
     res.on('close', () => clients.delete(res))
