@@ -20,7 +20,8 @@
     "electron:build:win": "next build && tsc -p electron/tsconfig.json && esbuild electron/main.ts --bundle --platform=node --outfile=electron/main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder && electron-builder --win",
     "generate-license": "npx tsx tools/generate-license.ts",
     "electron:compile": "tsc -p electron/tsconfig.json",
-    "electron:bundle": "esbuild electron/main.ts --bundle --platform=node --outfile=electron/main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder"
+    "electron:bundle": "esbuild electron/main.ts --bundle --platform=node --outfile=electron/main.js --external:electron --external:buffer --external:fs --external:path --external:os --external:http --external:https --external:net --external:crypto --external:stream --external:events --external:url --external:child_process --external:dns --external:tls --external:zlib --external:string_decoder",
+    "test:capture": "tsc -p electron/tsconfig.json && node electron/tests/ffmpeg-capture.test.js electron/ffmpeg-capture.js"
   },
   "build": {
     "appId": "com.saatiril.andro",
@@ -38,6 +39,14 @@
           "ffmpeg.exe",
           "ffmpeg.LICENSE",
           "ffmpeg.README"
+        ]
+      },
+      {
+        "from": "electron/resources/ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "LICENSE",
+          "README.txt"
         ]
       }
     ],
