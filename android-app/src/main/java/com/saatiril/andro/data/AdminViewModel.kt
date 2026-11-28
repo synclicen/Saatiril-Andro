@@ -1364,6 +1364,39 @@ class AdminViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Photoshoot "RESET & KIRIM ULANG" for an already-photographed student —
+     * reset + re-send in ONE action. Mirrors the Electron mc-panel's
+     * handleResetForRetake: clears the student's photoHistory, sets status to
+     * 'sent' (NOT 'pending' — the student goes straight back to the operator's
+     * queue, no ANTREAN round-trip), broadcasts STUDENT_RESET first (so every
+     * operator clears their buffer, active target and photoHistory entry) and
+     * then immediately MC_CALLs the student — the operator's queue shows them
+     * again right away and the retake can start.
+     */
+    fun resetAndResendToOperator(student: Student, channels: List<Int>) {
+        viewModelScope.launch {
+            projectMutex.withLock {
+                val cur = _project.value ?: return@withLock
+                val updatedDb = cur.database.map { s ->
+                    if (s.id == student.id) s.copy(status = "sent") else s
+                }
+                val updatedHistory = cur.photoHistory.filterNot { it.student.id == student.id }
+                val updated = cur.copy(database = updatedDb, photoHistory = updatedHistory)
+                _project.value = updated
+                persistProject(updated)
+            }
+            for (ch in channels) {
+                SaatirilServer.broadcastLanMessage(SocketEvents.STUDENT_RESET, StudentResetData(student.id, ch))
+            }
+            val sentStudent = student.copy(status = "sent")
+            for (ch in channels) {
+                SaatirilServer.broadcastLanMessage(SocketEvents.MC_CALL, McCallData(sentStudent, ch))
+            }
+            pushSyncDb()
+        }
+    }
+
+    /**
      * Batch variant of [sendToOperator] — sends ALL selected pending students
      * to operator(s) in one pass. Mirrors the Electron handleSendBatchToOperator:
      * marks every selected student as 'sent' in a single DB pass, then emits

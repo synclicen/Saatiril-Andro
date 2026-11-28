@@ -327,14 +327,19 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
   }
 
   function resetStudent(student) {
+    var mode = project && project.config ? project.config.mode : 'single';
+    var isPhotoshoot = mode.indexOf('photoshoot') >= 0;
     // Clear the student everywhere FIRST (operator's buffer, active target, photos)
     sendLanMessage('STUDENT_RESET', {studentId:student.id, channel:channel});
-    // ... then put them straight back with the operator — no queue round-trip
-    // (same order as the desktop MC panel's RESET & KIRIM ULANG)
-    sendLanMessage('MC_CALL', {student:student, channel:channel});
+    if(isPhotoshoot) {
+      // Photoshoot: put them straight back with the operator — no queue
+      // round-trip (same order as the desktop MC panel's RESET & KIRIM ULANG)
+      sendLanMessage('MC_CALL', {student:student, channel:channel});
+    }
     if(project && project.database) {
+      var newStatus = isPhotoshoot ? ('active_' + channel) : 'pending';
       project.database = project.database.map(function(s){
-        if(s.id === student.id) return Object.assign({}, s, {status:'active_' + channel});
+        if(s.id === student.id) return Object.assign({}, s, {status:newStatus});
         return s;
       });
       render();
@@ -408,7 +413,9 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
 
     if(hasActive) {
       window.__activeStudent = active[0];
-      html += '<button class="reset-btn" onclick="window.__reset()">Reset & Kirim Ulang</button>';
+      var mode = project && project.config ? project.config.mode : 'single';
+      var label = mode.indexOf('photoshoot') >= 0 ? 'Reset & Kirim Ulang' : 'Reset (Ulang)';
+      html += '<button class="reset-btn" onclick="window.__reset()">' + label + '</button>';
     }
 
     html += '<div class="stats">';

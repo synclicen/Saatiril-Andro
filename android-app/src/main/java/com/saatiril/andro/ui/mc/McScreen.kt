@@ -277,7 +277,13 @@ fun McScreen(viewModel: AdminViewModel, modifier: Modifier = Modifier) {
                 if (selStudent != null) {
                     if (selStudent.status == "done") {
                         Button(
-                            onClick = { viewModel.resetStudent(selStudent.id, selStudent.assignedChannel); selectedStudent = null; searchQuery = "" },
+                            onClick = {
+                                // Reset + re-send straight to the operator in ONE action
+                                // (mirrors the Electron mc-panel) — no ANTREAN round-trip.
+                                if (isDualPhotoshoot) viewModel.resetAndResendToOperator(selStudent, listOf(1, 2))
+                                else viewModel.resetAndResendToOperator(selStudent, listOf(myChannel))
+                                selectedStudent = null; searchQuery = ""
+                            },
                             modifier = Modifier.fillMaxWidth().height(30.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = AMBER), shape = RoundedCornerShape(6.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp)
