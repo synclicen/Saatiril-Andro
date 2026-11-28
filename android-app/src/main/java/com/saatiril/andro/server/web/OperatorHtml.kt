@@ -2838,6 +2838,11 @@ function handleLanMessage(payload) {
       
       // Remove from mcCallBuffer
       mcCallBuffer = mcCallBuffer.filter(s => s.id !== data.studentId)
+
+      // Drop this operator's photoHistory entries too — otherwise the queue
+      // keeps excluding the student after the MC resets them for a retake
+      // (same behaviour as the desktop operator panel)
+      photoHistory = photoHistory.filter(ph => ph.studentId !== data.studentId)
       
       // Update local DB status
       if (currentProject?.database) {

@@ -326,11 +326,15 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     }
   }
 
-  function resetStudent(studentId) {
-    sendLanMessage('STUDENT_RESET', {studentId:studentId, channel:channel});
+  function resetStudent(student) {
+    // Clear the student everywhere FIRST (operator's buffer, active target, photos)
+    sendLanMessage('STUDENT_RESET', {studentId:student.id, channel:channel});
+    // ... then put them straight back with the operator — no queue round-trip
+    // (same order as the desktop MC panel's RESET & KIRIM ULANG)
+    sendLanMessage('MC_CALL', {student:student, channel:channel});
     if(project && project.database) {
       project.database = project.database.map(function(s){
-        if(s.id === studentId) return Object.assign({}, s, {status:'pending'});
+        if(s.id === student.id) return Object.assign({}, s, {status:'active_' + channel});
         return s;
       });
       render();
@@ -403,8 +407,8 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     }
 
     if(hasActive) {
-      window.__activeId = active[0].id;
-      html += '<button class="reset-btn" onclick="window.__reset()">Reset (Ulang)</button>';
+      window.__activeStudent = active[0];
+      html += '<button class="reset-btn" onclick="window.__reset()">Reset & Kirim Ulang</button>';
     }
 
     html += '<div class="stats">';
@@ -510,8 +514,8 @@ body { background:#1a0b2e; color:#fff; font-family:-apple-system,BlinkMacSystemF
     if(student) callStudent(student);
   };
   window.__reset = function() {
-    var studentId = window.__activeId;
-    if(studentId) resetStudent(studentId);
+    var student = window.__activeStudent;
+    if(student) resetStudent(student);
   };
 
   connect();
