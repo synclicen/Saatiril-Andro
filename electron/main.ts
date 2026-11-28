@@ -1010,7 +1010,7 @@ function registerIpcHandlers() {
   // ── Desktop capture: list windows (for EOS Utility live view) ──────
   // Returns window sources so the renderer can capture the EOS Utility /
   // Imaging Edge window and show Canon's live view in Saatiril.
-  const { desktopCapturer } = require('electron')
+  const { desktopCapturer, session } = require('electron')
   ipcMain.handle('get-window-sources', async () => {
     try {
       const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } })
@@ -1018,6 +1018,39 @@ function registerIpcHandlers() {
     } catch (err: any) {
       console.error('[SAATIRIL] get-window-sources error:', err.message)
       return []
+    }
+  })
+
+  // ── Auto-select EOS Utility window for getDisplayMedia() ───────────
+  // When the renderer calls navigator.mediaDevices.getDisplayMedia(),
+  // this handler intercepts it and auto-selects the EOS Utility /
+  // Imaging Edge window — no picker dialog shown.
+  ipcMain.handle('set-eos-display-handler', async () => {
+    try {
+      const s = session.defaultSession
+      s.setDisplayMediaRequestHandler(async (request: any, callback: any) => {
+        try {
+          const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } })
+          // Find camera software window
+          const cameraWindow = sources.find((src: any) =>
+            /eos utility|imaging edge|remote live view|canon|sony|nikon|camera|remote/i.test(src.name)
+          )
+          const target = cameraWindow || sources[0]
+          if (target) {
+            console.log('[SAATIRIL] Display media handler → selected:', target.name)
+            callback({ video: target, audio: 'loopback' })
+          } else {
+            callback({})
+          }
+        } catch (e) {
+          console.error('[SAATIRIL] Display media handler error:', e)
+          callback({})
+        }
+      })
+      return true
+    } catch (e) {
+      console.error('[SAATIRIL] set-eos-display-handler error:', e)
+      return false
     }
   })
 

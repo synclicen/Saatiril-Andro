@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   // ── Desktop capture: list windows (for EOS Utility live view) ────
   getWindowSources: (): Promise<Array<{ id: string; name: string }>> =>
     ipcRenderer.invoke('get-window-sources'),
+  // Set up auto-select handler for getDisplayMedia() — intercepts the
+  // screen share picker and auto-selects EOS Utility / Imaging Edge window.
+  setEosDisplayHandler: (): Promise<boolean> =>
+    ipcRenderer.invoke('set-eos-display-handler'),
 
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)

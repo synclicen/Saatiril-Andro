@@ -1983,75 +1983,116 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   // This replaces the USB webcam with the Canon's actual live view.
   const captureEosLiveView = useCallback(async () => {
     const api = (window as any).saatirilAPI
-    if (!api?.getWindowSources) {
-      alert('Desktop capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe), bukan web browser.')
+    if (!api) {
+      alert('Desktop capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe).')
       return
     }
-    // CRITICAL: set ref to true IMMEDIATELY — before any async operations.
-    // This prevents startCamera from overriding the EOS stream during
-    // the async getUserMedia call (race condition fix).
+    // Set ref IMMEDIATELY to prevent webcam from overriding
     eosLiveViewActiveRef.current = true
     setHotFolderStatus('Mencari EOS Utility...')
+
+    try {
+      // Step 1: Set up auto-select handler in main process
+      // This intercepts getDisplayMedia() and auto-selects EOS Utility window
+      if (api.setEosDisplayHandler) {
+        await api.setEosDisplayHandler()
+        console.log('[EOS Live View] Display handler set')
+      }
+
+      // Step 2: Use getDisplayMedia() — modern Web API for screen capture
+      // This is the recommended approach for Electron 28+ (chromeMediaSource
+      // is deprecated). The handler we set in step 1 auto-selects the window.
+      setHotFolderStatus('Capturing window...')
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: false,
+      })
+
+      if (!stream || stream.getVideoTracks().length === 0) {
+        throw new Error('No video track in display media stream')
+      }
+
+      // Log which window was captured
+      const track = stream.getVideoTracks()[0]
+      const trackLabel = track.label || track.settings().displaySurface || 'unknown'
+      console.log('[EOS Live View] Stream obtained, label:', trackLabel)
+
+      // Step 3: Stop existing stream + attach new one
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        videoRef.current.play().catch(() => {})
+      }
+
+      setEosLiveViewActive(true)
+      eosLiveViewActiveRef.current = true
+      setCameraAvailable(true)
+      setHotFolderStatus('EOS Live: ' + trackLabel.substring(0, 20))
+
+      // Step 4: Handle stream end (user stops sharing or window closes)
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        console.log('[EOS Live View] Stream ended')
+        eosLiveViewActiveRef.current = false
+        setEosLiveViewActive(false)
+        setHotFolderStatus('EOS Live View berhenti. Webcam aktif.')
+        // Restart webcam
+        const gen = ++cameraGenRef.current
+        void startCamera(undefined, gen)
+      })
+
+      // Step 5: Timeout check — if no video data after 3s, revert
+      setTimeout(() => {
+        const v = videoRef.current
+        if (v && (v.videoWidth === 0 || v.videoHeight === 0)) {
+          console.warn('[EOS Live View] No video data after 3s — reverting')
+          eosLiveViewActiveRef.current = false
+          setEosLiveViewActive(false)
+          setHotFolderStatus('EOS gagal — webcam aktif. Lihat EOS Utility untuk live view.')
+          const gen = ++cameraGenRef.current
+          void startCamera(undefined, gen)
+        }
+      }, 3000)
+
+    } catch (e) {
+      console.error('[EOS Live View] Error:', e)
+      const errMsg = (e as Error).message
+      if (errMsg.includes('Permission denied') || errMsg.includes('denied')) {
+        alert('Izin ditolak. Saatiril butuh izin screen capture untuk menampilkan live view EOS Utility.')
+      } else if (errMsg.includes('Not found') || errMsg.includes('No sources')) {
+        alert('Window EOS Utility tidak ditemukan.\nPastikan EOS Utility terbuka dan menampilkan Remote Live View.')
+      } else {
+        // Fallback: try old chromeMediaSource approach
+        alert('getDisplayMedia gagal: ' + errMsg + '\n\nMencoba metode lama...')
+        await captureEosLiveViewLegacy()
+      }
+      eosLiveViewActiveRef.current = false
+      setHotFolderStatus('Watching...')
+    }
+  }, [])
+
+  // Legacy capture method — uses chromeMediaSource (older Electron)
+  const captureEosLiveViewLegacy = useCallback(async () => {
+    const api = (window as any).saatirilAPI
+    if (!api?.getWindowSources) return
     try {
       const sources = await api.getWindowSources()
-      if (!sources || sources.length === 0) {
-        alert('Tidak ada window terdeteksi.\nPastikan EOS Utility terbuka dan menampilkan Remote Live View.')
-        eosLiveViewActiveRef.current = false
-        setHotFolderStatus('Watching...')
-        return
-      }
-      // Find camera software window
+      if (!sources || sources.length === 0) return
       const cameraWindow = sources.find((s: any) =>
         /eos utility|imaging edge|remote live view|canon|sony|nikon|camera|remote/i.test(s.name)
       )
       const targetSource = cameraWindow || sources[0]
       setHotFolderStatus('Capturing: ' + targetSource.name)
-      // Try getUserMedia with desktop source — try multiple constraint formats
-      let stream: MediaStream | null = null
-      // Format 1: non-mandatory (newer Electron)
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: targetSource.id,
-            minWidth: 640,
-            maxWidth: 1920,
-            minHeight: 480,
-            maxHeight: 1080,
-          } as any
-        })
-      } catch (e1) {
-        console.warn('[EOS Live View] Format 1 failed:', (e1 as Error).message)
-        // Format 2: mandatory (older Electron)
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              mandatory: {
-                chromeMediaSource: 'desktop',
-                chromeMediaSourceId: targetSource.id,
-                minWidth: 640,
-                maxWidth: 1920,
-                minHeight: 480,
-                maxHeight: 1080,
-              }
-            } as any
-          })
-        } catch (e2) {
-          console.warn('[EOS Live View] Format 2 failed:', (e2 as Error).message)
-        }
-      }
-      if (!stream) {
-        // List available windows for debugging
-        const windowNames = sources.map((s: any) => s.name).join('\n')
-        alert('Gagal capture window.\n\nWindows terdeteksi:\n' + windowNames +
-          '\n\nPastikan EOS Utility terbuka dan menampilkan Remote Live View window.')
-        eosLiveViewActiveRef.current = false
-        setHotFolderStatus('Watching...')
-        return
-      }
-      // Attach to the existing <video> element
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: targetSource.id,
+          minWidth: 640, maxWidth: 1920, minHeight: 480, maxHeight: 1080,
+        } as any
+      })
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
       }
@@ -2063,26 +2104,11 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
       setEosLiveViewActive(true)
       eosLiveViewActiveRef.current = true
       setCameraAvailable(true)
-      setHotFolderStatus('Live: ' + targetSource.name.substring(0, 20))
-      console.log('[EOS Live View] Captured:', targetSource.name)
-      // Timeout check: if the <video> has no video data after 3 seconds,
-      // the EOS capture likely failed silently. Revert to webcam.
-      setTimeout(() => {
-        const v = videoRef.current
-        if (v && (v.videoWidth === 0 || v.videoHeight === 0)) {
-          console.warn('[EOS Live View] No video data after 3s — reverting to webcam')
-          eosLiveViewActiveRef.current = false
-          setEosLiveViewActive(false)
-          setHotFolderStatus('EOS gagal — webcam aktif. Gunakan EOS Utility untuk live view.')
-          // Restart webcam
-          const gen = ++cameraGenRef.current
-          void startCamera(undefined, gen)
-        }
-      }, 3000)
+      setHotFolderStatus('EOS Live (legacy): ' + targetSource.name.substring(0, 20))
     } catch (e) {
-      console.error('[EOS Live View] Error:', e)
-      alert('Error: ' + (e as Error).message)
+      console.error('[EOS Live View Legacy] Error:', e)
       eosLiveViewActiveRef.current = false
+      setEosLiveViewActive(false)
       setHotFolderStatus('Watching...')
     }
   }, [])
