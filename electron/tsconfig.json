@@ -13,6 +13,6 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["./main.ts", "./preload.ts"],
+  "include": ["./main.ts", "./preload.ts", "./ffmpeg-capture.ts"],
   "exclude": ["../node_modules"]
 }

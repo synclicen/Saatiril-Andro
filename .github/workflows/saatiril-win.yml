@@ -87,6 +87,43 @@ jobs:
         run: npx electron-builder --win --x64 --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # EOS Live View (Hot Folder) needs ffmpeg.exe next to the app: it is
+      # bundled from the ffmpeg-static dev dependency (build.extraResources).
+      # Fail the build when the binary is missing or has no gdigrab device,
+      # instead of shipping an app whose "Live View dari EOS" button is dead.
+      - name: Verify bundled FFmpeg (EOS Live View)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FF="dist-electron/win-unpacked/resources/ffmpeg/ffmpeg.exe"
+          if [ ! -f "$FF" ]; then
+            echo "::error::ffmpeg.exe is missing from the packaged app — EOS Live View would not work."
+            exit 1
+          fi
+          echo "Bundled ffmpeg: $(ls -lh "$FF" | awk '{print $5}')"
+          echo "sha256: $(sha256sum "$FF" | awk '{print $1}')  (ffmpeg-static 5.3.0 / release b6.1.1)"
+          "$FF" -hide_banner -version | head -n 1
+          if "$FF" -hide_banner -devices 2>/dev/null | grep -qw gdigrab; then
+            echo "gdigrab device: OK"
+          else
+            echo "::error::The bundled FFmpeg has no gdigrab device — EOS Live View would not work."
+            exit 1
+          fi
+      # Informational only: tells whether this runner has a desktop gdigrab
+      # can read. A failure here does not block the release.
+      - name: FFmpeg gdigrab smoke test (informational)
+        shell: bash
+        run: |
+          FF="dist-electron/win-unpacked/resources/ffmpeg/ffmpeg.exe"
+          OUT="$RUNNER_TEMP/gdigrab-smoke.jpg"
+          rm -f "$OUT"
+          if "$FF" -hide_banner -loglevel error -f gdigrab -i desktop -frames:v 1 -f mjpeg -q:v 5 -y "$OUT" \
+             && [ -s "$OUT" ]; then
+            echo "gdigrab captured a frame from the runner desktop ($(stat -c %s "$OUT") bytes)."
+          else
+            echo "NOTE: gdigrab could not capture the runner desktop — informational only."
+          fi
+          rm -f "$OUT"
       - name: Upload to releases
         shell: bash
         env:

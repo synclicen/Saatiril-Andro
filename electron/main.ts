@@ -26,6 +26,7 @@ import * as os from 'os'
 import { createServer } from 'http'
 import { Server as SocketIOServer } from 'socket.io'
 import { checkLicenseStatus, activateLicense, getMachineId, getDisplayMachineId, generateLicenseCode } from './license'
+import { registerFfmpegCaptureIpc, stopWindowCapture } from './ffmpeg-capture'
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const DEFAULT_HTTP_PORT = 3000
@@ -949,7 +950,6 @@ function getLanIPs(): { name: string; address: string }[] {
 }
 
 // ─── IPC Handlers ──────────────────────────────────────────────────────────
-const { registerFfmpegCaptureIpc } = require('./ffmpeg-capture')
 function registerIpcHandlers() {
   // FFmpeg window capture (EOS Utility / Imaging Edge live view)
   registerFfmpegCaptureIpc(ipcMain)
@@ -1727,8 +1727,15 @@ function createWindow() {
   // handler + the app 'before-quit' event (whichever fires first).
   powerSaveBlockerId = powerSaveBlocker.start('prevent-display-sleep')
 
+  // The EOS live view (FFmpeg gdigrab) is owned by the page that started it.
+  // When that page reloads or its renderer crashes nobody is left to stop
+  // FFmpeg, so end the capture together with the page.
+  mainWindow.webContents.on('did-start-loading', () => { stopWindowCapture() })
+  mainWindow.webContents.on('render-process-gone', () => { stopWindowCapture() })
+
   mainWindow.on('closed', () => {
     mainWindow = null
+    stopWindowCapture()
     // BUG #14 fix: stop the powerSaveBlocker + release the display-sleep lock.
     if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
       try { powerSaveBlocker.stop(powerSaveBlockerId) } catch (e) {}
@@ -1868,6 +1875,7 @@ app.on('before-quit', () => {
   console.log('[SAATIRIL] App shutting down...')
   httpServer?.close()
   socketServer?.close()
+  stopWindowCapture()
   // BUG #14 fix (audit Remote/Mirror batch 2): stop the powerSaveBlocker on
   // quit so the display-sleep lock is released. The 'closed' handler on the
   // main window already does this, but if the user quits via Ctrl+C / tray

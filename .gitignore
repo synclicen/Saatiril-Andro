@@ -16,6 +16,7 @@ node_modules
 /dist-electron/
 /electron/main.js
 /electron/preload.js
+/electron/ffmpeg-capture.js
 /db/
 /download/
 /upload/

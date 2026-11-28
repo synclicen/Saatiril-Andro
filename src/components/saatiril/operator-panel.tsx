@@ -82,7 +82,19 @@ const THEME = {
   gold: '#d4af37',
   muted: '#c4b5fd',
   red: '#ef4444',
+  emerald: '#4ade80',
+  cyan: '#06b6d4',
 } as const
+
+// Status text for the error codes reported by the main process
+// (electron/ffmpeg-capture.ts) when the EOS live view cannot start.
+const EOS_LIVE_VIEW_ERRORS: Record<string, string> = {
+  'unsupported-platform': 'Live View EOS hanya tersedia di Windows — webcam aktif.',
+  'ffmpeg-not-found': 'FFmpeg bawaan Saatiril tidak ditemukan — webcam aktif.',
+  'no-window': 'Window live view EOS/Imaging Edge tidak ditemukan — webcam aktif.',
+  'window-not-found': 'Window kamera tidak ditemukan — webcam aktif.',
+  'capture-failed': 'EOS Live View gagal — webcam aktif.',
+}
 
 // ─── Shutter mode types ────────────────────────────────────────────────────
 type ShutterMode = 'manual' | 'timer-3' | 'timer-5' | 'timer-10' | 'ai'
@@ -1122,25 +1134,25 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
     // (cameraGenRef) so any in-flight getUserMedia can detect that the camera
     // was released during the await and bail out before touching streamRef.
     if (!cameraActive) return
-    // Skip webcam startCamera if EOS Live View is active — EOS Utility
-    // window capture provides the video stream, don't override with webcam.
+    // Skip webcam startCamera if EOS Live View is active — the EOS Utility
+    // live view is shown by the <img> (FFmpeg MJPEG stream from the main
+    // process) and the webcam stays off, free for the Operator Electron App.
+    // eosLiveViewActive is a dependency on purpose: when the EOS live view
+    // stops, this effect re-runs and the webcam starts again.
     if (eosLiveViewActiveRef.current) return
     const gen = ++cameraGenRef.current
     void startCamera(undefined, gen)
     return () => {
       // Invalidate this generation so any in-flight startCamera aborts.
       cameraGenRef.current = -1
-      // CRITICAL: Don't destroy the EOS stream on cleanup!
-      // When EOS Live View is active, the stream belongs to the EOS capture,
-      // not the webcam. Stopping it would kill the Canon live view.
-      if (eosLiveViewActiveRef.current) return
-      // Only stop + null the stream if it's a webcam stream (not EOS).
+      // streamRef only ever holds a webcam stream (the EOS live view is an
+      // <img>, not a MediaStream), so it is always safe to release here.
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
     }
-  }, [startCamera, cameraActive])
+  }, [startCamera, cameraActive, eosLiveViewActive])
 
   useEffect(() => {
     // Re-attach the EXISTING camera stream to the <video> element when the
@@ -1978,91 +1990,93 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
   const handleHotFolderCaptureRef = useRef(handleHotFolderCapture)
   useEffect(() => { handleHotFolderCaptureRef.current = handleHotFolderCapture }, [handleHotFolderCapture])
 
-  // ── EOS Utility live view: capture the EOS Utility window ──────────
-  // Uses Electron desktopCapturer to find the EOS Utility / Imaging Edge
-  // window and display its live view in Saatiril's <video> element.
-  // This replaces the USB webcam with the Canon's actual live view.
+  // ── EOS Utility live view: FFmpeg captures the EOS window ───────────
+  // The main process grabs the EOS Utility / Imaging Edge live view window
+  // with FFmpeg (gdigrab) and streams it to the <img> in renderCameraView,
+  // while the webcam <video> stays hidden and released. The button is a
+  // toggle: a second click stops the capture, and the camera effect
+  // (dependency eosLiveViewActive) restarts the webcam.
+  const eosLiveViewOff = useCallback((status: string) => {
+    eosLiveViewActiveRef.current = false
+    setEosLiveViewActive(false)
+    setEosLiveViewMjpegUrl(null)
+    setHotFolderStatus(status)
+  }, [])
+
+  // Token for the start flow: a stop (or a newer click) while FFmpeg is
+  // still starting must not apply the stale result afterwards.
+  const eosLiveViewFlowRef = useRef(0)
+
   const captureEosLiveView = useCallback(async () => {
     const api = (window as any).saatirilAPI
-    if (!api?.ffmpegCaptureStart) {
-      alert('FFmpeg capture tidak tersedia. Gunakan Saatiril Desktop (portable.exe).')
+    const flow = ++eosLiveViewFlowRef.current
+
+    // Second click → stop the EOS live view and return to the webcam.
+    if (eosLiveViewActiveRef.current) {
+      await api?.ffmpegCaptureStop?.().catch(() => {})
+      eosLiveViewOff('EOS Live View dihentikan — webcam aktif.')
       return
     }
-    eosLiveViewActiveRef.current = true
+    if (!api?.ffmpegCaptureStart) {
+      alert('Live View EOS hanya tersedia di Saatiril Desktop (portable.exe).')
+      return
+    }
+    eosLiveViewActiveRef.current = true // keeps the webcam off while FFmpeg starts
     setHotFolderStatus('Mencari window EOS/Imaging Edge...')
-
     try {
-      // Check if FFmpeg is available
-      const check = await api.ffmpegCaptureCheck()
-      if (!check.available) {
-        eosLiveViewActiveRef.current = false
-        setHotFolderStatus('FFmpeg tidak ditemukan. Webcam aktif.')
-        alert('FFmpeg tidak ditemukan di sistem.\nDownload ffmpeg.exe dan taruh di folder Saatiril, atau install FFmpeg ke PATH Windows.')
+      // Resolves as soon as the first frame arrived (window found by its
+      // real title, or picked by the user in a native dialog) — or with an
+      // error code when no camera window could be captured.
+      const result = await api.ffmpegCaptureStart()
+      if (flow !== eosLiveViewFlowRef.current) return
+      if (result?.success && result.url) {
+        const title = String(result.title || '')
+        setEosLiveViewMjpegUrl(result.url)
+        setEosLiveViewActive(true)
+        setCameraAvailable(true)
+        setHotFolderStatus('EOS Live: ' + (title.length > 26 ? title.slice(0, 26) + '…' : title))
+        console.log('[EOS Live View] started:', title, '→', result.url)
+        toast({
+          title: 'Live View EOS aktif',
+          description:
+            'Biarkan window live view kamera terbuka dan tidak tertutup jendela lain. ' +
+            'Klik tombolnya lagi untuk kembali ke webcam.',
+        })
         return
       }
-
-      // Try common window titles for EOS Utility / Imaging Edge
-      const titles = [
-        'Remote Live View',
-        'EOS Utility',
-        'Imaging Edge',
-        'Remote',
-        'Live View',
-      ]
-
-      let captureResult: { success: boolean; url?: string; error?: string } | null = null
-      for (const title of titles) {
-        setHotFolderStatus('Capture: ' + title)
-        captureResult = await api.ffmpegCaptureStart(title)
-        if (captureResult.success && captureResult.url) {
-          // Wait for frames to start flowing
-          await new Promise(r => setTimeout(r, 1500))
-          const url = await api.ffmpegCaptureUrl()
-          if (url) {
-            // Set the MJPEG URL as the <img> src for live view
-            setEosLiveViewMjpegUrl(url)
-            setEosLiveViewActive(true)
-            setCameraAvailable(true)
-            setHotFolderStatus('EOS Live: ' + title)
-            console.log('[EOS Live View] FFmpeg capture started:', title, '→', url)
-            return
-          }
-        }
-        // Stop and try next title
-        await api.ffmpegCaptureStop()
-      }
-
-      // If no title matched, try capturing by exact window name
-      // Ask user for window title
-      const userTitle = prompt(
-        'Window EOS Utility / Imaging Edge tidak ditemukan otomatis.\n' +
-        'Masukkan judul window (lihat title bar EOS Utility):\n\n' +
-        'Contoh: "Remote Live View", "EOS Utility", "Imaging Edge"'
-      )
-      if (userTitle) {
-        setHotFolderStatus('Capture: ' + userTitle)
-        captureResult = await api.ffmpegCaptureStart(userTitle)
-        if (captureResult.success) {
-          await new Promise(r => setTimeout(r, 1500))
-          const url = await api.ffmpegCaptureUrl()
-          if (url) {
-            setEosLiveViewMjpegUrl(url)
-            setEosLiveViewActive(true)
-            setCameraAvailable(true)
-            setHotFolderStatus('EOS Live: ' + userTitle)
-            return
-          }
-        }
-      }
-
-      eosLiveViewActiveRef.current = false
-      setEosLiveViewActive(false)
-      setHotFolderStatus('Window tidak ditemukan. Webcam aktif.')
+      console.warn('[EOS Live View] start failed:', result?.error, result?.detail)
+      await api.ffmpegCaptureStop?.().catch(() => {})
+      if (flow !== eosLiveViewFlowRef.current) return
+      eosLiveViewOff(EOS_LIVE_VIEW_ERRORS[result?.error as string] || 'EOS Live View gagal — webcam aktif.')
     } catch (e) {
       console.error('[EOS Live View] Error:', e)
-      eosLiveViewActiveRef.current = false
-      setEosLiveViewActive(false)
-      setHotFolderStatus('Error: ' + (e as Error).message.substring(0, 30))
+      await api.ffmpegCaptureStop?.().catch(() => {})
+      if (flow !== eosLiveViewFlowRef.current) return
+      eosLiveViewOff('EOS Live View gagal — webcam aktif.')
+    }
+  }, [eosLiveViewOff, toast])
+
+  // The capture stopped on its own (EOS window closed, FFmpeg crashed or
+  // stalled) → drop the stream; the camera effect restores the webcam.
+  useEffect(() => {
+    const api = (window as any).saatirilAPI
+    if (typeof api?.onFfmpegCaptureEnded !== 'function') return
+    const unsubscribe = api.onFfmpegCaptureEnded((info: { reason?: string; detail?: string }) => {
+      console.log('[EOS Live View] capture ended:', info?.reason, info?.detail)
+      if (!eosLiveViewActiveRef.current) return
+      eosLiveViewOff('EOS Live View berhenti — webcam aktif.')
+    })
+    return () => { unsubscribe?.() }
+  }, [eosLiveViewOff])
+
+  // Leaving the operator panel: nobody displays the stream anymore.
+  useEffect(() => {
+    const api = (window as any).saatirilAPI
+    return () => {
+      if (eosLiveViewActiveRef.current) {
+        eosLiveViewActiveRef.current = false
+        void api?.ffmpegCaptureStop?.().catch(() => {})
+      }
     }
   }, [])
 
@@ -2675,7 +2689,8 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
             </button>
           </div>
         )}
-        {/* EOS Live View button — capture EOS Utility window → show in Saatiril */}
+        {/* EOS Live View button — toggle: FFmpeg captures the EOS Utility /
+            Imaging Edge live view window → shown in Saatiril, webcam released */}
         {hotFolderEnabled && (
           <button
             onClick={() => { void captureEosLiveView() }}
@@ -2687,7 +2702,12 @@ export function OperatorPanel({ isAppFullscreen = false, onToggleAppFullscreen, 
               color: eosLiveViewActive ? THEME.emerald : THEME.muted,
               border: `1px solid ${eosLiveViewActive ? THEME.emerald : THEME.border}`,
             }}
-            title="Capture window EOS Utility / Imaging Edge → tampilkan live view kamera Canon di Saatiril."
+            title={
+              eosLiveViewActive
+                ? 'Klik untuk menghentikan Live View EOS dan kembali ke webcam.'
+                : 'Tangkap window live view EOS Utility / Imaging Edge dan tampilkan di sini (webcam dimatikan sementara). ' +
+                  'Window live view kamera harus terbuka dan tidak tertutup jendela lain. Klik lagi untuk berhenti.'
+            }
           >
             <Monitor className="size-2.5 mr-1 inline" />
             {eosLiveViewActive ? 'EOS Live View Aktif ✓' : 'Live View dari EOS'}
@@ -3189,11 +3209,12 @@ eksternal" → cek koneksi HDMI + pastikan Windows di mode Extend.`}
           display: eosLiveViewMjpegUrl ? 'none' : 'block',
         }}
       />
-      {/* EOS/Imaging Edge live view via FFmpeg MJPEG stream */}
+      {/* EOS/Imaging Edge live view — MJPEG stream served by the main process (FFmpeg gdigrab) */}
       {eosLiveViewMjpegUrl && (
         <img
           src={eosLiveViewMjpegUrl}
           alt="EOS Live View"
+          draggable={false}
           className="absolute inset-0 w-full h-full object-cover"
           style={{
             transform: mirror ? 'scaleX(-1)' : undefined,

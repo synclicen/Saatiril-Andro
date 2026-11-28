@@ -32,14 +32,40 @@ contextBridge.exposeInMainWorld('saatirilAPI', {
   setEosDisplayHandler: (): Promise<boolean> =>
     ipcRenderer.invoke('set-eos-display-handler'),
   // ── FFmpeg window capture (EOS Utility / Imaging Edge live view) ──
-  ffmpegCaptureStart: (windowTitle: string): Promise<{ success: boolean; url?: string; error?: string }> =>
-    ipcRenderer.invoke('ffmpeg-capture:start', windowTitle),
-  ffmpegCaptureStop: (): Promise<boolean> =>
-    ipcRenderer.invoke('ffmpeg-capture:stop'),
-  ffmpegCaptureUrl: (): Promise<string | null> =>
-    ipcRenderer.invoke('ffmpeg-capture:url'),
-  ffmpegCaptureCheck: (): Promise<{ available: boolean }> =>
-    ipcRenderer.invoke('ffmpeg-capture:check'),
+  // ffmpegCaptureStart(): the main process finds the EOS live view window
+  // by its real title (or asks the user to pick it), starts FFmpeg gdigrab
+  // and resolves once the first frame arrived — or with success=false and
+  // an error code: unsupported-platform | ffmpeg-not-found | no-window |
+  // window-not-found | capture-failed.
+  ffmpegCaptureStart: (windowTitle?: string): Promise<{
+    success: boolean
+    url?: string
+    title?: string
+    error?: string
+    detail?: string
+  }> => {
+    return ipcRenderer.invoke('ffmpeg-capture:start', windowTitle)
+  },
+  ffmpegCaptureStop: (): Promise<boolean> => {
+    return ipcRenderer.invoke('ffmpeg-capture:stop')
+  },
+  ffmpegCaptureUrl: (): Promise<string | null> => {
+    return ipcRenderer.invoke('ffmpeg-capture:url')
+  },
+  ffmpegCaptureCheck: (): Promise<{ available: boolean; path?: string; version?: string }> => {
+    return ipcRenderer.invoke('ffmpeg-capture:check')
+  },
+  // onFfmpegCaptureEnded(callback): the main process pushes this when a
+  // running capture stops on its own (EOS window closed, FFmpeg crashed or
+  // stalled) so the operator panel can fall back to the webcam. Returns a
+  // cleanup function that removes the listener.
+  onFfmpegCaptureEnded: (callback: (info: { reason: string; detail: string }) => void): (() => void) => {
+    const handler = (_event: unknown, info: { reason: string; detail: string }): void => {
+      callback(info)
+    }
+    ipcRenderer.on('ffmpeg-capture:ended', handler)
+    return () => { ipcRenderer.removeListener('ffmpeg-capture:ended', handler) }
+  },
 
   savePhoto: (data: { base64Data: string; filename: string; targetFolder: string; backupFolder?: string | null; projectName?: string | null }): Promise<string | null> => {
     return ipcRenderer.invoke('save-photo', data)
