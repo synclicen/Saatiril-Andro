@@ -1756,6 +1756,46 @@ app.whenReady().then(async () => {
   console.log(`[SAATIRIL]  resourcesPath: ${process.resourcesPath}`)
   console.log('[SAATIRIL] ═══════════════════════════════════════════════════════════')
 
+  // ── Set up display media handler for EOS Live View ──────────────────
+  // CRITICAL: this MUST be set up BEFORE the renderer calls
+  // getDisplayMedia(). Without this handler, getDisplayMedia() returns
+  // "Not supported" in Electron. Set up at app startup (not via IPC).
+  const { desktopCapturer: dc, session: sess } = require('electron')
+  try {
+    sess.defaultSession.setDisplayMediaRequestHandler(async (request: any, callback: any) => {
+      try {
+        const sources = await dc.getSources({
+          types: ['window', 'screen'],
+          thumbnailSize: { width: 0, height: 0 },
+          fetchWindowIcons: false,
+        })
+        // Log all windows for debugging
+        console.log('[SAATIRIL] Display media request — available sources:')
+        sources.forEach((s: any, i: number) => console.log(`  [${i}] ${s.name}`))
+
+        // Find EOS Utility / Imaging Edge / Remote Live View window
+        const cameraWindow = sources.find((s: any) =>
+          /eos utility|imaging edge|remote live view|canon|sony|nikon|camera|remote/i.test(s.name)
+        )
+
+        if (cameraWindow) {
+          console.log('[SAATIRIL] Display media → auto-selected:', cameraWindow.name)
+          callback({ video: cameraWindow, audio: 'loopback' })
+        } else {
+          // Return the first window as fallback (user can change later)
+          console.log('[SAATIRIL] Display media → no camera window found, using first:', sources[0]?.name)
+          callback({ video: sources[0], audio: 'loopback' })
+        }
+      } catch (e) {
+        console.error('[SAATIRIL] Display media handler error:', e)
+        callback({})
+      }
+    })
+    console.log('[SAATIRIL] Display media request handler registered (EOS Live View ready)')
+  } catch (e) {
+    console.error('[SAATIRIL] Failed to set display media handler:', e)
+  }
+
   // Register IPC handlers
   registerIpcHandlers()
 
